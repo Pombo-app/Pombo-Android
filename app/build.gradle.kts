@@ -27,6 +27,33 @@ val releaseStoreFile = signingProp("POMBO_RELEASE_STORE_FILE")
     ?.let { rootProject.file(it) }
     ?.takeIf { it.exists() }
 
+// Versions come from the git tag, so a build cannot claim to be something the
+// repository does not say it is. `v0.8.1` gives versionName "0.8.1" and
+// versionCode 8001 (major*1_000_000 + minor*1_000 + patch), which stays
+// monotonic across releases. Commits after a tag keep that tag's code and
+// carry the describe suffix in the name; only tagged commits are published, so
+// dev builds sharing a code is harmless. Outside a git checkout (a source zip)
+// the build still works, on the placeholder below.
+fun gitOutput(vararg args: String): String? = try {
+    val proc = ProcessBuilder(listOf("git") + args)
+        .directory(rootProject.projectDir)
+        .redirectErrorStream(true)
+        .start()
+    val text = proc.inputStream.bufferedReader().readText().trim()
+    if (proc.waitFor() == 0 && text.isNotEmpty()) text else null
+} catch (e: Exception) {
+    null
+}
+
+val nearestTag = gitOutput("describe", "--tags", "--abbrev=0")
+val semver = Regex("""^v?(\d+)\.(\d+)(?:\.(\d+))?""").find(nearestTag.orEmpty())
+val appVersionCode = semver?.destructured?.let { (major, minor, patch) ->
+    major.toInt() * 1_000_000 + minor.toInt() * 1_000 + patch.ifEmpty { "0" }.toInt()
+} ?: 1
+val appVersionName = gitOutput("describe", "--tags", "--always", "--dirty")
+    ?.removePrefix("v")
+    ?: "0.0.0-dev"
+
 android {
     namespace = "com.pombo.android"
     compileSdk = 35
@@ -35,8 +62,8 @@ android {
         applicationId = "com.pombo.android"
         minSdk = 26
         targetSdk = 35
-        versionCode = 1
-        versionName = "0.1"
+        versionCode = appVersionCode
+        versionName = appVersionName
     }
 
     signingConfigs {
