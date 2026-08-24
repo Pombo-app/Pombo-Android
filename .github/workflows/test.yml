@@ -1,0 +1,37 @@
+# Unit tests on every push and pull request. The signed release APK is NOT
+# built here: the signing key stays on the maintainer's machine, and releases
+# are cut with scripts/release.sh, which refuses to publish an APK that is not
+# signed by the project key.
+#
+# assembleRelease still runs, unsigned-by-the-real-key, to catch anything that
+# only breaks in the release variant.
+
+name: Tests
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # versionName comes from `git describe`, which needs the tags.
+          fetch-depth: 0
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - uses: gradle/actions/setup-gradle@v4
+
+      - run: chmod +x ./gradlew
+
+      - run: ./gradlew testDebugUnitTest
+
+      - run: ./gradlew assembleRelease

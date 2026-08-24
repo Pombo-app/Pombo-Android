@@ -27,6 +27,33 @@ val releaseStoreFile = signingProp("POMBO_RELEASE_STORE_FILE")
     ?.let { rootProject.file(it) }
     ?.takeIf { it.exists() }
 
+// Versions come from the git tag, so a build cannot claim to be something the
+// repository does not say it is. `v0.8.1` gives versionName "0.8.1" and
+// versionCode 8001 (major*1_000_000 + minor*1_000 + patch), which stays
+// monotonic across releases. Commits after a tag keep that tag's code and
+// carry the describe suffix in the name; only tagged commits are published, so
+// dev builds sharing a code is harmless. Outside a git checkout (a source zip)
+// the build still works, on the placeholder below.
+fun gitOutput(vararg args: String): String? = try {
+    val proc = ProcessBuilder(listOf("git") + args)
+        .directory(rootProject.projectDir)
+        .redirectErrorStream(true)
+        .start()
+    val text = proc.inputStream.bufferedReader().readText().trim()
+    if (proc.waitFor() == 0 && text.isNotEmpty()) text else null
+} catch (e: Exception) {
+    null
+}
+
+val nearestTag = gitOutput("describe", "--tags", "--abbrev=0")
+val semver = Regex("""^v?(\d+)\.(\d+)(?:\.(\d+))?""").find(nearestTag.orEmpty())
+val appVersionCode = semver?.destructured?.let { (major, minor, patch) ->
+    major.toInt() * 1_000_000 + minor.toInt() * 1_000 + patch.ifEmpty { "0" }.toInt()
+} ?: 1
+val appVersionName = gitOutput("describe", "--tags", "--always", "--dirty")
+    ?.removePrefix("v")
+    ?: "0.0.0-dev"
+
 android {
     namespace = "com.pombo.android"
     compileSdk = 35
@@ -35,8 +62,8 @@ android {
         applicationId = "com.pombo.android"
         minSdk = 26
         targetSdk = 35
-        versionCode = 1
-        versionName = "0.1"
+        versionCode = appVersionCode
+        versionName = appVersionName
     }
 
     signingConfigs {
@@ -57,9 +84,17 @@ android {
             // An unsigned release APK is refused by the device, so the variant
             // always carries a signingConfig: the real key when this machine
             // has it, the debug key otherwise so the variant still runs from
-            // Android Studio.
-            signingConfig = signingConfigs.findByName("release")
-                ?: signingConfigs.getByName("debug")
+            // Android Studio. The fallback says so out loud — a debug-signed
+            // APK looks identical until someone tries to install it over a
+            // real one, and one has already been published that way.
+            signingConfig = signingConfigs.findByName("release") ?: run {
+                logger.warn(
+                    "\n  WARNING: signing the RELEASE variant with the DEBUG key." +
+                    "\n  POMBO_RELEASE_* not found in ~/.gradle/gradle.properties or local.properties." +
+                    "\n  Fine to install and run; NOT fine to publish.\n"
+                )
+                signingConfigs.getByName("debug")
+            }
         }
     }
     compileOptions {
