@@ -9,11 +9,16 @@ import javax.crypto.spec.SecretKeySpec
 /**
  * Invite links — mirror of channels.js generateInviteLink / parseInviteLink.
  *
- * The token is `base64url(iv).base64url(ciphertext).base64url(key)`: a random
- * AES-GCM key encrypts the payload and then travels inside the token itself,
- * so anyone holding the link can decrypt it — it keeps the channel id and
- * password out of plaintext URLs and referrer logs. Keep the shape
- * byte-identical or links stop working across web and Android.
+ * A channel is shared as `#/channel/<streamId>`. The joiner reads the name,
+ * the type and the gate address from the channel's on-chain metadata, so the
+ * id is the whole link.
+ *
+ * A password cannot be read back from the chain, so a password channel still
+ * travels as the encrypted token `base64url(iv).base64url(ciphertext).
+ * base64url(key)`: a random AES-GCM key encrypts the payload and then travels
+ * inside the token itself, keeping the password out of plaintext URLs and
+ * referrer logs. Keep that shape byte-identical or links stop working across
+ * web and Android.
  *
  * Payload uses one-letter keys to keep the QR code small (web comment).
  */
@@ -23,7 +28,7 @@ object InviteToken {
     private const val KEY_LEN = 32
     private const val TAG_BITS = 128
 
-    /** Web: `${origin}${pathname}#/invite/${token}` on the deployed app. */
+    /** Web: `${origin}${pathname}#/…` on the deployed app. */
     const val BASE_URL = "https://app.pombo.cc/"
 
     data class Invite(
@@ -59,7 +64,23 @@ object InviteToken {
     }
 
     fun link(streamId: String, name: String?, type: String?, password: String?, gateAddress: String? = null): String =
-        "$BASE_URL#/invite/${generate(streamId, name, type, password, gateAddress)}"
+        if (password.isNullOrEmpty()) "$BASE_URL#/channel/$streamId"
+        else "$BASE_URL#/invite/${generate(streamId, name, type, password, gateAddress)}"
+
+    /**
+     * Stream id out of a `#/channel/<streamId>` link, or null when the link is
+     * not one. Stream ids carry a `/`, so everything after the marker is the
+     * id; a query string is not part of it.
+     */
+    fun channelIdFrom(linkRaw: String): String? {
+        val marker = "#/channel/"
+        val at = linkRaw.indexOf(marker)
+        if (at < 0) return null
+        return linkRaw.substring(at + marker.length)
+            .substringBefore('?')
+            .trim()
+            .ifEmpty { null }
+    }
 
     /** Returns null on any malformed or undecryptable token, like the web. */
     fun parse(tokenRaw: String): Invite? = try {

@@ -712,6 +712,47 @@ class AppViewModel(app: Application) : AndroidViewModel(app), PomboBridge.Listen
 
     fun dismissIncomingInvite() { _incomingInvite.value = null }
 
+    /**
+     * A `#/channel/<streamId>` link opened from outside the app. The link is
+     * only an id, so the metadata comes from the chain and the routing is the
+     * one an Explore tap uses: a password asks, a gated channel goes through
+     * the mode check that raises the entry screen, anything else previews.
+     */
+    private val _linkPasswordPrompt = MutableStateFlow<ExploreChannel?>(null)
+    val linkPasswordPrompt: StateFlow<ExploreChannel?> = _linkPasswordPrompt.asStateFlow()
+
+    fun dismissLinkPasswordPrompt() { _linkPasswordPrompt.value = null }
+
+    fun openChannelLink(streamId: String) = viewModelScope.launch {
+        manager.channels.value.find { it.messageStreamId == streamId }?.let {
+            manager.openChannel(it.messageStreamId)
+            return@launch
+        }
+
+        val info = runCatching { com.pombo.android.core.GraphApi.getChannelInfo(streamId) }.getOrNull()
+        val channel = ExploreChannel(
+            messageStreamId = streamId,
+            name = info?.displayName ?: streamId.substringAfter('/'),
+            description = info?.description.orEmpty(),
+            type = info?.type ?: "public",
+            language = info?.language.orEmpty(),
+            category = info?.category.orEmpty(),
+            readOnly = info?.readOnly ?: false,
+            gateAddress = info?.gateAddress
+        )
+
+        when (channel.type) {
+            "password" -> _linkPasswordPrompt.value = channel
+            "gated" -> openGatedExplore(channel)
+            else -> previewChannel(channel)
+        }
+    }
+
+    fun joinChannelFromLink(channel: ExploreChannel, password: String?) {
+        _linkPasswordPrompt.value = null
+        joinChannel(channel.messageStreamId, password)
+    }
+
     fun acceptIncomingInvite(invite: InviteToken.Invite) = viewModelScope.launch {
         _incomingInvite.value = null
         runJoinToast("Joining channel...", "Joined channel successfully!", "Failed to join channel",

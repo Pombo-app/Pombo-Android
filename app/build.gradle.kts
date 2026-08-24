@@ -1,9 +1,31 @@
+import java.util.Properties
+
 plugins {
     id("com.android.application")
     id("org.jetbrains.kotlin.android")
     id("org.jetbrains.kotlin.plugin.compose")
     id("com.google.gms.google-services")
 }
+
+// Release signing credentials, read from the Gradle home (~/.gradle/
+// gradle.properties) or, as a fallback, from the gitignored local.properties.
+// Prefer the Gradle home: it keeps the password outside the project folder, so
+// copying or archiving the checkout cannot carry it along. The keystore itself
+// lives outside the repository either way.
+//
+// A checkout without them still builds — the release variant falls back to the
+// debug key, which is enough to install and run, but not to publish or to
+// match the fingerprint in the site's assetlinks.json.
+val localProps = Properties().apply {
+    val f = rootProject.file("local.properties")
+    if (f.exists()) f.inputStream().use { load(it) }
+}
+fun signingProp(name: String): String? =
+    (findProperty(name) as String?) ?: localProps.getProperty(name)
+
+val releaseStoreFile = signingProp("POMBO_RELEASE_STORE_FILE")
+    ?.let { rootProject.file(it) }
+    ?.takeIf { it.exists() }
 
 android {
     namespace = "com.pombo.android"
@@ -17,15 +39,27 @@ android {
         versionName = "0.1"
     }
 
+    signingConfigs {
+        if (releaseStoreFile != null) {
+            create("release") {
+                storeFile = releaseStoreFile
+                storePassword = signingProp("POMBO_RELEASE_STORE_PASSWORD")
+                keyAlias = signingProp("POMBO_RELEASE_KEY_ALIAS")
+                keyPassword = signingProp("POMBO_RELEASE_KEY_PASSWORD")
+            }
+        }
+    }
+
     buildTypes {
         release {
             // The JS bridge depends on exact global names; no obfuscation.
             isMinifyEnabled = false
-            // Sign release with the debug key so the variant can be Run
-            // straight from Android Studio. Without a signingConfig the release
-            // APK comes out unsigned and the device refuses to install it.
-            // This is for local testing only — a store build needs a real key.
-            signingConfig = signingConfigs.getByName("debug")
+            // An unsigned release APK is refused by the device, so the variant
+            // always carries a signingConfig: the real key when this machine
+            // has it, the debug key otherwise so the variant still runs from
+            // Android Studio.
+            signingConfig = signingConfigs.findByName("release")
+                ?: signingConfigs.getByName("debug")
         }
     }
     compileOptions {
