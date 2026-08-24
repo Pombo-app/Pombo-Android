@@ -6,6 +6,7 @@ import androidx.activity.compose.setContent
 import androidx.activity.viewModels
 import androidx.core.view.WindowCompat
 import androidx.fragment.app.FragmentActivity
+import com.pombo.android.core.InviteToken
 import com.pombo.android.ui.screens.PomboApp
 import com.pombo.android.ui.theme.PomboTheme
 
@@ -82,13 +83,23 @@ class MainActivity : FragmentActivity() {
     }
 
     /**
-     * Pulls the invite token out of a link. The web's canonical form keeps it
-     * in the fragment (`…/#/invite/<token>`), which never reaches intent
-     * filtering, so the fragment is parsed here rather than declared in the
-     * manifest. `pombo://invite/<token>` carries it in the path instead.
+     * Pulls a channel out of a link. Both forms keep it in the fragment
+     * (`…/#/channel/<streamId>` for anything readable from the chain,
+     * `…/#/invite/<token>` when a password has to travel), and a fragment
+     * never reaches intent filtering, so it is parsed here rather than
+     * declared in the manifest. `pombo://invite/<token>` uses the path.
      */
     private fun handleInviteIntent(intent: Intent?) {
         val uri = intent?.data ?: return
+
+        // Uri.fragment is percent-decoded; a stream id's own `/` survives it.
+        uri.fragment?.let { fragment ->
+            InviteToken.channelIdFrom("#$fragment")?.let {
+                viewModel.openChannelLink(it)
+                return
+            }
+        }
+
         val fromFragment = uri.fragment?.substringAfter("/invite/", "")?.ifEmpty { null }
         val fromPath = if (uri.scheme == "pombo") {
             uri.path?.trimStart('/')?.ifEmpty { null }

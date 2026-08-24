@@ -318,6 +318,18 @@ fun PomboApp(vm: AppViewModel) {
             )
         }
 
+        // A `#/channel/…` link into a password channel: the password is the one
+        // thing the link cannot carry, so it is asked for here, the same way
+        // the Explore tap asks before anything can be decrypted.
+        val linkPassword by vm.linkPasswordPrompt.collectAsState()
+        linkPassword?.let { target ->
+            ChannelPasswordDialog(
+                channelName = target.name,
+                onDismiss = vm::dismissLinkPasswordPrompt,
+                onSubmit = { pwd -> vm.joinChannelFromLink(target, pwd) }
+            )
+        }
+
         // Gate entry screen (N-D): a gated channel refused the join — show the
         // on-chain requirement and the pay()/join() actions instead of a toast.
         val gateEntry by vm.gateEntry.collectAsState()
