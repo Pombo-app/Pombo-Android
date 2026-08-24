@@ -524,7 +524,9 @@ class ChannelManager(
      */
     data class Pin(
         val targetId: String, val text: String, val sender: String,
-        val senderName: String? = null, val ensName: String? = null
+        val senderName: String? = null, val ensName: String? = null,
+        /** Wall-clock of the pin itself. Carried through republishes untouched. */
+        val pinnedAt: Long = 0L
     )
     private val _pins = MutableStateFlow<List<Pin>>(emptyList())
     val pins: StateFlow<List<Pin>> = _pins.asStateFlow()
@@ -2685,16 +2687,7 @@ class ChannelManager(
         state.optJSONArray("bannedMembers")?.let { arr ->
             _bannedMembers.value = (0 until arr.length()).mapNotNull { arr.optString(it).lowercase().ifEmpty { null } }.toSet()
         }
-        state.optJSONArray("pins")?.let { arr ->
-            _pins.value = (0 until arr.length()).mapNotNull { idx ->
-                val p = arr.optJSONObject(idx) ?: return@mapNotNull null
-                val snap = p.optJSONObject("snapshot")
-                Pin(
-                    p.optString("targetId"), snap?.optString("text") ?: "", snap?.optString("sender") ?: "",
-                    senderName = snap?.optStringOrNull("senderName"), ensName = snap?.optStringOrNull("ensName")
-                )
-            }
-        }
+        state.optJSONArray("pins")?.let { _pins.value = pinsFromJson(it) }
     }
 
     /** Publishes the full ADMIN_STATE with an incremented rev (owner only). */
@@ -2712,12 +2705,7 @@ class ChannelManager(
         val state = JSONObject()
             .put("bannedMembers", JSONArray(_bannedMembers.value.toList()))
             .put("hiddenMessageIds", JSONArray(_hiddenIds.value.toList()))
-            .put("pins", JSONArray(_pins.value.map {
-                JSONObject().put("targetId", it.targetId).put("pinnedAt", System.currentTimeMillis())
-                    .put("snapshot", JSONObject().put("sender", it.sender).put("text", it.text)
-                        .put("senderName", it.senderName ?: JSONObject.NULL)
-                        .put("ensName", it.ensName ?: JSONObject.NULL))
-            }))
+            .put("pins", pinsToJson(_pins.value))
         val msg = JSONObject()
             .put("type", "ADMIN_STATE").put("rev", rev)
             .put("ts", System.currentTimeMillis()).put("createdBy", addr)
@@ -2779,7 +2767,11 @@ class ChannelManager(
             val msg = _messages.value.find { it.id == messageId }
                 ?: throw IllegalStateException("Message not found")
             if (_pins.value.any { it.targetId == messageId }) return
-            _pins.value + Pin(messageId, msg.text, msg.sender, senderName = msg.senderName, ensName = msg.ensName)
+            _pins.value + Pin(
+                messageId, msg.text, msg.sender,
+                senderName = msg.senderName, ensName = msg.ensName,
+                pinnedAt = System.currentTimeMillis()
+            )
         } else {
             _pins.value.filterNot { it.targetId == messageId }
         }
@@ -7270,6 +7262,40 @@ class ChannelManager(
         // config.js storage.ttlRepublishAgeFraction + ttlRepublish.js).
         const val DEFAULT_RETENTION_DAYS = 180
         const val TTL_REPUBLISH_AGE_FRACTION = 0.8
+
+        /** ADMIN_STATE `pins` codec. [Pin.pinnedAt] is copied, never regenerated. */
+        fun pinsToJson(pins: List<Pin>): JSONArray = JSONArray(
+            pins.map {
+                JSONObject()
+                    .put("targetId", it.targetId)
+                    .put("pinnedAt", it.pinnedAt)
+                    .put(
+                        "snapshot",
+                        JSONObject().put("sender", it.sender).put("text", it.text)
+                            .put("senderName", it.senderName ?: JSONObject.NULL)
+                            .put("ensName", it.ensName ?: JSONObject.NULL)
+                    )
+            }
+        )
+
+        fun pinsFromJson(arr: JSONArray): List<Pin> = (0 until arr.length()).mapNotNull { idx ->
+            val p = arr.optJSONObject(idx) ?: return@mapNotNull null
+            val snap = p.optJSONObject("snapshot")
+            Pin(
+                p.optString("targetId"),
+                snap?.optString("text") ?: "",
+                snap?.optString("sender") ?: "",
+                senderName = snap?.let { jsonStringOrNull(it, "senderName") },
+                ensName = snap?.let { jsonStringOrNull(it, "ensName") },
+                pinnedAt = p.optLong("pinnedAt")
+            )
+        }
+
+        /** Android optString returns "null" for JSON null — guard against that. */
+        private fun jsonStringOrNull(o: JSONObject, key: String): String? {
+            if (o.isNull(key)) return null
+            return o.optString(key, "").ifEmpty { null }
+        }
 
         /**
          * Should a -3 artifact with payload timestamp [artifactTs] be
