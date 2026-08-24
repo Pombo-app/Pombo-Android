@@ -7,16 +7,23 @@ plugins {
     id("com.google.gms.google-services")
 }
 
-// Release signing credentials live in local.properties, which is gitignored:
-// the keystore itself is kept outside the repository and never travels with
-// it. A checkout without them still builds — the release variant falls back to
-// the debug key, which is enough to install and run, but not to publish or to
+// Release signing credentials, read from the Gradle home (~/.gradle/
+// gradle.properties) or, as a fallback, from the gitignored local.properties.
+// Prefer the Gradle home: it keeps the password outside the project folder, so
+// copying or archiving the checkout cannot carry it along. The keystore itself
+// lives outside the repository either way.
+//
+// A checkout without them still builds — the release variant falls back to the
+// debug key, which is enough to install and run, but not to publish or to
 // match the fingerprint in the site's assetlinks.json.
 val localProps = Properties().apply {
     val f = rootProject.file("local.properties")
     if (f.exists()) f.inputStream().use { load(it) }
 }
-val releaseStoreFile = localProps.getProperty("POMBO_RELEASE_STORE_FILE")
+fun signingProp(name: String): String? =
+    (findProperty(name) as String?) ?: localProps.getProperty(name)
+
+val releaseStoreFile = signingProp("POMBO_RELEASE_STORE_FILE")
     ?.let { rootProject.file(it) }
     ?.takeIf { it.exists() }
 
@@ -36,9 +43,9 @@ android {
         if (releaseStoreFile != null) {
             create("release") {
                 storeFile = releaseStoreFile
-                storePassword = localProps.getProperty("POMBO_RELEASE_STORE_PASSWORD")
-                keyAlias = localProps.getProperty("POMBO_RELEASE_KEY_ALIAS")
-                keyPassword = localProps.getProperty("POMBO_RELEASE_KEY_PASSWORD")
+                storePassword = signingProp("POMBO_RELEASE_STORE_PASSWORD")
+                keyAlias = signingProp("POMBO_RELEASE_KEY_ALIAS")
+                keyPassword = signingProp("POMBO_RELEASE_KEY_PASSWORD")
             }
         }
     }
