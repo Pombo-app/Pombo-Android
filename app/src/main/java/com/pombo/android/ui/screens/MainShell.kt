@@ -3434,9 +3434,7 @@ private fun ExploreTab(vm: AppViewModel, onCreate: () -> Unit, onConnect: () -> 
         // on its own — filters + language move to a second row, same as the
         // web.
         val accessFilterPills: @Composable () -> Unit = {
-            // Access-type markers (N-D): Open / Gated / Paid — exclusive
-            // toggles, none active shows every type. Gated vs Paid is the
-            // on-chain gate MODE, resolved per card by loadExplore's lazy pass.
+            // Open / Gated / Paid — exclusive, selecting only. Gated vs Paid is the on-chain gate MODE.
             Row(verticalAlignment = Alignment.CenterVertically) {
                 listOf("open" to "Open", "gated" to "Gated", "paid" to "Paid").forEachIndexed { i, (value, label) ->
                     if (i > 0) Text(
@@ -3452,9 +3450,11 @@ private fun ExploreTab(vm: AppViewModel, onCreate: () -> Unit, onConnect: () -> 
                         modifier = Modifier
                             .background(if (active) Color.White else Color.Transparent, RoundedCornerShape(6.dp))
                             .clickableNoRipple {
-                                accessFilter = if (active) "" else value
-                                // Password view and the markers are disjoint universes
-                                if (accessFilter.isNotEmpty()) privateOnly = false
+                                if (!active) {
+                                    accessFilter = value
+                                    // Password view and the markers are disjoint universes
+                                    privateOnly = false
+                                }
                             }
                             .padding(horizontal = 8.dp, vertical = 4.dp)
                     )
@@ -3528,6 +3528,7 @@ private fun ExploreTab(vm: AppViewModel, onCreate: () -> Unit, onConnect: () -> 
         // Category chips. Collapsed they scroll sideways in one rail; the
         // chevron expands them into rows so every filter is visible at once
         // (web: .explore-category-rail + #explore-toggle-categories-btn).
+        val selectPrivate = { if (!privateOnly) { privateOnly = true; accessFilter = "" } }
         Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
             Box(Modifier.weight(1f)) {
                 if (categoriesExpanded) {
@@ -3535,12 +3536,12 @@ private fun ExploreTab(vm: AppViewModel, onCreate: () -> Unit, onConnect: () -> 
                         Modifier.fillMaxWidth(),
                         horizontalArrangement = Arrangement.spacedBy(6.dp),
                         verticalArrangement = Arrangement.spacedBy(6.dp)
-                    ) { ExploreChips(category, privateOnly, nsfw, { category = it; privateOnly = false }, { privateOnly = !privateOnly; if (privateOnly) accessFilter = "" }) }
+                    ) { ExploreChips(category, privateOnly, nsfw, { category = it; privateOnly = false }, selectPrivate) }
                 } else {
                     Row(
                         Modifier.fillMaxWidth().horizontalScroll(androidx.compose.foundation.rememberScrollState()),
                         horizontalArrangement = Arrangement.spacedBy(6.dp)
-                    ) { ExploreChips(category, privateOnly, nsfw, { category = it; privateOnly = false }, { privateOnly = !privateOnly; if (privateOnly) accessFilter = "" }) }
+                    ) { ExploreChips(category, privateOnly, nsfw, { category = it; privateOnly = false }, selectPrivate) }
                 }
             }
             Spacer(Modifier.width(8.dp))
