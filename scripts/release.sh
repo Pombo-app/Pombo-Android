@@ -42,6 +42,27 @@ if git rev-parse -q --verify "refs/tags/$TAG" >/dev/null; then
     exit 1
 fi
 
+# Gradle picks whatever JDK is on PATH, which on this machine is a JDK 25 the
+# Android plugin does not support. Build with the Android Studio JBR unless the
+# caller has already chosen a JDK.
+if [ -z "${JAVA_HOME:-}" ]; then
+    for candidate in \
+        "/c/Program Files/Android/Android Studio/jbr" \
+        "$HOME/AppData/Local/Programs/Android Studio/jbr"
+    do
+        if [ -x "$candidate/bin/java" ] || [ -x "$candidate/bin/java.exe" ]; then
+            export JAVA_HOME="$candidate"
+            break
+        fi
+    done
+fi
+if [ -z "${JAVA_HOME:-}" ]; then
+    echo "JAVA_HOME is unset and the Android Studio JBR was not found" >&2
+    echo "set JAVA_HOME to a JDK 17 before running this" >&2
+    exit 1
+fi
+echo "==> JAVA_HOME=$JAVA_HOME"
+
 find_build_tool() {
     ls "$HOME/AppData/Local/Android/Sdk/build-tools/"*/"$1" 2>/dev/null | sort -V | tail -1
 }
