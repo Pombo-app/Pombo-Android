@@ -84,9 +84,17 @@ android {
             // An unsigned release APK is refused by the device, so the variant
             // always carries a signingConfig: the real key when this machine
             // has it, the debug key otherwise so the variant still runs from
-            // Android Studio.
-            signingConfig = signingConfigs.findByName("release")
-                ?: signingConfigs.getByName("debug")
+            // Android Studio. The fallback says so out loud — a debug-signed
+            // APK looks identical until someone tries to install it over a
+            // real one, and one has already been published that way.
+            signingConfig = signingConfigs.findByName("release") ?: run {
+                logger.warn(
+                    "\n  WARNING: signing the RELEASE variant with the DEBUG key." +
+                    "\n  POMBO_RELEASE_* not found in ~/.gradle/gradle.properties or local.properties." +
+                    "\n  Fine to install and run; NOT fine to publish.\n"
+                )
+                signingConfigs.getByName("debug")
+            }
         }
     }
     compileOptions {
