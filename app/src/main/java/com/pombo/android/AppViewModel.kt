@@ -1230,6 +1230,8 @@ class AppViewModel(app: Application) : AndroidViewModel(app), PomboBridge.Listen
         _contacts.value = contactsStore.load()
         _youtubeEmbeds.value = settingsStore.youtubeEmbeds
         _nsfwEnabled.value = settingsStore.nsfwEnabled
+        _ensAvatarsEnabled.value = settingsStore.ensAvatars
+        com.pombo.android.ui.EnsAvatarsSetting.set(settingsStore.ensAvatars)
         _dmPushEnabled.value = settingsStore.dmPushEnabled
         // Per account, and read before the next connect decides whether to fire
         // the start-up sync.
@@ -1280,6 +1282,9 @@ class AppViewModel(app: Application) : AndroidViewModel(app), PomboBridge.Listen
         // The P3 gate must hold this account's preference before the first
         // subscribeMyInbox (which runs on bridge connect).
         manager.inviteNotificationsEnabled = settingsStore.inviteNotificationsEnabled
+        // Avatar slots read this object, not the view model, so the first
+        // composition must not find it holding the default.
+        com.pombo.android.ui.EnsAvatarsSetting.set(settingsStore.ensAvatars)
         // Any local mutation coalesces into one push after a quiet period.
         manager.onLocalStateChanged = { sync.scheduleAutoPush() }
         // Slice timestamps for changes born inside the manager (dmLeftAt).
@@ -1315,7 +1320,8 @@ class AppViewModel(app: Application) : AndroidViewModel(app), PomboBridge.Listen
                     // when cached, the generated one otherwise.
                     val avatar = if (channel.type == "dm")
                         com.pombo.android.core.NotificationAvatar.bitmapFor(
-                            getApplication(), sender, ensStore.cachedAvatar(sender)
+                            getApplication(), sender,
+                            if (settingsStore.ensAvatars) ensStore.cachedAvatar(sender) else null
                         )
                     else null
                     notifier.postMessage(
@@ -1654,6 +1660,16 @@ class AppViewModel(app: Application) : AndroidViewModel(app), PomboBridge.Listen
     fun setNsfwEnabled(enabled: Boolean) {
         settingsStore.nsfwEnabled = enabled
         _nsfwEnabled.value = enabled
+    }
+
+    private val _ensAvatarsEnabled = MutableStateFlow(settingsStore.ensAvatars)
+    /** Web settings "ENS Avatars" — remote avatar images, default ON. */
+    val ensAvatarsEnabled: StateFlow<Boolean> = _ensAvatarsEnabled.asStateFlow()
+
+    fun setEnsAvatars(enabled: Boolean) {
+        settingsStore.ensAvatars = enabled
+        _ensAvatarsEnabled.value = enabled
+        com.pombo.android.ui.EnsAvatarsSetting.set(enabled)
     }
 
     private val _explore = MutableStateFlow<List<ExploreChannel>>(emptyList())

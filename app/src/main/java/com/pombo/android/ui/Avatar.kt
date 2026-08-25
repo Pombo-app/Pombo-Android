@@ -6,6 +6,8 @@ import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.collectAsState
+import androidx.compose.runtime.getValue
 import androidx.compose.runtime.remember
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -18,6 +20,9 @@ import coil.decode.SvgDecoder
 import coil.memory.MemoryCache
 import coil.request.CachePolicy
 import coil.request.ImageRequest
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.asStateFlow
 
 /**
  * One loader for every avatar in the app.
@@ -47,6 +52,18 @@ private object AvatarLoader {
 }
 
 /**
+ * The Settings → Content "ENS Avatars" switch, held where every avatar slot
+ * can read it. A StateFlow rather than a plain flag: flipping it has to
+ * recompose the avatars already on screen, not just the next ones drawn.
+ */
+object EnsAvatarsSetting {
+    private val _enabled = MutableStateFlow(true)
+    val enabled: StateFlow<Boolean> = _enabled.asStateFlow()
+
+    fun set(value: Boolean) { _enabled.value = value }
+}
+
+/**
  * Deterministic SVG avatar per address (same output as the web), replaced by
  * the ENS avatar when the address has one.
  */
@@ -61,6 +78,10 @@ fun Avatar(
 ) {
     val context = LocalContext.current
     val loader = AvatarLoader.get(context)
+    // Loading the record's image would tell whoever hosts it that this device
+    // is looking at its owner's messages, so the switch gates the URL itself.
+    val ensAvatarsOn by EnsAvatarsSetting.enabled.collectAsState()
+    val remoteUrl = ensAvatarUrl?.takeIf { ensAvatarsOn }
     // Generated at a fixed 256px: crisp on any density (the old 96px was
     // upscaled and looked rough on dense screens). Deriving the raster size
     // from screen density instead would make the output device-dependent
@@ -73,14 +94,14 @@ fun Avatar(
     // shows the address's colour instead of a hole in the layout.
     val fallback = remember(address) { PomboAvatar.fallbackColor(address) }
 
-    val request = remember(address, ensAvatarUrl, cornerRadiusFraction) {
+    val request = remember(address, remoteUrl, cornerRadiusFraction) {
         ImageRequest.Builder(context)
-            .data(ensAvatarUrl ?: svgBytes)
+            .data(remoteUrl ?: svgBytes)
             // A ByteArray compares by identity, so a regenerated SVG never hit
             // the cache even with a shared loader. Key on the address instead,
             // which is what actually identifies the image.
-            .memoryCacheKey(ensAvatarUrl ?: "pombo-avatar:$address:$cornerRadiusFraction")
-            .diskCachePolicy(if (ensAvatarUrl != null) CachePolicy.ENABLED else CachePolicy.DISABLED)
+            .memoryCacheKey(remoteUrl ?: "pombo-avatar:$address:$cornerRadiusFraction")
+            .diskCachePolicy(if (remoteUrl != null) CachePolicy.ENABLED else CachePolicy.DISABLED)
             // No fade: a cached avatar should appear with the row, not animate
             // in behind it every time the row scrolls back on screen.
             .crossfade(false)

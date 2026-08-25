@@ -2003,6 +2003,7 @@ private fun NotificationsSection(vm: AppViewModel) {
 @Composable
 private fun ContentPanel(vm: AppViewModel) {
     val ytEnabled by vm.youtubeEmbeds.collectAsState()
+    val ensAvatarsEnabled by vm.ensAvatarsEnabled.collectAsState()
     val nsfwEnabled by vm.nsfwEnabled.collectAsState()
     SettingsSection {
         ContentToggleRow(
@@ -2012,6 +2013,14 @@ private fun ContentPanel(vm: AppViewModel) {
             // The web paints this one toggle YouTube red, not accent orange.
             trackColor = Color(0xFFFF0000)
         ) { vm.setYoutubeEmbeds(it) }
+        Spacer(Modifier.height(16.dp))
+        ContentToggleRow(
+            title = "ENS Avatars",
+            hint = "Load profile pictures from the server each ENS name points at. " +
+                "That server sees your IP address.",
+            checked = ensAvatarsEnabled,
+            trackColor = PomboColors.Accent
+        ) { vm.setEnsAvatars(it) }
         Spacer(Modifier.height(16.dp))
         ContentToggleRow(
             title = "Show Sensitive Content",
