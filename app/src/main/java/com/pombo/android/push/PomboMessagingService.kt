@@ -93,7 +93,8 @@ class PomboMessagingService : FirebaseMessagingService() {
                         ?: roomName
                         ?: (sender.take(6) + "…" + sender.takeLast(4))
                     avatar = com.pombo.android.core.NotificationAvatar.bitmapFor(
-                        applicationContext, sender, ens.cachedAvatar(sender)
+                        applicationContext, sender,
+                        if (settings.ensAvatars) ens.cachedAvatar(sender) else null
                     )
                 }
             }

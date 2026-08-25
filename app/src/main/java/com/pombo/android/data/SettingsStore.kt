@@ -73,6 +73,16 @@ class SettingsStore(context: Context) {
         set(value) = prefs.edit().putBoolean(scoped(KEY_YT_EMBEDS), value).apply()
 
     /**
+     * Whether an ENS avatar record is fetched and shown (web
+     * secureStorage.getEnsAvatarsEnabled, default true). Off means the
+     * generated avatar is drawn instead, so no request ever reaches the host
+     * the record points at and it never learns this device's IP address.
+     */
+    var ensAvatars: Boolean
+        get() = prefs.getBoolean(scoped(KEY_ENS_AVATARS), true)
+        set(value) = prefs.edit().putBoolean(scoped(KEY_ENS_AVATARS), value).apply()
+
+    /**
      * Whether NSFW/Adult channels appear in Explore (web
      * secureStorage.getNsfwEnabled, default false). Local-only, like the
      * YouTube toggle.
@@ -162,6 +172,7 @@ class SettingsStore(context: Context) {
         const val KEY_BLOCKED = "blocked_peers"
         const val KEY_YT_EMBEDS = "youtube_embeds"
         const val KEY_NSFW = "nsfw_enabled"
+        const val KEY_ENS_AVATARS = "ens_avatars_enabled"
         const val KEY_DM_PUSH = "dm_push_enabled"
         const val KEY_INVITE_NOTIFS = "invite_notifications_enabled"
         const val KEY_MUTED_DM = "muted_dm_peers"
