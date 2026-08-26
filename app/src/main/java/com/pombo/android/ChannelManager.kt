@@ -215,10 +215,11 @@ class ChannelManager(
             val gate = channel?.takeIf { it.type == "gated" }?.gateAddress
             if (gate == null) false
             else try {
-                // gateInfo params are immutable — the bridge caches nothing,
-                // but the mode read shares the answerRequest's rare cadence
+                // Readability probe, result unused: every gate mode receives
+                // all retained epochs, but an unreadable gate must answer
+                // current-epoch-only
                 bridge.call("gateInfo", JSONObject().put("gate", gate))
-                    .optInt("mode", GATE_MODE_PAID) == GATE_MODE_PAID
+                false
             } catch (e: Exception) {
                 Log.w(TAG, "gateInfo failed, answering current epoch only: ${e.message}")
                 true
