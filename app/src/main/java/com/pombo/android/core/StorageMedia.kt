@@ -232,7 +232,7 @@ class StorageMedia(
         // no ECDH), so the seal here is identity — but the [iv][ct] the bridge adds
         // still costs SEAL_OVERHEAD out of the chunk budget, and there is no salt.
         if (isDm) return Sealer({ it }, null, StorageWire.SEAL_OVERHEAD)
-        // Epoch channels (native/gated): ONE key per transfer, captured by the
+        // Gated channels: ONE key per transfer, captured by the
         // caller — a rotation mid-upload does not re-key chunks already out,
         // exactly as it does not re-key a sent message.
         if (epochKey != null) return Sealer(
@@ -278,7 +278,7 @@ class StorageMedia(
 
     private suspend fun warmUpPartitions(
         sid: String, firstPartition: Int, identityPk: String?,
-        gateAddress: String? = null, asAccount: Boolean = false,
+        gateAddress: String? = null,
         onStatus: (String) -> Unit
     ) {
         if (warmedUp.contains(sid)) return
@@ -294,7 +294,7 @@ class StorageMedia(
                         bridge.publishStorageChunk(
                             sid, firstPartition + k, ping,
                             identityPk = identityPk,
-                            gateAddress = gateAddress, asAccount = asAccount
+                            gateAddress = gateAddress
                         )
                     }
                     catch (e: Exception) { Log.w(TAG, "storage warm-up P${firstPartition + k} failed: ${e.message}") }
@@ -397,9 +397,9 @@ class StorageMedia(
         messageStreamId: String, source: Source, password: String?,
         isDm: Boolean = false, dmPeerPublicKey: String? = null,
         /** public/password channel: publish chunks + warm-up under the
-         *  channel's ephemeral identity (native/readOnly stay on the account). */
+         *  channel's ephemeral identity (readOnly stays on the account). */
         channelEphemeral: Boolean = false,
-        /** Epoch channel (native/gated): the CURRENT key, captured by the
+        /** Gated channel: the CURRENT key, captured by the
          *  caller — chunks seal with it for the whole transfer. */
         epochKey: EpochKeyManager.CurrentKey? = null,
         /** Gated channel: the clone address — chunks and warm-up pings publish
@@ -514,7 +514,7 @@ class StorageMedia(
             //               pseudonym as the announce.
             //   gated     → the clone (ERC-1271, inside the bridge publish);
             //               verify expects the gate address.
-            //   native/ro → the account; verifyPublisher stays null and verify
+            //   readOnly  → the account; verifyPublisher stays null and verify
             //               falls back to our wallet (D3).
             // Publishing identities are minted natively now; the pair key that
             // seals DM chunk bytes is derived once per transfer.
@@ -537,12 +537,7 @@ class StorageMedia(
                 gateAddress != null -> gateAddress.lowercase()
                 else -> null
             }
-            // Epoch chunks must ride publishAs (encryptionType NONE): a bare
-            // client.publish on a members-only stream would re-wrap them in
-            // the SDK's group-key AES and break the HTTP hex reader.
-            val asAccount = epochKey != null && gateAddress == null
-
-            warmUpPartitions(messageStreamId, firstPart, publishIdentityPk, gateAddress, asAccount) { up.phase = it; emit(up) }
+            warmUpPartitions(messageStreamId, firstPart, publishIdentityPk, gateAddress) { up.phase = it; emit(up) }
 
             val firstChunkTs = wall()
             val uploadStart = perf()
@@ -611,7 +606,7 @@ class StorageMedia(
                 awaitSendSlot()
                 val ts = publishChunkWithRetry(
                     messageStreamId, chunkPartition(i), pay,
-                    publishIdentityPk, gateAddress, asAccount
+                    publishIdentityPk, gateAddress
                 )
                 chunkTs[i] = ts
                 chunkTsHist.getOrPut(i) { ArrayList() }.add(ts)
@@ -952,7 +947,7 @@ class StorageMedia(
         /** DM: the SENDER's public key, to open the ECDH-sealed chunks (in the bridge). */
         peerPublicKey: String? = null,
         /**
-         * Epoch channel (native/gated): opens a 0x04 chunk given its transport
+         * Gated channel: opens a 0x04 chunk given its transport
          * timestamp (the gated kid-freshness rule judges old kids against the
          * announce in force at that moment). Null result = cannot open (missing
          * key already noted) — the chunk is skipped and retries re-read it.
@@ -1227,10 +1222,10 @@ class StorageMedia(
         }
     }
 
-    private suspend fun publishChunkWithRetry(sid: String, partition: Int, payload: ByteArray, identityPk: String? = null, gateAddress: String? = null, asAccount: Boolean = false, attempts: Int = 3): Long {
+    private suspend fun publishChunkWithRetry(sid: String, partition: Int, payload: ByteArray, identityPk: String? = null, gateAddress: String? = null, attempts: Int = 3): Long {
         var last: Exception? = null
         for (a in 0 until attempts) {
-            try { return bridge.publishStorageChunk(sid, partition, payload, identityPk, gateAddress, asAccount) }
+            try { return bridge.publishStorageChunk(sid, partition, payload, identityPk, gateAddress) }
             catch (e: Exception) { last = e; delay(500L * (a + 1)) }
         }
         throw last ?: IllegalStateException("publish failed")

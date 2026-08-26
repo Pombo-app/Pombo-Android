@@ -114,7 +114,6 @@ object InviteToken {
     fun typeLabel(type: String?): String = when (type) {
         "public" -> "Public Channel"
         "password" -> "Password Protected"
-        "native" -> "Native Encryption"
         "gated" -> "Gated Channel (on-chain)"
         else -> type?.ifEmpty { null } ?: "Unknown"
     }

@@ -445,7 +445,7 @@ const api = {
     // never see an ephemeral publisher: the admin stream (-3: ADMIN_STATE,
     // CHANNEL_IMAGE, PASSWORD_CHALLENGE) is refused HERE, loudly — a clever
     // fallback would produce a message the network validates and receivers
-    // reject as a non-owner. Native channels are refused by the Kotlin
+    // reject as a non-owner. Gated channels are refused by the Kotlin
     // routing, which is the layer that knows the channel kind.
     _refuseAdminStream(streamId) {
         if (/-3$/.test(String(streamId))) {
@@ -516,7 +516,7 @@ const api = {
     //
     // THE single place where "who we appear to be" on a channel is decided.
     // Kotlin routes every public/password channel publish through here;
-    // native channels and the admin stream keep the account (on-chain
+    // gated channels and the admin stream keep the account/clone (on-chain
     // permission that a throwaway key does not hold).
     //   { streamId, partition, content, password? } -> { ok, timestamp }
     async publishAsChannel(a) {
@@ -540,13 +540,13 @@ const api = {
         return { ok: true, timestamp: msg.timestamp };
     },
 
-    // Publish AS THE ACCOUNT with encryptionType NONE — the keys stream (-4)
-    // and native-channel epoch envelopes (N-A). Their grants are per member
-    // address on-chain, so the account must sign; but client.publish would
-    // force the SDK's AES + group-key exchange on a members-only stream —
-    // exactly the per-publisher, publisher-must-be-online dependency the
-    // epoch protocol replaces. Content is already sealed (or public protocol
-    // data) when it gets here.
+    // Publish AS THE ACCOUNT with encryptionType NONE — the gated admin
+    // stream's epoch envelopes (N-A): the owner-only publish permission is
+    // on-chain, so the account must sign; but client.publish would force the
+    // SDK's AES + group-key exchange on a members-only stream — exactly the
+    // per-publisher, publisher-must-be-online dependency the epoch protocol
+    // replaces. Content is already sealed (or public protocol data) when it
+    // gets here.
     //   { streamId, partition, content } -> { ok, timestamp }
     async publishAsAccount(a) {
         if (!wallet) throw new Error('no identity');
@@ -2041,11 +2041,10 @@ window.bridgePublishBinary = function (id, argsB64, dataB64) {
             Native.result(id, true, utf8ToB64(JSON.stringify({ ok: true, bytes: bytes.length })));
             return;
         }
-        // Epoch channel piece (native/gated): the bytes arrive already sealed
-        // with the epoch key in Kotlin (0x04). Native rides the ACCOUNT (its
-        // grant is per member); gated the CLONE (ERC-1271) — an ephemeral key
-        // holds no grant on either, and client.publish would re-wrap a
-        // members-only stream in the SDK's group-key AES.
+        // Gated channel piece: the bytes arrive already sealed with the epoch
+        // key in Kotlin (0x04) and ride the CLONE (ERC-1271) — an ephemeral
+        // key holds no grant, and client.publish would re-wrap a members-only
+        // stream in the SDK's group-key AES.
         if (a.gateAddress) {
             if (!wallet) throw new Error('no identity');
             const st = window.SignatureType;
@@ -2057,13 +2056,6 @@ window.bridgePublishBinary = function (id, argsB64, dataB64) {
                 publisherId: String(a.gateAddress).toLowerCase(),
                 signatureType: st.ERC_1271
             });
-            Native.result(id, true, utf8ToB64(JSON.stringify({ ok: true, bytes: bytes.length })));
-            return;
-        }
-        if (a.asAccount) {
-            if (!wallet) throw new Error('no identity');
-            const identity = nativeIdentity;
-            await api._publishAs(identity, a.streamId, a.partition, bytes);
             Native.result(id, true, utf8ToB64(JSON.stringify({ ok: true, bytes: bytes.length })));
             return;
         }
@@ -2112,10 +2104,10 @@ window.bridgePublishStorageChunk = function (id, argsB64, dataB64) {
                 { ok: true, bytes: bytes.length, timestamp: msgI.timestamp })));
             return;
         }
-        // Epoch channel chunk (native/gated): already epoch-sealed in Kotlin
-        // (0x04). publishAs sends encryptionType NONE — client.publish on a
+        // Gated channel chunk: already epoch-sealed in Kotlin (0x04).
+        // publishAs sends encryptionType NONE — client.publish on a
         // members-only stream would re-wrap it in the SDK's group-key AES and
-        // break the HTTP hex reader. Gated rides the clone (ERC-1271).
+        // break the HTTP hex reader. Rides the clone (ERC-1271).
         if (a.gateAddress) {
             if (!wallet) throw new Error('no identity');
             const st = window.SignatureType;
@@ -2129,14 +2121,6 @@ window.bridgePublishStorageChunk = function (id, argsB64, dataB64) {
             });
             Native.result(id, true, utf8ToB64(JSON.stringify(
                 { ok: true, bytes: bytes.length, timestamp: msg4.timestamp })));
-            return;
-        }
-        if (a.asAccount) {
-            if (!wallet) throw new Error('no identity');
-            const identity = nativeIdentity;
-            const msg5 = await api._publishAs(identity, a.streamId, a.partition, bytes);
-            Native.result(id, true, utf8ToB64(JSON.stringify(
-                { ok: true, bytes: bytes.length, timestamp: msg5.timestamp })));
             return;
         }
         const msg = await client.publish(

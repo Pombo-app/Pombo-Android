@@ -494,7 +494,7 @@ class AppViewModel(app: Application) : AndroidViewModel(app), PomboBridge.Listen
             base.put("ensCache", ens)
         }
 
-        // Epoch keys ride the sync so a second device reads native/gated
+        // Epoch keys ride the sync so a second device reads gated
         // history without a KEY_REQUEST round-trip — and gets epochs the
         // network can no longer serve (paid gates, announces past retention).
         // Local wins per stream: the store is union-seeded by every pull.
@@ -2093,7 +2093,7 @@ class AppViewModel(app: Application) : AndroidViewModel(app), PomboBridge.Listen
      * so a wallet that cannot pay never reaches stream creation.
      */
     fun createChannel(spec: com.pombo.android.ui.screens.NewChannel) = viewModelScope.launch {
-        val streamCount = if (spec.type == "native" || spec.type == "gated") 4 else 3
+        val streamCount = if (spec.type == "gated") 4 else 3
         chainAction(
             "Create channel",
             "Creates \"${spec.name}\" — $streamCount streams, their permissions and storage."
@@ -2101,12 +2101,10 @@ class AppViewModel(app: Application) : AndroidViewModel(app), PomboBridge.Listen
 
         // createStream + setPermissions per stream + storage (bridge does
         // addToStorageNode and setStorageDayCount in one call, unlike the web).
-        // Public/password: 3+3+2 = 8. Native adds the keys stream (-4, with
-        // storage): 4+4+3 = 11.
-        // Gated adds the gate deploy: 1+4+4+3 = 12.
+        // Public/password: 3+3+2 = 8. Gated adds the gate deploy and the keys
+        // stream (-4, with storage): 1+4+4+3 = 12.
         val totalSteps = when (spec.type) {
             "gated" -> 12
-            "native" -> 11
             else -> 8
         }
         val id = toast(

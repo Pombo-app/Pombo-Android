@@ -121,6 +121,9 @@ class EpochKeyManager(
         private const val REQUEST_FAST_ATTEMPTS = 4
         /** Laps of the caller's 10s retry loop while a channel waits for keys. */
         const val RETRY_LOOP_ATTEMPTS = 6
+        /** Announce retention loop: verify/republish cycles and their spacing. */
+        private const val RETENTION_ATTEMPTS = 12
+        private const val RETENTION_DELAY_MS = 5_000L
         // N-B anti-stampede (§7.10): rank × step = wait before checking
         // whether a lower rank already covered the request.
         private const val RANK_STEP_MS = 2_000L
@@ -221,7 +224,7 @@ class EpochKeyManager(
     }
 
     /**
-     * Bring a native channel's key state up to date: pull announces from -4
+     * Bring a gated channel's key state up to date: pull announces from -4
      * storage, bootstrap/re-announce as admin, or request missing keys as a
      * member. Call on channel open, before the -1 history pull.
      */
@@ -404,6 +407,50 @@ class EpochKeyManager(
         }
         publishKeys(keysStreamId, announce ?: return)
         Log.i(TAG, "re-announced current epoch (missing/aging in storage) on ${keysStreamId.takeLast(30)}")
+        retainAnnounce(messageStreamId, keysStreamId, announce!!)
+    }
+
+    /** In-flight announce retention loops, one per keyId. */
+    private val announceRetention = java.util.Collections.synchronizedSet(HashSet<String>())
+
+    /**
+     * Fire-and-forget retention loop for a just-published KEY_ANNOUNCE (same
+     * pattern as the password challenge). A create-time publish can race the
+     * storage node learning its -4 assignment, or leave a cold node before
+     * any neighbour is connected (R2 publishes into an empty room) — either
+     * way the announce is lost, a joiner never gets an anchor, and the
+     * publishing session masks the missing-from-storage re-announce because
+     * its own freshness entry looks recent. Verify by resend that the -4
+     * actually returns the keyId; republish until it does.
+     */
+    private fun retainAnnounce(messageStreamId: String, keysStreamId: String, announce: JSONObject) {
+        val keyId = announce.optString("keyId")
+        if (keyId.isEmpty() || !announceRetention.add(keyId)) return
+        scope.launch {
+            try {
+                repeat(RETENTION_ATTEMPTS) { attempt ->
+                    delay(RETENTION_DELAY_MS)
+                    if (mutex.withLock { state[messageStreamId] } == null) return@launch
+                    try {
+                        val found = resendKeys(keysStreamId).any {
+                            it.data.optString("t") == StreamConstants.KEY_ANNOUNCE &&
+                                it.data.optString("keyId") == keyId
+                        }
+                        if (found) {
+                            Log.i(TAG, "announce $keyId retained on -4 (after ${attempt + 1} cycle(s))")
+                            return@launch
+                        }
+                        publishKeys(keysStreamId, announce)
+                        Log.d(TAG, "announce $keyId republished (retention attempt ${attempt + 1}/$RETENTION_ATTEMPTS)")
+                    } catch (e: Exception) {
+                        Log.d(TAG, "announce retention cycle ${attempt + 1} errored: ${e.message}")
+                    }
+                }
+                Log.w(TAG, "announce $keyId STILL not retained after $RETENTION_ATTEMPTS attempts — the next channel open re-announces")
+            } finally {
+                announceRetention.remove(keyId)
+            }
+        }
     }
 
     private fun missingEpochsLocked(s: ChannelState): List<Int> {
@@ -466,6 +513,7 @@ class EpochKeyManager(
         } else {
             Log.i(TAG, "re-announced existing epoch on ${keysStreamId.takeLast(30)} (announce was missing from storage)")
         }
+        retainAnnounce(messageStreamId, keysStreamId, ann)
     }
 
     /**
@@ -498,6 +546,7 @@ class EpochKeyManager(
         }
         onKeyAdopted(messageStreamId, keyId)
         Log.i(TAG, "rotated to epoch $epoch on ${keysStreamId.takeLast(30)}")
+        retainAnnounce(messageStreamId, keysStreamId, announce)
         return epoch
     }
 
@@ -787,7 +836,7 @@ class EpochKeyManager(
 
     /**
      * Encrypt a payload with the CURRENT epoch key, or null while waiting for
-     * one — the caller fails closed (never plaintext on a native channel).
+     * one — the caller fails closed (never plaintext on a gated channel).
      */
     suspend fun encryptCurrent(messageStreamId: String, payload: JSONObject): JSONObject? {
         return mutex.withLock {
@@ -805,9 +854,9 @@ class EpochKeyManager(
      * and the caller skips; storage-backed messages come back via the
      * refresh fired on adoption.
      *
-     * Kid freshness (N-C, `gated` only — native's on-chain revocation cuts
-     * harder): sticky signatures mean an ex-member still authors valid
-     * envelopes, so old epoch keys must stop being ACCEPTABLE. Live traffic
+     * Kid freshness (N-C, callers opt in via `gated`): sticky signatures mean
+     * an ex-member still authors valid envelopes, so old epoch keys must stop
+     * being ACCEPTABLE. Live traffic
      * must use the current epoch (previous tolerated 10 min post-rotation);
      * history must use the kid in force at the message timestamp (highest
      * validFrom <= ts). A violation returns null WITHOUT the missing-kid

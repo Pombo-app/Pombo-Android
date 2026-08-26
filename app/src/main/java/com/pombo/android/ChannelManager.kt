@@ -119,7 +119,7 @@ class ChannelManager(
     private val sentReactionsStore: com.pombo.android.data.SentReactionsStore? = null,
     private val inviteStore: com.pombo.android.data.InviteStore,
     private val unreadStore: com.pombo.android.data.UnreadStore,
-    /** Persisted epoch keys for native channels (-4 protocol, N-A). */
+    /** Persisted epoch keys for gated channels (-4 protocol, N-A). */
     private val epochKeyStore: com.pombo.android.data.EpochKeyStore,
     /**
      * Where partial file transfers live. filesDir, never cacheDir: the system
@@ -136,31 +136,29 @@ class ChannelManager(
 ) {
 
     /**
-     * Epoch keys for native channels (-4, N-A). Transport is injected:
-     * protocol messages publish AS THE ACCOUNT with encryptionType NONE via
-     * the bridge's publishAsAccount (client.publish would force the SDK's AES
-     * + group-key exchange on a members-only stream — the very dependency the
-     * epoch protocol replaces), and announce history is a plain -4 resend.
+     * Epoch keys for gated channels (-4, N-A/N-C). Transport is injected:
+     * protocol messages go out with encryptionType NONE (client.publish would
+     * force the SDK's AES + group-key exchange on a members-only stream — the
+     * very dependency the epoch protocol replaces), and announce history is a
+     * plain -4 resend.
      */
     private val epochKeys = com.pombo.android.core.EpochKeyManager(
         store = epochKeyStore,
         scope = scope,
         myAddress = myAddress,
         publishKeys = { keysStreamId, data ->
-            // Gated (N-C): the -4 grant is on the clone, not per member — the
-            // account signs, the clone is the on-wire publisher, receivers
-            // recover the author from the envelope.
-            val gate = channelByStream(keysStreamId)
-                ?.takeIf { it.type == "gated" }
-                ?.let { it.gateAddress ?: throw IllegalStateException(
-                    "Gate address unknown for ${it.messageStreamId} — cannot publish keys") }
-            val method = if (gate != null) "publishAsGate" else "publishAsAccount"
-            val args = JSONObject()
+            // The -4 grant is on the clone, not per member — the account
+            // signs, the clone is the on-wire publisher, receivers recover
+            // the author from the envelope (N-C).
+            val channel = channelByStream(keysStreamId) ?: throw IllegalStateException(
+                "Unknown channel for $keysStreamId — cannot publish keys")
+            val gate = channel.gateAddress ?: throw IllegalStateException(
+                "Gate address unknown for ${channel.messageStreamId} — cannot publish keys")
+            bridge.call("publishAsGate", JSONObject()
                 .put("streamId", keysStreamId)
                 .put("partition", StreamConstants.P_KEY_EXCHANGE)
                 .put("content", data)
-            gate?.let { args.put("gateAddress", it) }
-            bridge.call(method, args)
+                .put("gateAddress", gate))
         },
         resendKeys = { keysStreamId ->
             val entries = mutableListOf<com.pombo.android.core.EpochKeyManager.Entry>()
@@ -349,28 +347,24 @@ class ChannelManager(
                     )
                     return
                 }
-                // Epoch channels (native/gated): the piece is sealed with the
-                // epoch key in Kotlin (0x04 envelope), no inline proof —
-                // authorship comes from the same place as the channel's
-                // messages (transport account on native, envelope signer on
-                // gated). Fail closed while waiting for a key: a plaintext or
-                // ephemeral-key fallback would leak or be rejected.
+                // Gated channels: the piece is sealed with the epoch key in
+                // Kotlin (0x04 envelope), no inline proof — authorship comes
+                // from the same place as the channel's messages (envelope
+                // signer). Fail closed while waiting for a key: a plaintext
+                // or ephemeral-key fallback would leak or be rejected.
                 val channel = channelByStream(ephemeralStreamId)
                 if (isEpochChannel(channel)) {
                     val sealed = epochKeys.sealBinaryCurrent(channel!!.messageStreamId, bytes)
                         ?: throw IllegalStateException(
                             "No epoch key for ${channel.messageStreamId} — cannot send media")
-                    val gate = if (channel.type == "gated") {
-                        channel.gateAddress ?: throw IllegalStateException(
-                            "Gate address unknown for ${channel.messageStreamId} — cannot publish")
-                    } else null
+                    val gate = channel.gateAddress ?: throw IllegalStateException(
+                        "Gate address unknown for ${channel.messageStreamId} — cannot publish")
                     bridge.publishBinary(
                         ephemeralStreamId,
                         StreamConstants.EPH_MEDIA_DATA,
                         sealed,
                         password = null,
-                        gateAddress = gate,
-                        asAccount = gate == null
+                        gateAddress = gate
                     )
                     return
                 }
@@ -453,7 +447,7 @@ class ChannelManager(
                     return publishContent(messageStreamId, StreamConstants.P_MESSAGES, announce, password = null, dmPeer = peer)
                 }
                 // Regular/password channel: ephemeral identity + proof via the
-                // channel rule (account only for native/readOnly).
+                // channel rule (account only for readOnly).
                 return publishChannel(channelByStream(messageStreamId), messageStreamId, StreamConstants.P_MESSAGES, announce, password)
             }
 
@@ -948,7 +942,7 @@ class ChannelManager(
             }
             else -> { Log.w(TAG, "channelImage $label ($adminStreamId): content is neither object nor string (${contentAny?.javaClass})"); return null }
         }
-        // Native/gated: CHANNEL_IMAGE arrives as an epoch envelope (N-A)
+        // Gated: CHANNEL_IMAGE arrives as an epoch envelope (N-A)
         if (com.pombo.android.core.EpochKeyCrypto.isEpochEnvelope(data)) {
             val messageStreamId = adminStreamId.replace(Regex("-3$"), StreamConstants.SUFFIX_MESSAGE)
             val keysId = StreamConstants.deriveKeysId(messageStreamId)
@@ -1067,10 +1061,10 @@ class ChannelManager(
             .put("data", "data:$mime;base64,$base64")
         if (isEpochChannel(channel)) {
             // Epoch envelope, same reason as ADMIN_STATE: the SDK's group-key
-            // AES on -3 is unreadable cross-device on native channels.
-            // Visible channels are STOREFRONTS instead: the image is the
-            // marketing and publishes in the CLEAR so non-members (Explore)
-            // can render it — only the transport differs.
+            // AES on -3 would be unreadable cross-device. Visible channels
+            // are STOREFRONTS instead: the image is the marketing and
+            // publishes in the CLEAR so non-members (Explore) can render it —
+            // only the transport differs.
             val content = if (channel.exposure == "visible") payload
             else epochKeys.encryptCurrent(channel.messageStreamId, payload)
                 ?: throw IllegalStateException("No epoch key — cannot publish the channel image yet")
@@ -1707,7 +1701,7 @@ class ChannelManager(
      */
     suspend fun createChannel(
         name: String,
-        type: String,                    // 'public' | 'password' | 'native'
+        type: String,                    // 'public' | 'password' | 'gated'
         password: String? = null,
         exposure: String = "hidden",
         readOnly: Boolean = false,
@@ -1772,7 +1766,7 @@ class ChannelManager(
         // token/NFT/paid gates are the opposite — storefronts — so only the
         // NONE mode keeps the clamp (mirrors web handleCreate).
         val effectiveExposure =
-            if (type == "native" || (type == "gated" && gateMode == GATE_MODE_NONE)) "hidden"
+            if (type == "gated" && gateMode == GATE_MODE_NONE) "hidden"
             else exposure
         val visible = effectiveExposure == "visible"
 
@@ -1797,10 +1791,10 @@ class ChannelManager(
         createStreamRetry(messageStreamId, msgMeta.toString(), StreamConstants.MSG_PARTITIONS); onProgress()
         createStreamRetry(ephemeralStreamId, ephMeta.toString(), StreamConstants.EPH_PARTITIONS); onProgress()
         createStreamRetry(adminStreamId, admMeta.toString(), StreamConstants.ADMIN_PARTITIONS); onProgress()
-        // Keys stream (-4): native only. Lives outside -3 on purpose — any
+        // Keys stream (-4): gated only. Lives outside -3 on purpose — any
         // member must publish KEY_REQUEST/KEY_WRAP here, while -3 stays
         // owner-only publish (web streamr.js createStream, N-A).
-        if (type == "native" || type == "gated") {
+        if (type == "gated") {
             createStreamRetry(keysStreamId, keysMeta.toString(), StreamConstants.KEYS_PARTITIONS); onProgress()
         }
 
@@ -1812,44 +1806,15 @@ class ChannelManager(
                 setPermissionsRetry(ephemeralStreamId, publicRW); onProgress()   // presence needs public publish
                 setPermissionsRetry(adminStreamId, publicRead); onProgress()     // publish is the owner\x27s by ownership
             }
-            "native" -> {
-                // Closed channel: membership is on-chain. Each address listed at
-                // creation gets explicit subscribe+publish, and nothing is public.
-                if (members.isNotEmpty()) {
-                    val perms = JSONArray()
-                    members.forEach { addr ->
-                        perms.put(
-                            JSONObject()
-                                .put("userId", addr)
-                                .put("permissions", JSONArray(listOf("subscribe", "publish")))
-                        )
-                    }
-                    setPermissionsRetry(messageStreamId, perms)
-                    setPermissionsRetry(ephemeralStreamId, perms)
-                    setPermissionsRetry(adminStreamId, JSONArray().apply {
-                        members.forEach { addr ->
-                            put(
-                                JSONObject()
-                                    .put("userId", addr)
-                                    .put("permissions", JSONArray(listOf("subscribe")))
-                            )
-                        }
-                    })
-                    // Keys stream: full member permissions — any member may
-                    // answer a KEY_REQUEST with a KEY_WRAP (k-of-n)
-                    setPermissionsRetry(keysStreamId, perms)
-                }
-                onProgress(); onProgress(); onProgress(); onProgress()
-            }
             "gated" -> {
                 // ONE grantee for every stream: the gate clone (N-C, Q7).
                 // Members prove access through the contract (ERC-1271), so
                 // membership changes are gate transactions, not stream txs.
                 // -3 is the exception: the clone is SUBSCRIBE-only there —
                 // PUBLISH stays the owner's (creator keeps registry perms),
-                // so the transport enforces owner-only admin writes exactly
-                // like native channels. The owner publishes -3 as the
-                // ACCOUNT; their address is the streamId prefix already.
+                // so the transport enforces owner-only admin writes. The
+                // owner publishes -3 as the ACCOUNT; their address is the
+                // streamId prefix already.
                 val clonePerms = JSONArray().put(JSONObject()
                     .put("userId", gateAddress)
                     .put("permissions", JSONArray(listOf("subscribe", "publish"))))
@@ -1905,7 +1870,7 @@ class ChannelManager(
         // requests/wraps survive there until the counterpart comes online.
         // (The web shipped without this once — the announce was never retained
         // and joiners could not even ask for the key.)
-        if (type == "native" || type == "gated") {
+        if (type == "gated") {
             try { addStorageRetry(keysStreamId, storageNode, storageDays) } catch (e: Exception) {
                 Log.w(TAG, "Storage on -4 failed; key exchange limited to live members: ${e.message}")
             }
@@ -1929,7 +1894,7 @@ class ChannelManager(
             messageStreamId = messageStreamId,
             ephemeralStreamId = ephemeralStreamId,
             adminStreamId = adminStreamId,
-            keysStreamId = if (type == "native" || type == "gated") keysStreamId else "",
+            keysStreamId = if (type == "gated") keysStreamId else "",
             name = name,
             type = type,
             createdBy = addr,
@@ -1938,7 +1903,7 @@ class ChannelManager(
             // Owner first, then the invited addresses — the web seeds the
             // members array at creation (channels.js:458-460) so the Members
             // panel is populated straight away instead of starting empty.
-            members = if (type == "native" || type == "gated")
+            members = if (type == "gated")
                 listOf(addr) + members.filter { !it.equals(addr, ignoreCase = true) }
             else emptyList(),
             storageEnabled = storageOk,
@@ -1948,7 +1913,7 @@ class ChannelManager(
             description = if (visible) description else "",
             language = if (visible) language else "",
             category = if (visible) category else "",
-            classification = classification ?: if (type == "native" || type == "gated") "personal" else null,
+            classification = classification ?: if (type == "gated") "personal" else null,
             readOnly = readOnly,
             gateAddress = gateAddress
         )
@@ -2085,7 +2050,9 @@ class ChannelManager(
         } else if (!canPublish && !canSubscribe) {
             throw IllegalStateException("No access to this channel (neither subscribe nor publish)")
         }
-        val resolvedType = type ?: if (password != null) "password" else "native"
+        val resolvedType = type
+            ?: if (password != null) "password"
+            else throw IllegalStateException("Could not determine the channel type. The channel may still be indexing — try again shortly.")
 
         val adminStreamId = StreamConstants.deriveAdminId(messageStreamId)
 
@@ -2112,27 +2079,6 @@ class ChannelManager(
             writeOnly = canPublish && !canSubscribe
         )
         addChannel(channel)
-        // Owner + members from The Graph, in parallel with the return (web
-        // joinChannel:579-626 does the same). Without it a joined native
-        // channel's Members panel started empty until its own on-demand
-        // fetch, and createdBy stayed at the stream-id fallback.
-        if (resolvedType == "native") {
-            scope.launch {
-                runCatching {
-                    val owner = channelOwner(channel)
-                    val fetched = com.pombo.android.core.GraphApi.streamMembers(messageStreamId)
-                    val ordered = (listOfNotNull(owner) +
-                        fetched.filter { !it.equals(owner, ignoreCase = true) }).distinct()
-                    if (ordered.isEmpty()) return@runCatching
-                    val updated = channel.copy(members = ordered, createdBy = channel.createdBy ?: owner)
-                    _channels.value = _channels.value.map {
-                        if (it.messageStreamId == messageStreamId) updated else it
-                    }
-                    store.save(_channels.value)
-                    if (_current.value?.messageStreamId == messageStreamId) _current.value = updated
-                }
-            }
-        }
         return channel
     }
 
@@ -2626,10 +2572,20 @@ class ChannelManager(
                 if (fresh.optString("createdBy").isEmpty()) fresh.put("createdBy", myAddress())
                 if (!stillCurrent(generation)) return
                 Log.i(TAG, "CHANNEL_IMAGE nearing storage TTL (${ageDays(ts)}d/${storageDays}d) — owner republishing rev=$newRev")
-                publishContent(
-                    channel.adminStreamId, StreamConstants.ADMIN_CHANNEL_IMAGE, fresh,
-                    if (encrypted) pwd else null
-                )
+                if (isEpochChannel(channel) && channel.exposure == "visible") {
+                    // Storefront image stays in the CLEAR (mirrors the
+                    // set-image path): the generic epoch publish would seal
+                    // it and hide the storefront from Explore/non-members.
+                    bridge.call("publishAsAccount", JSONObject()
+                        .put("streamId", channel.adminStreamId)
+                        .put("partition", StreamConstants.ADMIN_CHANNEL_IMAGE)
+                        .put("content", fresh), 60_000)
+                } else {
+                    publishContent(
+                        channel.adminStreamId, StreamConstants.ADMIN_CHANNEL_IMAGE, fresh,
+                        if (encrypted) pwd else null
+                    )
+                }
                 // Keep the open channel's rev counter ahead of the retained
                 // entry so a later image change never publishes a lower rev.
                 if (stillCurrent(generation)) channelImageRev = maxOf(channelImageRev, newRev)
@@ -2824,11 +2780,13 @@ class ChannelManager(
     private fun sendWakeSignal(channel: Channel) {
         scope.launch {
             try {
-                // Web sendWakeSignals: ONLY native channels use the 'native:'
-                // tag; public, password AND DMs use the 'channel:' tag (a DM
-                // wakes the peer's inbox channel-tag — dm.js:928 →
-                // sendChannelWakeSignal). `type != "public"` silently broke
-                // Android→web DM and password-channel notifications.
+                // Web sendWakeSignals: ONLY gated channels use the 'native:'
+                // tag (the push protocol keeps the historical name — it is
+                // baked into registered devices' tag derivation); public,
+                // password AND DMs use the 'channel:' tag (a DM wakes the
+                // peer's inbox channel-tag — dm.js → sendChannelWakeSignal).
+                // `type != "public"` silently broke Android→web DM and
+                // password-channel notifications.
                 val native = isEpochChannel(channel)
                 val res = bridge.call(
                     "pushWakePayload",
@@ -4275,7 +4233,7 @@ class ChannelManager(
                     .replace(Regex("-1$"), StreamConstants.SUFFIX_EPHEMERAL)
             )
         }
-        if (healed.keysStreamId.isEmpty() && (healed.type == "native" || healed.type == "gated")) {
+        if (healed.keysStreamId.isEmpty() && healed.type == "gated") {
             healed = healed.copy(keysStreamId = StreamConstants.deriveKeysId(healed.messageStreamId))
         }
         if (healed.type == "gated" && healed.gateAddress == null) {
@@ -4409,6 +4367,33 @@ class ChannelManager(
                                     gated = channel.type == "gated")
                         } catch (e: Exception) {
                             Log.w(TAG, "Epoch key setup failed (messages will wait for key): ${e.message}")
+                            // A cold node can miss every entrypoint on the
+                            // first try, and the transport then keeps
+                            // returning the cached failure — for the ADMIN
+                            // that means the bootstrap announce never went
+                            // out at all. Retry on a backoff while the
+                            // channel stays open.
+                            launch {
+                                var attempt = 0
+                                while (attempt < 5) {
+                                    attempt += 1
+                                    delay(minOf(15_000L * attempt, 60_000L))
+                                    if (!stillCurrent(generation)) return@launch
+                                    try {
+                                        epochKeys.ensureChannelKeys(
+                                            channel.messageStreamId, channel.keysStreamId,
+                                            channel.storageDays ?: 180,
+                                            allowMint = System.currentTimeMillis() - channel.createdAt < 3_600_000,
+                                            memberCount = channel.members.size,
+                                            gated = channel.type == "gated")
+                                        Log.i(TAG, "Epoch key setup recovered on retry $attempt")
+                                        _waitingForKeys.value = !epochKeys.hasCurrentKey(channel.messageStreamId)
+                                        return@launch
+                                    } catch (re: Exception) {
+                                        Log.w(TAG, "Epoch key setup retry $attempt failed: ${re.message}")
+                                    }
+                                }
+                            }
                         }
                         android.util.Log.d("PomboPerf",
                             "epochKeys ${channel.name}: cold ensure=${System.currentTimeMillis() - tEnsure}ms")
@@ -4544,7 +4529,7 @@ class ChannelManager(
                 subscribeQuiet(channel.messageStreamId, StreamConstants.P_MESSAGES)
                 subscribeQuiet(channel.messageStreamId, StreamConstants.P_CONTROL)
                 subscribeQuiet(channel.ephemeralStreamId, StreamConstants.EPH_CONTROL)
-                // Keys stream (-4): live epoch-key protocol for native channels
+                // Keys stream (-4): live epoch-key protocol for gated channels
                 if (isEpochChannel(channel) && channel.keysStreamId.isNotEmpty()) {
                     subscribeQuiet(channel.keysStreamId, StreamConstants.P_KEY_EXCHANGE)
                 }
@@ -5110,7 +5095,7 @@ class ChannelManager(
         // publisher and the proof (added by the bridge on ephemeral publishes)
         // authenticates the account behind it. `sender`/`channelId` stay on
         // the OBJECT for local use — the bridge strips them at egress; on the
-        // account paths (native/readOnly) they are simply redundant.
+        // account paths (gated/readOnly) they are simply redundant.
         val content = JSONObject()
             .put("type", "text")
             .put("id", id)
@@ -5430,16 +5415,14 @@ class ChannelManager(
      *   public/password -> the channel's ephemeral identity, proof in the
      *                      payload, local fields stripped — all in the bridge
      *                      (publishAsChannel), which also refuses -3.
-     *   native          -> the ACCOUNT. Its grants are per member address
-     *                      on-chain; every receiver validates the publisher
-     *                      per message, so an ephemeral key would be rejected
-     *                      network-wide (plan §8: granting one on-chain would
-     *                      link wallet→epk publicly — worse than today).
+     *   gated           -> the epoch layer (the account signs, the gate clone
+     *                      is the on-wire publisher) — an ephemeral key holds
+     *                      no grant and would be rejected network-wide.
      *   readOnly -1     -> the ACCOUNT (publish is the owner's by ownership).
      *
      * `channel` may be null (media transport paths look the channel up by
      * stream id; a previewed channel is not in the list) — null means not
-     * native, so the ephemeral path applies.
+     * gated, so the ephemeral path applies.
      */
     private suspend fun publishChannel(
         channel: Channel?, streamId: String, partition: Int, payload: JSONObject, password: String?
@@ -5452,7 +5435,7 @@ class ChannelManager(
         // admin moderation (delete/hide/ban/pin) in a public/password channel.
         val isAdminStream = streamId == channel?.adminStreamId ||
             streamId.endsWith(StreamConstants.SUFFIX_ADMIN)
-        // Admin stream keeps the legacy account path EXCEPT on native, where
+        // Admin stream keeps the legacy account path EXCEPT on gated, where
         // -3 rides the epoch layer too: the SDK's group-key AES made a
         // web-published ADMIN_STATE unreadable here (20s key-exchange timeouts
         // per row, moderation never landed). The owner still signs as the
@@ -5463,14 +5446,13 @@ class ChannelManager(
         if (channel != null && channel.readOnly && streamId == channel.messageStreamId) {
             return publishContent(streamId, partition, payload, password)
         }
-        // NATIVE/GATED channels (N-A/N-C): encrypt with the channel's epoch
-        // key and go out with encryptionType NONE — the SDK's group-key layer
-        // is exactly the per-publisher, publisher-must-be-online dependency
-        // the epoch protocol replaces. Native publishes AS THE ACCOUNT (grant
-        // per member); gated publishes AS THE GATE CLONE with the account
-        // signing (ERC-1271) — EXCEPT the admin stream, which publishes as
-        // the ACCOUNT on every channel kind: the owner is its only writer and
-        // the transport enforces that (new gated -3s grant the clone
+        // GATED channels (N-A/N-C): encrypt with the channel's epoch key and
+        // go out with encryptionType NONE — the SDK's group-key layer is
+        // exactly the per-publisher, publisher-must-be-online dependency the
+        // epoch protocol replaces. Publishes AS THE GATE CLONE with the
+        // account signing (ERC-1271) — EXCEPT the admin stream, which
+        // publishes as the ACCOUNT: the owner is its only writer and the
+        // transport enforces that (new gated -3s grant the clone
         // subscribe-only). Fail-closed: no epoch key means NO publish, never
         // a plaintext or SDK-keyed fallback.
         if (isEpochChannel(channel)) {
@@ -5523,7 +5505,7 @@ class ChannelManager(
      * Fields that must never reach the wire inside an epoch envelope (web
      * publisherProof.js stripLocalFields): local UI state, and the identity
      * fields D6/D7 removed. `sender` is re-derived by every receiver from the
-     * transport publisher at ingest (attachAccount) — the account, on native.
+     * envelope signer at ingest.
      */
     private fun stripLocalFields(data: JSONObject): JSONObject {
         val out = JSONObject()
@@ -5547,9 +5529,9 @@ class ChannelManager(
         return _channels.value.find(match) ?: _current.value?.takeIf(match)
     }
 
-    /** Native and gated channels share the epoch-key machinery (N-A/N-C). */
+    /** Gated channels run the epoch-key machinery (N-A/N-C). */
     private fun isEpochChannel(channel: Channel?): Boolean =
-        channel?.type == "native" || channel?.type == "gated"
+        channel?.type == "gated"
 
     /**
      * The authenticated AUTHOR of a message on a gated channel, or null = DROP.
@@ -5652,11 +5634,11 @@ class ChannelManager(
             handleDmControl(contentRaw, meta)
             return
         }
-        // Epoch-key protocol (-4, native channels). The -4 subscription follows
+        // Epoch-key protocol (-4, gated channels). The -4 subscription follows
         // the open channel, so route to it. Publisher/timestamp travel raw:
-        // KEY_ANNOUNCE authority is validated by transport publisher (the -4
-        // publishes as the ACCOUNT by design) and conflicts order by transport
-        // timestamp (D13) — this must NOT go through attachAccount.
+        // KEY_ANNOUNCE authority is validated against the recovered envelope
+        // signer and conflicts order by transport timestamp (D13) — this must
+        // NOT go through attachAccount.
         if (StreamConstants.isKeysStream(streamId)) {
             val channel = _current.value?.takeIf { it.keysStreamId == streamId } ?: return
             val content = (try { JSONTokener(contentRaw).nextValue() } catch (e: Exception) { null })
@@ -5770,12 +5752,12 @@ class ChannelManager(
         if (partition != StreamConstants.EPH_MEDIA_DATA) return
         if (!StreamConstants.isEphemeralStream(streamId)) return
         val meta = try { JSONObject(metaRaw) } catch (e: Exception) { JSONObject() }
-        // Epoch channel piece (0x04): open with the epoch key, then hand the
+        // Gated channel piece (0x04): open with the epoch key, then hand the
         // plaintext 0x01 frame down the unchanged store/assembly path. The
         // sender is resolved the way the channel's messages resolve theirs —
-        // transport account on native, envelope signer on gated — an unknown
-        // kid notes itself (rate-limited KEY_REQUEST) and the piece is
-        // dropped; the leecher's timeout re-requests it once the key lands.
+        // the envelope signer — an unknown kid notes itself (rate-limited
+        // KEY_REQUEST) and the piece is dropped; the leecher's timeout
+        // re-requests it once the key lands.
         if (com.pombo.android.core.EpochKeyCrypto.isBinaryEpochEnvelope(data)) {
             val channel = channelByStream(streamId)?.takeIf { isEpochChannel(it) } ?: return
             scope.launch {
@@ -5928,7 +5910,7 @@ class ChannelManager(
             }
             else -> return
         }
-        // Native channels: epoch-encrypted envelope (N-A). Unknown kid is NOT
+        // Gated channels: epoch-encrypted envelope (N-A). Unknown kid is NOT
         // an error (§7.9) — skip; storage-backed messages come back via the
         // refresh fired when the key is adopted.
         if (com.pombo.android.core.EpochKeyCrypto.isEpochEnvelope(data)) {
@@ -6226,9 +6208,9 @@ class ChannelManager(
         storageTransferChannel[tid] = StorageTransferInfo(source.fileName, channelDisplayName(channel), channel.messageStreamId, bubble)
         mergeMessages(listOf(bubble))
         try {
-            // Epoch channels (native/gated): capture the CURRENT key for the
-            // whole transfer and fail closed without one — a plaintext chunk
-            // on a stored partition would be harvestable forever.
+            // Gated channels: capture the CURRENT key for the whole transfer
+            // and fail closed without one — a plaintext chunk on a stored
+            // partition would be harvestable forever.
             val epochKey = if (!isDm && isEpochChannel(channel)) {
                 epochKeys.currentKey(channel.messageStreamId)
                     ?: throw IllegalStateException(
@@ -6245,8 +6227,8 @@ class ChannelManager(
                 isDm = isDm,
                 dmPeerPublicKey = dmPeerPk,
                 // public/password channels publish chunks under the channel's
-                // ephemeral identity (same as the announce); native/readOnly
-                // keep the account (D3), same rule as publishChannel.
+                // ephemeral identity (same as the announce); readOnly keeps
+                // the account (D3), same rule as publishChannel.
                 channelEphemeral = !isDm && !isEpochChannel(channel) && !channel.readOnly,
                 epochKey = epochKey,
                 gateAddress = gate,

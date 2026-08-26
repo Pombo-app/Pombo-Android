@@ -109,10 +109,14 @@ fi
 
 ASSET="Pombo.$TAG.apk"
 cp "$APK" "$ASSET"
-trap 'rm -f "$ASSET"' EXIT
+APK_SHA256="$(sha256sum "$ASSET" | awk '{print $1}')"
+echo "$APK_SHA256  $ASSET" > "$ASSET.sha256"
+trap 'rm -f "$ASSET" "$ASSET.sha256"' EXIT
+echo "==> APK sha256: $APK_SHA256"
 
 echo "==> pushing the tag and creating the release"
 git push origin "$TAG"
-gh release create "$TAG" "$ASSET" --title "$TAG" --generate-notes
+gh release create "$TAG" "$ASSET" "$ASSET.sha256" --title "$TAG" \
+    --notes "APK SHA-256: \`$APK_SHA256\`" --generate-notes
 
 echo "==> done: $TAG"
