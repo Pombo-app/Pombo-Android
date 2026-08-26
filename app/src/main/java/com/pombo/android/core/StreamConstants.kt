@@ -70,20 +70,26 @@ object StreamConstants {
 
     const val PASSWORD_CHALLENGE_MAGIC = "POMBO_PWD_CHALLENGE_V1"
 
-    // Keys stream (-4) — gated channels only. Single partition carrying the
-    // epoch-key protocol; content on -1/-2 is encrypted with a channel-wide
-    // epoch key versioned by `kid`. Members publish AND subscribe here (any
-    // member may answer a KEY_REQUEST with a KEY_WRAP — k-of-n distribution).
-    // KEY_ANNOUNCE authority is app-layer: only the admin set (v1: the
-    // stream's namespace address), never inferred from stream permissions —
-    // which is why -4 cannot fold into the owner-only -3.
-    const val KEYS_PARTITIONS = 1
+    // Keys stream (-4) — gated channels only. P0 carries the epoch-key
+    // protocol; content on -1/-2 is encrypted with a channel-wide epoch key
+    // versioned by `kid`. P1 carries the member roster (MEMBER_HELLO), ALWAYS
+    // sealed with the epoch key — the -4 resend is publicly readable over
+    // HTTP, so a cleartext roster would be the worst membership leak in the
+    // system. Channels created before P1 existed have a single-partition -4
+    // (capability = on-chain partition count). Members publish AND subscribe
+    // here (any member may answer a KEY_REQUEST with a KEY_WRAP — k-of-n
+    // distribution). KEY_ANNOUNCE authority is app-layer: only the admin set
+    // (v1: the stream's namespace address), never inferred from stream
+    // permissions — which is why -4 cannot fold into the owner-only -3.
+    const val KEYS_PARTITIONS = 2
     const val P_KEY_EXCHANGE = 0
+    const val P_ROSTER = 1
 
     // Message types on -4 (mirror of web KEYS_MSG_TYPE)
     const val KEY_ANNOUNCE = "key_announce"
     const val KEY_REQUEST = "key_request"
     const val KEY_WRAP = "key_wrap"
+    const val MEMBER_HELLO = "member_hello"
 
     // History windows (web config.js: stream.initialMessages / loadMoreCount)
     const val INITIAL_MESSAGES = 50

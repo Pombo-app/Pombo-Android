@@ -17,12 +17,19 @@ import org.json.JSONObject
  *                 `createdBy`, which travels in invites and is spoofable.
  *                 Conflict rule (D13): higher epoch > older transport
  *                 timestamp > lower publisher address.
- *   KEY_REQUEST   fresh per-request keypair (D12), memory-only. Answered only
- *                 when seen LIVE — replaying stored requests would re-answer
- *                 months of already-served ones on every open.
- *   KEY_WRAP      any member holding the key answers (k-of-n). Adopted ONLY
- *                 when sha256(key) equals the announced keyHash — a malicious
- *                 wrapper wastes bandwidth, never poisons a key.
+ *   KEY_REQUEST   fresh per-request keypair (D12), memory-only, plus the
+ *                 account's STATIC pubkey (`spk`). Stored requests carrying
+ *                 `spk` are answered whenever retained and uncovered; the
+ *                 rest only inside a short window (their ephemeral pair is
+ *                 long dead).
+ *   KEY_WRAP      any member holding the key answers (k-of-n). v1 seals to
+ *                 the ephemeral request pubkey; v2 seals to `spk` and is
+ *                 addressed by requestId, so it opens in any session of any
+ *                 device. Adopted ONLY when sha256(key) equals the announced
+ *                 keyHash — a malicious wrapper wastes bandwidth, never
+ *                 poisons a key.
+ *   MEMBER_HELLO  roster entry on P1, sealed with the epoch key: one per
+ *                 member per epoch, published on first adoption.
  *
  * Transport (publish as the ACCOUNT with encryptionType NONE, resend of -4)
  * is injected — this class holds protocol state only.
@@ -53,9 +60,25 @@ class EpochKeyManager(
      * Ungated channels return false.
      */
     private val currentEpochOnly: suspend (messageStreamId: String) -> Boolean =
-        { _ -> false }
+        { _ -> false },
+    /**
+     * Account private key (the wallet key, which IS the static DM key): opens
+     * v2 wraps and derives the `spk` a KEY_REQUEST advertises. Null (guest)
+     * disables the v2 path — everything degrades to v1.
+     */
+    private val myPrivateKey: () -> String? = { null },
+    /** Publish to the -4 roster partition (P1). No-op wiring = roster off. */
+    private val publishRoster: suspend (keysStreamId: String, data: JSONObject) -> Unit =
+        { _, _ -> },
+    /** Resend of the -4 roster partition (P1). */
+    private val resendRoster: suspend (keysStreamId: String) -> List<Entry> =
+        { emptyList() },
+    /** The -4 stream's on-chain partition count — the roster capability probe. */
+    private val keysPartitionCount: suspend (keysStreamId: String) -> Int = { 1 }
 ) {
     data class Entry(val data: JSONObject, val publisherId: String?, val timestamp: Long)
+
+    data class RosterMember(val account: String, val spk: String?, val ts: Long)
 
     private class EpochEntry(val keyHex: String, val keyHash: String, val epoch: Int)
     private class Announce(
@@ -94,6 +117,18 @@ class EpochKeyManager(
          * the owner — no indexer, no event scan.
          */
         val seenRequesters = LinkedHashSet<String>()
+        /**
+         * requestId -> (fromEpoch, sentAt) — PERSISTED. Holds no key material
+         * (D12 intact by construction): a v2 wrap for any of these ids opens
+         * with the account's static key, in any session of any device.
+         */
+        val pendingRequests = LinkedHashMap<String, PendingId>()
+        /** Epochs we already published a MEMBER_HELLO for — persisted. */
+        val helloEpochs = LinkedHashSet<Int>()
+        /** -4 partition-count probe result; null = not probed yet. */
+        var rosterPartitions: Int? = null
+        /** (at, members) — rosterMembers result cache. */
+        var rosterCache: Pair<Long, List<RosterMember>>? = null
         /** N-D weekly rotation timer (gated channels, admin-side). */
         var rotationJob: kotlinx.coroutines.Job? = null
     }
@@ -102,6 +137,8 @@ class EpochKeyManager(
         val requestId: String, val privateKey: String,
         val publicKey: String, val sentAt: Long
     )
+
+    class PendingId(val fromEpoch: Int, val sentAt: Long)
 
     private val state = HashMap<String, ChannelState>()
     private val mutex = Mutex()
@@ -127,10 +164,18 @@ class EpochKeyManager(
         // whether a lower rank already covered the request.
         private const val RANK_STEP_MS = 2_000L
         private const val RANK_MAX = 8
-        // Stored requests older than this are dead — the requester's
-        // ephemeral pair lives in memory only.
+        // Stored requests WITHOUT a static pubkey older than this are dead —
+        // their ephemeral pair lives in memory only. Requests carrying `spk`
+        // have no window: the v2 wrap opens in any later session.
         private const val REQUEST_ANSWER_WINDOW_MS = 10 * 60 * 1000L
         private const val SEEN_WRAPS_MAX = 100
+        // Persisted pending-request ids (wrap v2), bounded: a wrap for a
+        // request this old answers a question nobody is asking any more.
+        private const val PENDING_REQUEST_MAX_AGE_MS = 30L * 24 * 60 * 60 * 1000
+        private const val PENDING_REQUESTS_MAX = 8
+        // Roster (-4/P1) read cache: the members panel refreshes freely; the
+        // resend behind it should not.
+        private const val ROSTER_CACHE_TTL_MS = 60_000L
         /** Post-rotation window in which the previous epoch's kid stays
          *  acceptable on LIVE gated traffic (web: kidFreshnessToleranceMs). */
         private const val KID_FRESHNESS_TOLERANCE_MS = 10 * 60 * 1000L
@@ -184,6 +229,22 @@ class EpochKeyManager(
         if (cur > s.currentEpoch) s.currentEpoch = cur
         val maxAnnounced = s.announces.keys.maxOrNull() ?: 0
         if (maxAnnounced > s.currentEpoch) s.currentEpoch = maxAnnounced
+        val cutoff = System.currentTimeMillis() - PENDING_REQUEST_MAX_AGE_MS
+        persisted.optJSONObject("pendingRequests")?.let { reqs ->
+            for (rid in reqs.keys()) {
+                val r = reqs.optJSONObject(rid) ?: continue
+                if (r.optLong("sentAt") < cutoff) continue
+                if (!s.pendingRequests.containsKey(rid)) {
+                    s.pendingRequests[rid] = PendingId(r.optInt("fromEpoch", 1), r.optLong("sentAt"))
+                }
+            }
+        }
+        persisted.optJSONArray("helloEpochs")?.let { arr ->
+            for (i in 0 until arr.length()) {
+                val epoch = arr.optInt(i, 0)
+                if (epoch > 0) s.helloEpochs.add(epoch)
+            }
+        }
     }
 
     private fun persist(messageStreamId: String, s: ChannelState) {
@@ -199,8 +260,18 @@ class EpochKeyManager(
                 .put("publisher", a.publisher).put("timestamp", a.timestamp)
                 .put("validFrom", a.validFrom))
         }
+        val cutoff = System.currentTimeMillis() - PENDING_REQUEST_MAX_AGE_MS
+        s.pendingRequests.entries.removeAll { it.value.sentAt < cutoff }
+        val pendingRequests = JSONObject()
+        for ((rid, p) in s.pendingRequests) {
+            pendingRequests.put(rid, JSONObject()
+                .put("fromEpoch", p.fromEpoch).put("sentAt", p.sentAt))
+        }
+        val helloEpochs = org.json.JSONArray()
+        for (epoch in s.helloEpochs) helloEpochs.put(epoch)
         store.save(messageStreamId, JSONObject()
-            .put("epochs", epochs).put("announces", announces).put("currentEpoch", s.currentEpoch))
+            .put("epochs", epochs).put("announces", announces).put("currentEpoch", s.currentEpoch)
+            .put("pendingRequests", pendingRequests).put("helloEpochs", helloEpochs))
     }
 
     /** Drop runtime + persisted state (channel left/deleted). */
@@ -250,6 +321,7 @@ class EpochKeyManager(
         var toBootstrap = false
         var toReannounce = false
         val storedRequests = mutableListOf<Entry>()
+        val storedV2Wraps = mutableListOf<JSONObject>()
         var haveKeys = false
         mutex.withLock {
             val s = getState(messageStreamId)
@@ -267,7 +339,18 @@ class EpochKeyManager(
                     StreamConstants.KEY_WRAP -> {
                         val rid = entry.data.optString("requestId")
                         val kid = entry.data.optString("keyId")
-                        if (rid.isNotEmpty() && kid.isNotEmpty()) recordSeenWrapLocked(s, rid, kid)
+                        if (rid.isNotEmpty() && kid.isNotEmpty()) {
+                            recordSeenWrapLocked(s, rid, kid)
+                            // A retained v2 wrap for one of OUR requests opens
+                            // with the account key even though the requesting
+                            // session is gone — adopted after every announce
+                            // in this page has been applied.
+                            if (entry.data.optInt("v", 1) == 2 &&
+                                (s.pendingRequests.containsKey(rid) || s.pendingRequest?.requestId == rid)
+                            ) {
+                                storedV2Wraps.add(entry.data)
+                            }
+                        }
                     }
                     StreamConstants.KEY_REQUEST -> {
                         storedRequests.add(entry)
@@ -292,6 +375,14 @@ class EpochKeyManager(
                 }
             }
         }
+        for (wrap in storedV2Wraps) {
+            try {
+                handleWrapV2(messageStreamId, keysStreamId, wrap)
+            } catch (e: Exception) {
+                Log.w(TAG, "stored v2 wrap adoption failed: ${e.message}")
+            }
+        }
+
         if (toBootstrap) bootstrapOrReannounce(messageStreamId, keysStreamId, allowMint)
         else if (toReannounce) reannounceCurrent(messageStreamId, keysStreamId)
         if (toRequest) sendKeyRequest(messageStreamId, keysStreamId)
@@ -303,15 +394,18 @@ class EpochKeyManager(
             }
         }
 
-        // N-B: answer RECENT stored requests no wrap covers yet — a member
-        // arriving later serves whoever is still waiting, so requester and
-        // key-holder no longer have to coincide in time.
+        // N-B: answer stored requests no wrap covers yet — a member arriving
+        // later serves whoever is still waiting, so requester and key-holder
+        // no longer have to coincide in time. Requests carrying a static
+        // pubkey have no age limit (the v2 wrap opens in any later session);
+        // without one, only recent requests are alive.
         if (haveKeys) {
             val me = myAddress()?.lowercase()
             val now = System.currentTimeMillis()
             for (entry in storedRequests) {
                 if (entry.publisherId?.lowercase() == me) continue
-                if (now - entry.timestamp > REQUEST_ANSWER_WINDOW_MS) continue
+                val spk = entry.data.optString("spk").ifEmpty { null }
+                if (spk == null && now - entry.timestamp > REQUEST_ANSWER_WINDOW_MS) continue
                 val requestId = entry.data.optString("requestId")
                 val pubkey = entry.data.optString("pubkey")
                 if (requestId.isEmpty() || pubkey.isEmpty()) continue
@@ -319,7 +413,8 @@ class EpochKeyManager(
                     messageStreamId, keysStreamId,
                     requestId, pubkey, entry.data.optInt("fromEpoch", 1),
                     rankFor(requestId, memberCount) * RANK_STEP_MS,
-                    requester = entry.publisherId
+                    requester = entry.publisherId,
+                    spk = spk
                 )
             }
         }
@@ -509,6 +604,7 @@ class EpochKeyManager(
         if (adopted != null) {
             Log.i(TAG, "bootstrapped epoch 1 on ${keysStreamId.takeLast(30)}")
             onKeyAdopted(messageStreamId, adopted.first)
+            scheduleHello(messageStreamId, keysStreamId, adopted.first)
         } else {
             Log.i(TAG, "re-announced existing epoch on ${keysStreamId.takeLast(30)} (announce was missing from storage)")
         }
@@ -544,6 +640,7 @@ class EpochKeyManager(
             adoptLocked(messageStreamId, s, keyId, keyHex, keyHash, epoch)
         }
         onKeyAdopted(messageStreamId, keyId)
+        scheduleHello(messageStreamId, keysStreamId, keyId)
         Log.i(TAG, "rotated to epoch $epoch on ${keysStreamId.takeLast(30)}")
         retainAnnounce(messageStreamId, keysStreamId, announce)
         return epoch
@@ -570,7 +667,7 @@ class EpochKeyManager(
                 if (needRequest) sendKeyRequest(messageStreamId, keysStreamId)
             }
             StreamConstants.KEY_REQUEST -> handleRequest(messageStreamId, keysStreamId, data, publisherId, memberCount)
-            StreamConstants.KEY_WRAP -> handleWrap(messageStreamId, data)
+            StreamConstants.KEY_WRAP -> handleWrap(messageStreamId, keysStreamId, data)
         }
     }
 
@@ -629,7 +726,8 @@ class EpochKeyManager(
             messageStreamId, keysStreamId,
             requestId, pubkey, data.optInt("fromEpoch", 1),
             rankFor(requestId, memberCount) * RANK_STEP_MS,
-            requester = publisherId
+            requester = publisherId,
+            spk = data.optString("spk").ifEmpty { null }
         )
     }
 
@@ -651,12 +749,12 @@ class EpochKeyManager(
     private fun scheduleAnswer(
         messageStreamId: String, keysStreamId: String,
         requestId: String, pubkey: String, fromEpoch: Int, delayMs: Long,
-        requester: String?
+        requester: String?, spk: String? = null
     ) {
         scope.launch {
             if (delayMs > 0) delay(delayMs)
             try {
-                answerRequest(messageStreamId, keysStreamId, requestId, pubkey, fromEpoch, requester)
+                answerRequest(messageStreamId, keysStreamId, requestId, pubkey, fromEpoch, requester, spk)
             } catch (e: Exception) {
                 Log.w(TAG, "scheduled answer failed: ${e.message}")
             }
@@ -672,7 +770,7 @@ class EpochKeyManager(
     private suspend fun answerRequest(
         messageStreamId: String, keysStreamId: String,
         requestId: String, pubkey: String, fromEpoch: Int,
-        requester: String?
+        requester: String?, spk: String? = null
     ) {
         // Gated (N-C): the epoch key only goes to whoever passes the CURRENT
         // gate. Fail-closed inside checkGateAccess — RPC trouble means no
@@ -682,6 +780,16 @@ class EpochKeyManager(
                 Log.i(TAG, "KEY_REQUEST from $requester refused by gate on ${messageStreamId.takeLast(20)}")
             }
             return
+        }
+        // Static pubkey (wrap v2): usable only when it provably belongs to
+        // the requester — the request's envelope signature anchors the
+        // account, and the address of `spk` must land on that same account.
+        // Anything else is a forgery and downgrades the answer to v1.
+        val staticKey = spk?.takeIf {
+            SealedSenderCrypto.pubkeyToAddress(it)?.equals(requester, ignoreCase = true) == true
+        }
+        if (spk != null && staticKey == null) {
+            Log.w(TAG, "KEY_REQUEST spk does not match the requester — answering v1")
         }
         // True only when the gate is unreadable — fail-closed in the wiring.
         val currentOnly = currentEpochOnly(messageStreamId)
@@ -697,23 +805,38 @@ class EpochKeyManager(
         var sent = 0
         for ((keyId, keyHex, epoch) in toWrap) {
             try {
-                val wrapped = EpochKeyCrypto.wrapEpochKey(keyHex, pubkey)
-                publishKeys(keysStreamId, JSONObject()
-                    .put("t", StreamConstants.KEY_WRAP)
-                    .put("requestId", requestId)
-                    .put("keyId", keyId)
-                    .put("epoch", epoch)
-                    .put("tag", EpochKeyCrypto.computeWrapTag(pubkey, keyId))
-                    .put("epk", wrapped.getString("epk"))
-                    .put("iv", wrapped.getString("iv"))
-                    .put("ct", wrapped.getString("ct")))
+                val envelope = if (staticKey != null) {
+                    val wrapped = EpochKeyCrypto.wrapEpochKeyToStatic(keyHex, staticKey)
+                    JSONObject()
+                        .put("t", StreamConstants.KEY_WRAP)
+                        .put("v", 2)
+                        .put("requestId", requestId)
+                        .put("keyId", keyId)
+                        .put("epoch", epoch)
+                        .put("tag", EpochKeyCrypto.computeWrapTagV2(requestId, keyId))
+                        .put("epk", wrapped.getString("epk"))
+                        .put("iv", wrapped.getString("iv"))
+                        .put("ct", wrapped.getString("ct"))
+                } else {
+                    val wrapped = EpochKeyCrypto.wrapEpochKey(keyHex, pubkey)
+                    JSONObject()
+                        .put("t", StreamConstants.KEY_WRAP)
+                        .put("requestId", requestId)
+                        .put("keyId", keyId)
+                        .put("epoch", epoch)
+                        .put("tag", EpochKeyCrypto.computeWrapTag(pubkey, keyId))
+                        .put("epk", wrapped.getString("epk"))
+                        .put("iv", wrapped.getString("iv"))
+                        .put("ct", wrapped.getString("ct"))
+                }
+                publishKeys(keysStreamId, envelope)
                 mutex.withLock { recordSeenWrapLocked(getState(messageStreamId), requestId, keyId) }
                 sent += 1
             } catch (e: Exception) {
                 Log.w(TAG, "failed to wrap $keyId for request $requestId: ${e.message}")
             }
         }
-        if (sent > 0) Log.d(TAG, "answered request $requestId with $sent wrap(s)")
+        if (sent > 0) Log.d(TAG, "answered request $requestId with $sent ${if (staticKey != null) "v2 " else ""}wrap(s)")
     }
 
     /** Caller holds the lock. */
@@ -731,7 +854,11 @@ class EpochKeyManager(
      * A wrap for our pending request: O(1) tag check, unwrap, verify against
      * the announced keyHash, adopt. Verification failure is a warn and a drop.
      */
-    private suspend fun handleWrap(messageStreamId: String, data: JSONObject) {
+    private suspend fun handleWrap(messageStreamId: String, keysStreamId: String, data: JSONObject) {
+        if (data.optInt("v", 1) == 2) {
+            handleWrapV2(messageStreamId, keysStreamId, data)
+            return
+        }
         var adoptedKeyId: String? = null
         mutex.withLock {
             val s = getState(messageStreamId)
@@ -769,10 +896,63 @@ class EpochKeyManager(
         adoptedKeyId?.let {
             Log.i(TAG, "adopted key $it on ${messageStreamId.takeLast(30)}")
             onKeyAdopted(messageStreamId, it)
+            scheduleHello(messageStreamId, keysStreamId, it)
         }
     }
 
-    /** Publish a KEY_REQUEST under a fresh request keypair (D12), rate-limited. */
+    /**
+     * A v2 wrap: addressed by requestId (this session's pending request or a
+     * persisted id from an earlier session or another device), sealed to the
+     * account's static key. Same trust chain as v1: announce lookup, then
+     * keyHash verify — a malicious wrapper still cannot poison a key.
+     */
+    private suspend fun handleWrapV2(messageStreamId: String, keysStreamId: String, data: JSONObject) {
+        val accountKey = myPrivateKey()
+        var adoptedKeyId: String? = null
+        mutex.withLock {
+            val s = getState(messageStreamId)
+            val rid = data.optString("requestId")
+            val keyId = data.optString("keyId")
+            if (rid.isNotEmpty() && keyId.isNotEmpty()) recordSeenWrapLocked(s, rid, keyId)
+            if (rid.isEmpty() || keyId.isEmpty()) return
+            if (s.epochs.containsKey(keyId)) return                    // already adopted
+            val mine = s.pendingRequests.containsKey(rid) || s.pendingRequest?.requestId == rid
+            if (!mine) return
+
+            val expectedTag = EpochKeyCrypto.computeWrapTagV2(rid, keyId)
+            if (!data.optString("tag").equals(expectedTag, ignoreCase = true)) return
+
+            val epoch = data.optInt("epoch", 0)
+            val announce = s.announces[epoch]
+            if (announce == null || announce.keyId != keyId) {
+                Log.w(TAG, "v2 wrap for unannounced key ignored: $keyId")
+                return
+            }
+            if (accountKey == null) return
+            val keyHex = try {
+                EpochKeyCrypto.unwrapEpochKeyStatic(data, accountKey)
+            } catch (e: Exception) {
+                Log.w(TAG, "v2 wrap failed to open: ${e.message}"); return
+            }
+            if (!EpochKeyCrypto.computeKeyHash(keyHex).equals(announce.keyHash, ignoreCase = true)) {
+                Log.w(TAG, "v2 wrap REJECTED — keyHash mismatch for $keyId (malicious or corrupted)")
+                return
+            }
+            adoptLocked(messageStreamId, s, keyId, keyHex, announce.keyHash, epoch)
+            adoptedKeyId = keyId
+        }
+        adoptedKeyId?.let {
+            Log.i(TAG, "adopted key $it via v2 wrap on ${messageStreamId.takeLast(30)}")
+            onKeyAdopted(messageStreamId, it)
+            scheduleHello(messageStreamId, keysStreamId, it)
+        }
+    }
+
+    /**
+     * Publish a KEY_REQUEST under a fresh request keypair (D12 — memory only,
+     * rate-limited) plus the account's static pubkey, so a v2 wrap answered
+     * days later still opens. Only the request id persists — no key material.
+     */
     private suspend fun sendKeyRequest(messageStreamId: String, keysStreamId: String) {
         var request: JSONObject? = null
         mutex.withLock {
@@ -792,6 +972,17 @@ class EpochKeyManager(
                 .put("requestId", requestId)
                 .put("pubkey", pub)
                 .put("fromEpoch", missing.min())
+            val spk = myPrivateKey()?.let {
+                try { EthereumSigner.compressedPublicKey(it) } catch (e: Exception) { null }
+            }
+            if (spk != null) {
+                request!!.put("spk", spk)
+                s.pendingRequests[requestId] = PendingId(missing.min(), System.currentTimeMillis())
+                while (s.pendingRequests.size > PENDING_REQUESTS_MAX) {
+                    s.pendingRequests.keys.firstOrNull()?.let { s.pendingRequests.remove(it) }
+                }
+                persist(messageStreamId, s)
+            }
         }
         publishKeys(keysStreamId, request ?: return)
         Log.i(TAG, "requested missing epochs on ${keysStreamId.takeLast(30)}")
@@ -819,6 +1010,11 @@ class EpochKeyManager(
         s.epochs[keyId] = EpochEntry(keyHex, keyHash, epoch)
         if (epoch > s.currentEpoch) s.currentEpoch = epoch
         s.requestAttempts = 0   // future rotations start on the fast retry again
+        // Retained request ids exist to catch late v2 wraps; once nothing is
+        // missing they only invite redundant answers.
+        if (s.pendingRequests.isNotEmpty() && missingEpochsLocked(s).isEmpty()) {
+            s.pendingRequests.clear()
+        }
         persist(messageStreamId, s)
     }
 
@@ -829,6 +1025,113 @@ class EpochKeyManager(
     suspend fun loadPersistedState(messageStreamId: String) = mutex.withLock {
         val s = getState(messageStreamId)
         if (!s.loaded) { loadPersisted(messageStreamId, s); s.loaded = true }
+    }
+
+    // ---- Roster (-4/P1) ----
+
+    /** Roster capability, cached per session: does the -4 have P1 on-chain? */
+    private suspend fun rosterCapable(messageStreamId: String, keysStreamId: String): Boolean {
+        val cached = mutex.withLock { state[messageStreamId]?.rosterPartitions }
+        val partitions = cached ?: try {
+            keysPartitionCount(keysStreamId).also { count ->
+                mutex.withLock { getState(messageStreamId).rosterPartitions = count }
+            }
+        } catch (e: Exception) {
+            return false    // unknown — probe again next time
+        }
+        return partitions >= 2
+    }
+
+    private fun scheduleHello(messageStreamId: String, keysStreamId: String, keyId: String) {
+        scope.launch {
+            try {
+                maybePublishHello(messageStreamId, keysStreamId, keyId)
+            } catch (e: Exception) {
+                Log.d(TAG, "member hello failed: ${e.message}")
+            }
+        }
+    }
+
+    /**
+     * One MEMBER_HELLO per epoch, sealed with that epoch's key and published
+     * on first adoption — never for past epochs (a backfilled hello would
+     * fake presence in a window the member did not live). The seal is what
+     * keeps the roster private: the -4 resend is publicly readable over HTTP.
+     */
+    private suspend fun maybePublishHello(messageStreamId: String, keysStreamId: String, keyId: String) {
+        val account = myAddress()?.lowercase() ?: return
+        var keyHex = ""
+        var epoch = 0
+        val eligible = mutex.withLock {
+            val s = state[messageStreamId] ?: return
+            val entry = s.epochs[keyId] ?: return
+            epoch = entry.epoch
+            keyHex = entry.keyHex
+            epoch == s.currentEpoch && epoch !in s.helloEpochs
+        }
+        if (!eligible) return
+        if (!rosterCapable(messageStreamId, keysStreamId)) return
+
+        val hello = JSONObject()
+            .put("t", StreamConstants.MEMBER_HELLO)
+            .put("account", account)
+            .put("ts", System.currentTimeMillis())
+        myPrivateKey()?.let {
+            try { hello.put("spk", EthereumSigner.compressedPublicKey(it)) } catch (e: Exception) { }
+        }
+        val envelope = EpochKeyCrypto.encryptWithEpochKey(hello, keyHex, keyId)
+        publishRoster(keysStreamId, envelope)
+        mutex.withLock {
+            state[messageStreamId]?.let { s ->
+                s.helloEpochs.add(epoch)
+                persist(messageStreamId, s)
+            }
+        }
+        Log.d(TAG, "member hello published for epoch $epoch on ${keysStreamId.takeLast(30)}")
+    }
+
+    /**
+     * The channel roster: MEMBER_HELLO authors from -4/P1, deduped by
+     * account, newest hello wins — persistent and device-independent, unlike
+     * [seenRequesters]. Every entry is authenticated: the hello opens with an
+     * epoch key valid at its timestamp AND its envelope signer equals the
+     * declared account, so a member cannot plant a hello for someone else.
+     */
+    suspend fun rosterMembers(messageStreamId: String, keysStreamId: String): List<RosterMember> {
+        mutex.withLock {
+            state[messageStreamId]?.rosterCache?.let { (at, members) ->
+                if (System.currentTimeMillis() - at < ROSTER_CACHE_TTL_MS) return members
+            }
+        }
+        if (!rosterCapable(messageStreamId, keysStreamId)) {
+            mutex.withLock {
+                getState(messageStreamId).rosterCache = System.currentTimeMillis() to emptyList()
+            }
+            return emptyList()
+        }
+        val entries = try { resendRoster(keysStreamId) } catch (e: Exception) { emptyList() }
+        val members = LinkedHashMap<String, RosterMember>()
+        for (entry in entries) {
+            if (!EpochKeyCrypto.isEpochEnvelope(entry.data)) continue
+            val hello = tryDecrypt(
+                messageStreamId, keysStreamId, entry.data,
+                gated = true, live = false, timestamp = entry.timestamp
+            ) ?: continue
+            if (hello.optString("t") != StreamConstants.MEMBER_HELLO) continue
+            val account = hello.optString("account").lowercase()
+            if (!ADDR_RE.matches(account)) continue
+            if (account != entry.publisherId?.lowercase()) continue
+            val ts = hello.optLong("ts", entry.timestamp)
+            val prev = members[account]
+            if (prev == null || ts > prev.ts) {
+                members[account] = RosterMember(account, hello.optString("spk").ifEmpty { null }, ts)
+            }
+        }
+        val list = members.values.toList()
+        mutex.withLock {
+            getState(messageStreamId).rosterCache = System.currentTimeMillis() to list
+        }
+        return list
     }
 
     // ---- Content encryption hooks (channel layer) ----

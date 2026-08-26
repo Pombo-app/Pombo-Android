@@ -33,7 +33,9 @@ object EpochKeyCrypto {
     private val random = SecureRandom()
 
     private const val KEYWRAP_HKDF_SALT = "pombo-keywrap-v1"
+    private const val KEYWRAP_STATIC_HKDF_SALT = "pombo-keywrap-static-v2"
     private const val WRAP_TAG_DOMAIN = "POMBO_WRAP_TAG_V1"
+    private const val WRAP_TAG_DOMAIN_V2 = "POMBO_WRAP_TAG_V2"
     const val ENVELOPE_KIND = "epoch-aes-gcm"
 
     /** Fresh 256-bit epoch key, 0x-prefixed hex. */
@@ -99,6 +101,61 @@ object EpochKeyCrypto {
             ?: throw IllegalStateException("ECDH failed for unwrap")
         val aes = SealedSenderCrypto.hkdfSha256(
             shared, KEYWRAP_HKDF_SALT.toByteArray(), "aes-256-gcm".toByteArray())
+
+        val iv = java.util.Base64.getDecoder().decode(wrapped.getString("iv"))
+        val ct = java.util.Base64.getDecoder().decode(wrapped.getString("ct"))
+        val cipher = Cipher.getInstance("AES/GCM/NoPadding")
+        cipher.init(Cipher.DECRYPT_MODE, SecretKeySpec(aes, "AES"), GCMParameterSpec(128, iv))
+        val plain = cipher.doFinal(ct)
+        require(plain.size == 32) { "Unwrapped epoch key has wrong length: ${plain.size}" }
+        return "0x" + plain.toHexString()
+    }
+
+    /**
+     * v2 wrap address tag: derived from the request's random id, never from
+     * the requester's static key — a static-key-derived tag would let any
+     * observer precompute per-account tags and confirm membership from the
+     * public -4 resend.
+     */
+    fun computeWrapTagV2(requestId: String, keyId: String): String {
+        val canonical = "$WRAP_TAG_DOMAIN_V2|$requestId|$keyId"
+        return "0x" + sha256(canonical.toByteArray(Charsets.UTF_8)).toHexString()
+    }
+
+    /**
+     * Seal an epoch key to a STATIC account pubkey (wrap v2). Same ECIES with
+     * the v2 salt — a wrap and a DM sealed to the same account key must never
+     * derive the same AES key.
+     */
+    fun wrapEpochKeyToStatic(epochKeyHex: String, staticPubkeyHex: String): JSONObject {
+        val (ephPriv, ephPub) = generateRequestKeypair()
+        val shared = SealedSenderCrypto.ecdhX(ephPriv, staticPubkeyHex)
+            ?: throw IllegalStateException("ECDH failed for static wrap")
+        val aes = SealedSenderCrypto.hkdfSha256(
+            shared, KEYWRAP_STATIC_HKDF_SALT.toByteArray(), "aes-256-gcm".toByteArray())
+
+        val iv = ByteArray(12).also { random.nextBytes(it) }
+        val cipher = Cipher.getInstance("AES/GCM/NoPadding")
+        cipher.init(Cipher.ENCRYPT_MODE, SecretKeySpec(aes, "AES"), GCMParameterSpec(128, iv))
+        val ct = cipher.doFinal(SealedSenderCrypto.hexToBytes(epochKeyHex))
+
+        return JSONObject()
+            .put("epk", ephPub)
+            .put("iv", java.util.Base64.getEncoder().encodeToString(iv))
+            .put("ct", java.util.Base64.getEncoder().encodeToString(ct))
+    }
+
+    /**
+     * Open a v2 wrap with the account's static private key. Works in any
+     * session of any device holding the account key.
+     * @throws on any mismatch — the caller treats a failed unwrap as a drop.
+     */
+    fun unwrapEpochKeyStatic(wrapped: JSONObject, accountPrivateKeyHex: String): String {
+        val epk = wrapped.getString("epk")
+        val shared = SealedSenderCrypto.ecdhX(accountPrivateKeyHex, epk)
+            ?: throw IllegalStateException("ECDH failed for static unwrap")
+        val aes = SealedSenderCrypto.hkdfSha256(
+            shared, KEYWRAP_STATIC_HKDF_SALT.toByteArray(), "aes-256-gcm".toByteArray())
 
         val iv = java.util.Base64.getDecoder().decode(wrapped.getString("iv"))
         val ct = java.util.Base64.getDecoder().decode(wrapped.getString("ct"))
