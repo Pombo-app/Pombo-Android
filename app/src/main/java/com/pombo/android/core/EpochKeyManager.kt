@@ -1339,6 +1339,48 @@ class EpochKeyManager(
     }
 
     /**
+     * Admin escape valve: replaces the shared publish key when a former
+     * member keeps writing with the old one. Chain first — an announced key
+     * the network rejects would strand every member, while a granted key
+     * that was never announced is harmless.
+     */
+    suspend fun rekeyPublishKey(
+        messageStreamId: String,
+        keysStreamId: String,
+        chainGrants: suspend (newAddress: String, oldAddress: String?) -> Unit
+    ): Int {
+        check(isOwnAdmin(messageStreamId)) { "only the channel admin can reset the publish key" }
+        val (newKey, oldAddress) = mutex.withLock {
+            val s = getState(messageStreamId)
+            if (!s.loaded) { loadPersisted(messageStreamId, s); s.loaded = true }
+            val rev = maxOf(s.pubKey?.rev ?: 0, s.pubAnnounce?.rev ?: 0) + 1
+            Pair(mintPublishKey(rev), s.pubKey?.address ?: s.pubAnnounce?.address)
+        }
+        chainGrants(newKey.address, oldAddress)
+        // Adopt before announcing so a concurrent answerRequest wraps the new key.
+        mutex.withLock {
+            val s = getState(messageStreamId)
+            s.pubKey = newKey
+            persist(messageStreamId, s)
+        }
+        val ann = JSONObject()
+            .put("t", StreamConstants.PUB_ANNOUNCE)
+            .put("keyId", newKey.keyId)
+            .put("keyHash", EpochKeyCrypto.computeKeyHash(newKey.keyHex))
+            .put("addr", newKey.address)
+            .put("rev", newKey.rev)
+        publishKeys(keysStreamId, ann)
+        mutex.withLock {
+            val s = getState(messageStreamId)
+            applyPubAnnounceLocked(messageStreamId, s, ann, myAddress(), System.currentTimeMillis())
+            s.pubAnnounceFreshness = System.currentTimeMillis()
+            persist(messageStreamId, s)
+        }
+        Log.i(TAG, "publish key reset to rev ${newKey.rev} on ${messageStreamId.takeLast(30)}")
+        return newKey.rev
+    }
+
+    /**
      * Session authorship material for our own publishes in a Members-only
      * channel: pseudonym keypair + account bind proof, minted lazily once
      * per session per channel. Memory only — members resolve the ACCOUNT

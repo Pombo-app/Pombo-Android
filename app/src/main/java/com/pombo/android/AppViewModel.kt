@@ -958,6 +958,19 @@ class AppViewModel(app: Application) : AndroidViewModel(app), PomboBridge.Listen
     suspend fun streamPermissions(): List<com.pombo.android.core.GraphApi.StreamPermission> =
         manager.streamPermissions()
 
+    /** Admin-only: replaces the shared publish key of a Members-only channel. */
+    fun rekeyPublishKey(onDone: () -> Unit = {}) = viewModelScope.launch {
+        chainAction(
+            "Reset publish key",
+            "Replaces the channel's shared publish key and revokes the old one (2 transactions)."
+        ) {
+            runWithToast("Resetting publish key…", "Publish key reset", "Failed to reset publish key") {
+                manager.rekeyPublishKey()
+            }
+        }
+        onDone()
+    }
+
     /** Owner-only: toggles a member's "Can add members" (GRANT) permission. */
     fun setMemberGrant(address: String, canGrant: Boolean, onDone: () -> Unit = {}) = viewModelScope.launch {
         chainAction(
@@ -2259,6 +2272,8 @@ class AppViewModel(app: Application) : AndroidViewModel(app), PomboBridge.Listen
         val channelName: String?,
         /** Renewing from inside the channel: pay is always offered, no "Enter". */
         val renewal: Boolean = false,
+        /** Author visibility ('members' | 'everyone'), when locally known. */
+        val authorMode: String? = null,
         val retry: suspend () -> Unit
     )
 
@@ -2286,7 +2301,12 @@ class AppViewModel(app: Application) : AndroidViewModel(app), PomboBridge.Listen
         renewal: Boolean = false, retry: suspend () -> Unit
     ) {
         try {
-            _gateEntry.value = GateEntry(manager.gateEntryInfo(gateAddress), channelName, renewal, retry)
+            // Author visibility comes from stream metadata, which the gate
+            // contract knows nothing about — resolve it from local caches.
+            val authorMode = manager.channels.value
+                .firstOrNull { it.gateAddress.equals(gateAddress, ignoreCase = true) }?.authorMode
+                ?: _explore.value.firstOrNull { it.gateAddress.equals(gateAddress, ignoreCase = true) }?.authorMode
+            _gateEntry.value = GateEntry(manager.gateEntryInfo(gateAddress), channelName, renewal, authorMode, retry)
         } catch (e: Exception) {
             toast(
                 "Could not read the gate contract: ${com.pombo.android.core.ChainErrors.friendly(e)}",

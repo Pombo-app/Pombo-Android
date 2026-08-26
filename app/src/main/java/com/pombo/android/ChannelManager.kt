@@ -1595,6 +1595,30 @@ class ChannelManager(
     }
 
     /**
+     * Replaces the shared publish key of a Members-only channel: grants the
+     * new key's address and revokes the old one on `-1`/`-2` (one transaction
+     * per stream), then announces the new key on `-4`. Members pick it up
+     * through the normal PUB_WRAP flow.
+     */
+    suspend fun rekeyPublishKey(): Int {
+        val channel = _current.value ?: throw IllegalStateException("No channel open")
+        check(channel.type == "gated" && channel.authorMode == "members") {
+            "the publish key only exists on Members-only channels"
+        }
+        val keysId = channel.keysStreamId.ifEmpty { StreamConstants.deriveKeysId(channel.messageStreamId) }
+        return epochKeys.rekeyPublishKey(channel.messageStreamId, keysId) { newAddress, oldAddress ->
+            val assignments = JSONArray().apply {
+                put(JSONObject().put("userId", newAddress)
+                    .put("permissions", JSONArray(listOf("subscribe", "publish"))))
+                if (oldAddress != null) put(JSONObject().put("userId", oldAddress)
+                    .put("permissions", JSONArray()))
+            }
+            setPermissionsRetry(channel.messageStreamId, assignments)
+            setPermissionsRetry(channel.ephemeralStreamId, assignments)
+        }
+    }
+
+    /**
      * The on-chain permission matrix for the channel's message stream (web:
      * graphAPI.getStreamPermissions), for the Members panel's Stream Permissions
      * list. Owner-only surface, so no permission gate here — the caller shows it.

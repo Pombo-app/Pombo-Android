@@ -446,6 +446,21 @@ internal fun GateEntryDialog(vm: AppViewModel, entry: AppViewModel.GateEntry) {
                     textAlign = androidx.compose.ui.text.style.TextAlign.Center)
             }
 
+            // Author visibility is a privacy promise the user must see before
+            // paying or entering (web: gate-entry-authors).
+            entry.authorMode?.let { mode ->
+                Spacer(Modifier.height(10.dp))
+                val members = mode == "members"
+                Text(
+                    if (members) "Authors visible to members only"
+                    else "Every message is publicly signed by its author",
+                    color = if (members) Color.White.copy(alpha = 0.40f)
+                    else Color(0xFFFBBF24).copy(alpha = 0.70f),
+                    fontSize = 12.sp,
+                    textAlign = androidx.compose.ui.text.style.TextAlign.Center
+                )
+            }
+
             if (notes.isNotEmpty()) {
                 Spacer(Modifier.height(12.dp))
                 Text(
@@ -3997,7 +4012,7 @@ private fun ChannelSettingsSheet(vm: AppViewModel, channel: Channel, canModerate
                 when (sub) {
                     null -> ChannelDetailsMain(vm, channel, canModerate, onOpenSub = { sub = it }, onDismiss = onDismiss)
                     ChannelSubPanel.MEMBERS -> ChannelMembersPanel(vm, channel, canModerate)
-                    ChannelSubPanel.MODERATION -> ChannelModerationPanel(vm, canModerate)
+                    ChannelSubPanel.MODERATION -> ChannelModerationPanel(vm, channel, canModerate)
                     ChannelSubPanel.DELETE -> ChannelDeletePanel(vm, channel, onDismiss)
                     ChannelSubPanel.DESTROY -> ChannelDestroyPanel(vm, channel, onDismiss)
                 }
@@ -5199,7 +5214,7 @@ private fun ChannelStoragePanel(vm: AppViewModel, channel: Channel, canModerate:
 }
 
 @Composable
-private fun ChannelModerationPanel(vm: AppViewModel, canModerate: Boolean) {
+private fun ChannelModerationPanel(vm: AppViewModel, channel: Channel, canModerate: Boolean) {
     val pins by vm.pins.collectAsState()
     val hidden by vm.hiddenIds.collectAsState()
     val banned by vm.bannedMembers.collectAsState()
@@ -5286,6 +5301,31 @@ private fun ChannelModerationPanel(vm: AppViewModel, canModerate: Boolean) {
         "Pin and hide from a message's own menu.",
         color = Color.White.copy(alpha = 0.40f), fontSize = 12.sp
     )
+
+    if (canModerate && channel.type == "gated" && channel.authorMode == "members") {
+        Spacer(Modifier.height(20.dp))
+        Box(Modifier.fillMaxWidth().height(1.dp).background(Color.White.copy(alpha = 0.05f)))
+        Spacer(Modifier.height(20.dp))
+        SectionLabel("Reset Publish Key")
+        Spacer(Modifier.height(6.dp))
+        Text(
+            "Replaces the channel's shared publish key (2 transactions). Former members " +
+                "who kept the old key lose the ability to write. Current members pick up " +
+                "the new key automatically.",
+            color = Color.White.copy(alpha = 0.40f), fontSize = 12.sp
+        )
+        Spacer(Modifier.height(10.dp))
+        val amber = Color(0xFFFBBF24)
+        Box(
+            Modifier
+                .fillMaxWidth()
+                .background(amber.copy(alpha = 0.10f), RoundedCornerShape(12.dp))
+                .border(1.dp, amber.copy(alpha = 0.20f), RoundedCornerShape(12.dp))
+                .clickableNoRipple { vm.rekeyPublishKey() }
+                .padding(vertical = 12.dp),
+            contentAlignment = Alignment.Center
+        ) { Text("Reset Publish Key", color = amber, fontSize = 13.sp) }
+    }
 
     confirmUnban?.let { addr ->
         androidx.compose.ui.window.Dialog(onDismissRequest = { confirmUnban = null }) {
