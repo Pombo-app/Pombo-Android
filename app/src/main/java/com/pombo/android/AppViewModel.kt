@@ -2216,7 +2216,8 @@ class AppViewModel(app: Application) : AndroidViewModel(app), PomboBridge.Listen
                 gateToken = spec.gateToken,
                 gateMinBalance = spec.gateMinBalance,
                 gatePrice = spec.gatePrice,
-                gateDuration = spec.gateDurationSeconds
+                gateDuration = spec.gateDurationSeconds,
+                authorMode = spec.authorMode
             ) {
                 step += 1
                 val label = when {
@@ -2422,7 +2423,8 @@ class AppViewModel(app: Application) : AndroidViewModel(app), PomboBridge.Listen
                         lastText = cached?.text.orEmpty(),
                         lastSenderAddress = cached?.senderAddress.orEmpty(),
                         readOnly = info.readOnly,
-                        gateAddress = info.gateAddress
+                        gateAddress = info.gateAddress,
+                        authorMode = info.authorMode
                     )
                 }
                 _exploreLoading.value = false

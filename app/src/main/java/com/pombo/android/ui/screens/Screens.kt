@@ -1182,7 +1182,9 @@ data class NewChannel(
     val gateToken: String? = null,
     val gateMinBalance: String? = null,
     val gatePrice: String? = null,
-    val gateDurationSeconds: Long? = null
+    val gateDurationSeconds: Long? = null,
+    /** Author visibility ('members' | 'everyone'), IMMUTABLE post-creation. */
+    val authorMode: String = "members"
 )
 
 /** Quick-pick token chips (N-D): presets + Custom. */
@@ -1224,6 +1226,9 @@ private fun TokenPresetRow(
 @Composable
 internal fun CreateChannelDialog(vm: AppViewModel, onDismiss: () -> Unit, onCreate: (NewChannel) -> Unit) {
     var kind by remember { mutableStateOf(ChannelKind.OPEN) }
+    // Author visibility (gated variants; immutable post-creation): false =
+    // Members only (the default), true = Everyone.
+    var authorEveryone by remember { mutableStateOf(false) }
     var name by remember { mutableStateOf("") }
     var password by remember { mutableStateOf("") }
     var visible by remember { mutableStateOf(false) }
@@ -1287,7 +1292,8 @@ internal fun CreateChannelDialog(vm: AppViewModel, onDismiss: () -> Unit, onCrea
         members = members,
         storageProvider = storageProvider,
         customStorageAddress = customStorage.trim().ifBlank { null },
-        storageDays = storageDays.toInt()
+        storageDays = storageDays.toInt(),
+        authorMode = if (authorEveryone) "everyone" else "members"
     )
 
     // Low-balance confirm fires AFTER async gate resolution — remember the
@@ -1720,6 +1726,55 @@ internal fun CreateChannelDialog(vm: AppViewModel, onDismiss: () -> Unit, onCrea
                     }
                     Text(
                         "For organizing your channels locally.",
+                        color = Color.White.copy(alpha = 0.30f), fontSize = 12.sp,
+                        modifier = Modifier.padding(top = 6.dp)
+                    )
+                }
+
+                // Author visibility applies to every gated variant (Closed
+                // included) and is IMMUTABLE after creation.
+                if (kind == ChannelKind.CLOSED || kind == ChannelKind.GATED || kind == ChannelKind.PAID) {
+                    Spacer(Modifier.height(16.dp))
+                    SectionLabel("Author Visibility")
+                    Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        listOf(
+                            Triple(false, "Members only", Icons.Outlined.People),
+                            Triple(true, "Everyone", Icons.Outlined.Public)
+                        ).forEach { (value, label, icon) ->
+                            val active = authorEveryone == value
+                            val activeText = if (value) Color(0xFFFBBF24).copy(alpha = 0.90f) else Color.White
+                            Row(
+                                Modifier.weight(1f)
+                                    .background(
+                                        if (active) Color.White.copy(alpha = 0.10f) else Color.White.copy(alpha = 0.05f),
+                                        RoundedCornerShape(8.dp)
+                                    )
+                                    .border(
+                                        1.dp,
+                                        Color.White.copy(alpha = if (active) 0.10f else 0.05f),
+                                        RoundedCornerShape(8.dp)
+                                    )
+                                    .clickableNoRipple { authorEveryone = value }
+                                    .padding(vertical = 8.dp),
+                                horizontalArrangement = Arrangement.Center,
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Icon(
+                                    icon, contentDescription = null,
+                                    tint = if (active) activeText else Color.White.copy(alpha = 0.50f),
+                                    modifier = Modifier.size(14.dp)
+                                )
+                                Spacer(Modifier.width(6.dp))
+                                Text(
+                                    label,
+                                    color = if (active) activeText else Color.White.copy(alpha = 0.50f),
+                                    fontSize = 12.sp, fontWeight = FontWeight.Medium
+                                )
+                            }
+                        }
+                    }
+                    Text(
+                        "Who can see who wrote each message. Cannot be changed later.",
                         color = Color.White.copy(alpha = 0.30f), fontSize = 12.sp,
                         modifier = Modifier.padding(top = 6.dp)
                     )

@@ -3840,6 +3840,22 @@ private fun ExploreCard(
                             ch.gateQualifier ?: "",
                             color = Color.White.copy(alpha = 0.40f), fontSize = 11.exp
                         )
+                        // Author-visibility AUDIENCE icon (never identity —
+                        // both modes guarantee authorship to participants):
+                        // group = members only; globe = everyone, amber
+                        // because "publicly attributable forever" is what a
+                        // buyer must notice before entering.
+                        ch.authorMode?.let { mode ->
+                            Spacer(Modifier.height(3.dp))
+                            Icon(
+                                if (mode == "members") Icons.Outlined.People else Icons.Outlined.Public,
+                                contentDescription = if (mode == "members")
+                                    "Authors visible to members only" else "Authors visible to everyone",
+                                tint = if (mode == "members") Color.White.copy(alpha = 0.60f)
+                                    else Color(0xFFFBBF24).copy(alpha = 0.70f),
+                                modifier = Modifier.size(14.dp)
+                            )
+                        }
                     }
                 }
                 if (tags.isNotEmpty()) {

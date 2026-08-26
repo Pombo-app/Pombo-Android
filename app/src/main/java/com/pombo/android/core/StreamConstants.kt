@@ -90,6 +90,11 @@ object StreamConstants {
     const val KEY_REQUEST = "key_request"
     const val KEY_WRAP = "key_wrap"
     const val MEMBER_HELLO = "member_hello"
+    // Members-only channels: the SHARED publish key's anchor and wraps —
+    // same crypto as KEY_WRAP, verified against the announce keyHash AND the
+    // announced address. Higher `rev` supersedes (the admin re-key valve).
+    const val PUB_ANNOUNCE = "pub_announce"
+    const val PUB_WRAP = "pub_wrap"
 
     // History windows (web config.js: stream.initialMessages / loadMoreCount)
     const val INITIAL_MESSAGES = 50
