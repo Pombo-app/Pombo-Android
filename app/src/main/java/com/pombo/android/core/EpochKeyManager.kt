@@ -677,7 +677,17 @@ class EpochKeyManager(
         val addr = data.optString("addr").lowercase()
         if (rev < 1 || keyId.isEmpty() || keyHash.isEmpty() || !ADDR_RE.matches(addr)) return false
 
-        if (timestamp > s.pubAnnounceFreshness) s.pubAnnounceFreshness = timestamp
+        // Freshness follows the HIGHEST rev seen, never the stream: a
+        // retained copy of a superseded announce must not mask a re-key
+        // announce that storage lost, or no session would ever republish it
+        // and members would stay unable to write until retention aged the
+        // old copy out.
+        val heldRev = s.pubAnnounce?.rev ?: 0
+        if (rev > heldRev) {
+            s.pubAnnounceFreshness = timestamp
+        } else if (rev == heldRev && timestamp > s.pubAnnounceFreshness) {
+            s.pubAnnounceFreshness = timestamp
+        }
 
         val existing = s.pubAnnounce
         if (existing != null) {
