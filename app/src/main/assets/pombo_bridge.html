@@ -1252,7 +1252,10 @@ const api = {
                         pow: pow,
                         nonce: nonce,
                         epoch: epoch,
-                        channelType: a.native ? 'private' : 'public',
+                        // `kind` overrides for non-message wakes (e.g. 'keys',
+                        // a key-request wake): the relay forwards channelType
+                        // verbatim and receivers branch on it.
+                        channelType: a.kind ? String(a.kind) : (a.native ? 'private' : 'public'),
                         timestamp: Date.now()
                     }
                 };

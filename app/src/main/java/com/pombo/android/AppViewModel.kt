@@ -385,6 +385,80 @@ class AppViewModel(app: Application) : AndroidViewModel(app), PomboBridge.Listen
     fun isDmMuted(peerAddress: String?): Boolean =
         peerAddress != null && peerAddress.lowercase() in settingsStore.mutedDmPeers
 
+    // ==================== owner key-responder ====================
+
+    /** Bumped after the per-channel toggle so the panel re-reads the store. */
+    private val _keyResponderRev = MutableStateFlow(0)
+    val keyResponderRev: StateFlow<Int> = _keyResponderRev.asStateFlow()
+
+    private var keyResponderJob: kotlinx.coroutines.Job? = null
+    private val keyResponderSweepMs = 45_000L
+
+    fun isKeyResponder(channel: Channel): Boolean =
+        settingsStore.keyResponderChannels.any { it.messageStreamId == channel.messageStreamId }
+
+    /**
+     * Marks THIS device as the standing key responder for the channel: it
+     * keeps answering retained KEY_REQUESTs while the app is up (45s sweep)
+     * and from the background (15-minute worker + FCM 'keys' wakes). Local
+     * per device on purpose — serving keys is a duty of the device the owner
+     * chose, not of the account.
+     */
+    fun setKeyResponder(channel: Channel, on: Boolean) = viewModelScope.launch {
+        val others = settingsStore.keyResponderChannels
+            .filterNot { it.messageStreamId == channel.messageStreamId }
+        if (on) {
+            val tag = try { manager.keyResponderTag(channel) } catch (e: Exception) { "" }
+            if (tag.isEmpty()) {
+                toast("Could not derive the channel tag", com.pombo.android.ui.ToastKind.WARNING)
+                return@launch
+            }
+            settingsStore.keyResponderChannels = others + com.pombo.android.data.KeyResponderEntry(
+                channel.messageStreamId,
+                channel.keysStreamId.ifEmpty {
+                    com.pombo.android.core.StreamConstants.deriveKeysId(channel.messageStreamId)
+                },
+                channel.gateAddress ?: "",
+                tag
+            )
+            toast("Key responder on — this device answers key requests", com.pombo.android.ui.ToastKind.INFO)
+        } else {
+            settingsStore.keyResponderChannels = others
+            toast("Key responder off", com.pombo.android.ui.ToastKind.INFO)
+        }
+        _keyResponderRev.value++
+        syncKeyResponderSchedule()
+        startKeyResponderLoop()
+    }
+
+    private fun syncKeyResponderSchedule() {
+        if (settingsStore.keyResponderChannels.isEmpty()) {
+            com.pombo.android.push.KeyResponderWorker.cancelPeriodic(getApplication())
+        } else {
+            com.pombo.android.push.KeyResponderWorker.schedulePeriodic(getApplication())
+        }
+    }
+
+    /**
+     * The in-app half: while foregrounded and connected, sweep the marked
+     * channels every 45s. Reads the store each lap, so account switches and
+     * toggles need no restart; the background worker owns the rest.
+     */
+    private fun startKeyResponderLoop() {
+        if (keyResponderJob?.isActive == true) return
+        keyResponderJob = viewModelScope.launch {
+            while (true) {   // dies with viewModelScope: delay() cancels
+                if (appInForeground && _status.value == NetStatus.CONNECTED) {
+                    val entries = settingsStore.keyResponderChannels
+                    if (entries.isNotEmpty()) {
+                        runCatching { manager.sweepKeyResponder(entries) }
+                    }
+                }
+                delay(keyResponderSweepMs)
+            }
+        }
+    }
+
     // ==================== DM push (web dm-push-enabled sub-toggle) ====================
 
     private val _dmPushEnabled = MutableStateFlow(settingsStore.dmPushEnabled)
@@ -1300,6 +1374,15 @@ class AppViewModel(app: Application) : AndroidViewModel(app), PomboBridge.Listen
                 unreadStore.setWatermark(conversationId, ts)
             }
         }
+        // FCM 'keys' wake with the app up: sweep through the live bridge now
+        // instead of waiting for the next 45s lap or booting a headless one.
+        com.pombo.android.push.KeyResponderGate.sweepNow = {
+            viewModelScope.launch {
+                runCatching { manager.sweepKeyResponder(settingsStore.keyResponderChannels) }
+            }
+        }
+        syncKeyResponderSchedule()
+        startKeyResponderLoop()
         manager.onIncomingMessage = { channel, sender, preview ->
             // Nothing to notify about if the user is already looking at it —
             // and a muted DM peer stays silent on the in-app path too.

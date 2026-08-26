@@ -269,6 +269,9 @@ class ChannelManager(
         keysPartitionCount = { keysStreamId ->
             bridge.call("getStreamInfo", JSONObject().put("streamId", keysStreamId))
                 .optJSONObject("metadata")?.optInt("partitions", 1) ?: 1
+        },
+        emitKeysWake = { messageStreamId ->
+            channelByStream(messageStreamId)?.let { sendWakeSignal(it, kind = "keys") }
         }
     )
 
@@ -2842,7 +2845,7 @@ class ChannelManager(
      *
      * Fire-and-forget: failing to notify must never fail the send itself.
      */
-    private fun sendWakeSignal(channel: Channel) {
+    private fun sendWakeSignal(channel: Channel, kind: String? = null) {
         scope.launch {
             try {
                 // Web sendWakeSignals: ONLY gated channels use the 'native:'
@@ -2853,11 +2856,9 @@ class ChannelManager(
                 // `type != "public"` silently broke Android→web DM and
                 // password-channel notifications.
                 val native = isEpochChannel(channel)
-                val res = bridge.call(
-                    "pushWakePayload",
-                    JSONObject().put("streamId", channel.messageStreamId).put("native", native),
-                    30_000
-                )
+                val args = JSONObject().put("streamId", channel.messageStreamId).put("native", native)
+                kind?.let { args.put("kind", it) }
+                val res = bridge.call("pushWakePayload", args, 30_000)
                 // Ephemeral publisher, fresh key per wake (see PushRelayClient):
                 // the wake is validated by PoW, not publisher, so under the
                 // account every message X sends would stamp X onto the public
@@ -2885,6 +2886,35 @@ class ChannelManager(
             }
         }
     }
+
+    /**
+     * One key-responder pass (owner mode): answer retained key requests on
+     * every marked channel, open or not. ensureChannelKeys is idempotent —
+     * wrap coverage keeps repeated sweeps from re-answering, and for the
+     * admin it doubles as the TTL re-announce / rotation heartbeat.
+     */
+    suspend fun sweepKeyResponder(entries: List<com.pombo.android.data.KeyResponderEntry>) {
+        for (entry in entries) {
+            val channel = channelByStream(entry.messageStreamId) ?: continue
+            try {
+                epochKeys.ensureChannelKeys(
+                    entry.messageStreamId,
+                    entry.keysStreamId.ifEmpty { StreamConstants.deriveKeysId(entry.messageStreamId) },
+                    channel.storageDays ?: 180,
+                    allowMint = false,
+                    memberCount = channel.members.size,
+                    gated = channel.type == "gated")
+            } catch (e: Exception) {
+                Log.d(TAG, "key responder sweep failed on …${entry.messageStreamId.takeLast(20)}: ${e.message}")
+            }
+        }
+    }
+
+    /** The channel's k-anonymous push tag ('native:' prefix — gated). */
+    suspend fun keyResponderTag(channel: Channel): String =
+        bridge.call("pushTag", JSONObject()
+            .put("streamId", channel.messageStreamId)
+            .put("native", true)).optString("tag")
 
     /**
      * Ensures my DM inbox exists on-chain (needs gas) and subscribes to it.

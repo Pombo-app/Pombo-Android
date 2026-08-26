@@ -74,7 +74,15 @@ class EpochKeyManager(
     private val resendRoster: suspend (keysStreamId: String) -> List<Entry> =
         { emptyList() },
     /** The -4 stream's on-chain partition count — the roster capability probe. */
-    private val keysPartitionCount: suspend (keysStreamId: String) -> Int = { 1 }
+    private val keysPartitionCount: suspend (keysStreamId: String) -> Int = { 1 },
+    /**
+     * Fire-and-forget wake to the push relay after publishing a KEY_REQUEST
+     * ('keys' kind, k-anonymous channel tag): an owner running the key
+     * responder gets woken and answers in seconds instead of on the next
+     * sweep. Silent by contract — receivers never turn it into a
+     * notification.
+     */
+    private val emitKeysWake: (messageStreamId: String) -> Unit = {}
 ) {
     data class Entry(val data: JSONObject, val publisherId: String?, val timestamp: Long)
 
@@ -985,6 +993,7 @@ class EpochKeyManager(
             }
         }
         publishKeys(keysStreamId, request ?: return)
+        emitKeysWake(messageStreamId)
         Log.i(TAG, "requested missing epochs on ${keysStreamId.takeLast(30)}")
     }
 

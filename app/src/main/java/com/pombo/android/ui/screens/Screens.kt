@@ -140,6 +140,7 @@ import androidx.compose.material.icons.outlined.Notifications
 import androidx.compose.material.icons.filled.Notifications
 import androidx.compose.material.icons.outlined.FileUpload
 import androidx.compose.material.icons.outlined.Campaign
+import androidx.compose.material.icons.outlined.Key
 import androidx.compose.material.icons.outlined.Lock
 import androidx.compose.material.icons.outlined.Public
 import androidx.compose.material.icons.outlined.People
@@ -4297,6 +4298,39 @@ private fun ChannelDetailsMain(
     }
     if (canModerate) {
         ChannelNavRow("Moderation", leadingIcon = Icons.Outlined.VerifiedUser) { onOpenSub(ChannelSubPanel.MODERATION) }
+        Spacer(Modifier.height(8.dp))
+    }
+    if (isGated && canModerate) {
+        // Key responder: THIS device keeps answering key requests for the
+        // channel — foreground sweep plus the background worker.
+        val responderRev by vm.keyResponderRev.collectAsState()
+        val responderOn = remember(responderRev, channel.messageStreamId) { vm.isKeyResponder(channel) }
+        Row(
+            Modifier.fillMaxWidth()
+                .background(Color.White.copy(alpha = 0.03f), RoundedCornerShape(12.dp))
+                .border(1.dp, Color.White.copy(alpha = 0.05f), RoundedCornerShape(12.dp))
+                .clickableNoRipple { vm.setKeyResponder(channel, !responderOn) }
+                .padding(horizontal = 16.dp, vertical = 16.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Icon(
+                Icons.Outlined.Key, contentDescription = null,
+                tint = Color.White.copy(alpha = 0.40f), modifier = Modifier.size(18.dp)
+            )
+            Spacer(Modifier.width(12.dp))
+            Column(Modifier.weight(1f)) {
+                Text("Key responder", color = Color.White.copy(alpha = 0.70f), fontSize = 14.sp)
+                Text(
+                    "This device answers key requests, even in the background",
+                    color = Color.White.copy(alpha = 0.30f), fontSize = 12.sp, lineHeight = 16.sp
+                )
+            }
+            Text(
+                if (responderOn) "ON" else "OFF",
+                color = if (responderOn) Color(0xFF34D399) else Color.White.copy(alpha = 0.30f),
+                fontSize = 12.sp, fontWeight = FontWeight.Medium
+            )
+        }
         Spacer(Modifier.height(8.dp))
     }
     if (canModerate) {
