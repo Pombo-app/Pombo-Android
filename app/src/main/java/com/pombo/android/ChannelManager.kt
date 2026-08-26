@@ -920,12 +920,15 @@ class ChannelManager(
         val gatedChannel = channelByStream(adminStreamId)?.takeIf { it.type == "gated" }
         // recoverSigner unconditionally: an Explore fetch of a visible gated
         // storefront has no channel object, yet its authority check below
-        // still needs the envelope signer.
-        val res = bridge.call("resend", JSONObject()
+        // still needs the envelope signer. Raw envelopes only for channels we
+        // KNOW are gated — the owner check below is the authority either way.
+        val imageArgs = JSONObject()
             .put("streamId", adminStreamId)
             .put("partition", StreamConstants.ADMIN_CHANNEL_IMAGE)
             .put("last", 1)
-            .put("recoverSigner", true), timeoutMs)
+            .put("recoverSigner", true)
+        if (gatedChannel != null) imageArgs.put("raw", true)
+        val res = bridge.call("resend", imageArgs, timeoutMs)
         val arr = res.optJSONArray("messages")
         if (arr == null) { Log.w(TAG, "channelImage $label ($adminStreamId): no messages array in resend response"); return null }
         if (arr.length() == 0) { Log.w(TAG, "channelImage $label ($adminStreamId): resend returned 0 entries"); return null }
@@ -943,7 +946,9 @@ class ChannelManager(
             }
             else -> { Log.w(TAG, "channelImage $label ($adminStreamId): content is neither object nor string (${contentAny?.javaClass})"); return null }
         }
-        // Gated: CHANNEL_IMAGE arrives as an epoch envelope (N-A)
+        // Gated: CHANNEL_IMAGE arrives as an epoch envelope. History context
+        // so an image sealed under an older epoch opens in that epoch's
+        // validity window instead of skipping the freshness rule.
         if (com.pombo.android.core.EpochKeyCrypto.isEpochEnvelope(data)) {
             val messageStreamId = adminStreamId.replace(Regex("-3$"), StreamConstants.SUFFIX_MESSAGE)
             val keysId = StreamConstants.deriveKeysId(messageStreamId)
@@ -951,7 +956,10 @@ class ChannelManager(
             // — the epoch state only loads on open, so without this the image
             // stays undecryptable everywhere but inside the channel.
             epochKeys.loadPersistedState(messageStreamId)
-            data = epochKeys.tryDecrypt(messageStreamId, keysId, data)
+            data = epochKeys.tryDecrypt(
+                messageStreamId, keysId, data,
+                gated = true, live = false, timestamp = meta.optLong("timestamp", 0L)
+            )
                 ?: run { Log.w(TAG, "channelImage $label ($adminStreamId): epoch envelope present but key unavailable/decrypt failed"); return null }
         }
         if (data.optString("type") != "CHANNEL_IMAGE") {
@@ -1182,8 +1190,8 @@ class ChannelManager(
      *
      * Gated (N-D): the Graph's grantee list is exactly the clone — membership
      * lives on the GATE. Candidates: the local cache (owner-minted members)
-     * plus the KEY_REQUEST authors seen on -4 (join()/pay() members never
-     * pass through the owner, but every reader must request keys). Their
+     * plus the KEY_REQUEST authors seen on -4 (holders and pay() members
+     * never pass through the owner, but every reader must request keys). Their
      * CURRENT state comes from the contract; `access` is the mode-aware
      * membership signal (allowlist only means Closed).
      */
@@ -1380,11 +1388,6 @@ class ChannelManager(
      */
     suspend fun gatePay(gateAddress: String) {
         bridge.call("gatePay", JSONObject().put("gate", gateAddress), 600_000)
-    }
-
-    /** TOKEN/NFT gates: opt in to sticky membership (everMember). */
-    suspend fun gateJoin(gateAddress: String) {
-        bridge.call("gateJoin", JSONObject().put("gate", gateAddress), 180_000)
     }
 
     /**
@@ -2043,7 +2046,7 @@ class ChannelManager(
                 .put("gate", gateAddress).put("user", me)).optBoolean("access", false)
             if (!access) {
                 // Typed for the UI (N-D): the gate entry screen reads the mode
-                // on-chain and offers pay()/join() instead of a toast.
+                // on-chain and offers pay() instead of a toast.
                 throw GateAccessDenied(gateAddress)
             }
             canPublish = true
@@ -2399,7 +2402,9 @@ class ChannelManager(
                 .put("partition", StreamConstants.ADMIN_MODERATION)
                 .put("last", 5)
             channel.password?.let { args.put("password", it) }
-            if (channel.type == "gated") args.put("recoverSigner", true)
+            // Raw envelopes for gated, same as message history: authority on
+            // -3 is the recovered envelope signer, never the present gate.
+            if (channel.type == "gated") args.put("recoverSigner", true).put("raw", true)
             val t0 = System.currentTimeMillis()
             val res = bridge.call("resend", args, 30_000)
             android.util.Log.d("PomboPerf",
@@ -2416,7 +2421,9 @@ class ChannelManager(
                 // proves the admin wrote this (gatedAuthor drops the rest).
                 if (channel.type == "gated" &&
                     gatedAuthor(channel, channel.adminStreamId, meta) == null) continue
-                // Native: ADMIN_STATE arrives as an epoch envelope (N-A)
+                // ADMIN_STATE arrives as an epoch envelope. History context so
+                // entries sealed under an older epoch open in that epoch's
+                // validity window instead of skipping the freshness rule.
                 if (content is JSONObject &&
                     com.pombo.android.core.EpochKeyCrypto.isEpochEnvelope(content) &&
                     isEpochChannel(channel)
@@ -2424,7 +2431,10 @@ class ChannelManager(
                     val keysId = channel.keysStreamId.ifEmpty {
                         StreamConstants.deriveKeysId(channel.messageStreamId)
                     }
-                    content = epochKeys.tryDecrypt(channel.messageStreamId, keysId, content) ?: continue
+                    content = epochKeys.tryDecrypt(
+                        channel.messageStreamId, keysId, content,
+                        gated = true, live = false, timestamp = meta.optLong("timestamp", 0L)
+                    ) ?: continue
                 }
                 applyAdminMessage(channel, content, meta, generation)
             }
@@ -4868,7 +4878,11 @@ class ChannelManager(
         // never makes the extra pwDecryptBatch round trip. [predecrypt] below
         // stays as the fallback for anything that came back still sealed.
         channel.password?.let { args.put("password", it) }
-        if (channel.type == "gated") args.put("recoverSigner", true)
+        // Gated history reads the raw envelopes: the SDK validator re-checks
+        // every stored message against the PRESENT gate state, which erases
+        // ex-members' history. Authorship comes from the recovered envelope
+        // signer (gatedAuthor) and stale keys are cut by kid freshness.
+        if (channel.type == "gated") args.put("recoverSigner", true).put("raw", true)
         val res = bridge.call("resend", args, timeoutMs)
         val tResend = System.currentTimeMillis()
         val arr = res.optJSONArray("messages")
@@ -5062,9 +5076,14 @@ class ChannelManager(
         } catch (e: Exception) { /* reported via the bridge status/error */ }
     }
 
-    /** Adds recoverSigner to a resend args object when the stream is gated. */
+    /**
+     * Gated resends read the raw envelopes (no re-validation against the
+     * present gate state) and recover the author from the envelope signature.
+     */
     private fun withSignerRecovery(args: JSONObject, streamId: String): JSONObject {
-        if (channelByStream(streamId)?.type == "gated") args.put("recoverSigner", true)
+        if (channelByStream(streamId)?.type == "gated") {
+            args.put("recoverSigner", true).put("raw", true)
+        }
         return args
     }
 
@@ -7193,9 +7212,9 @@ class ChannelManager(
     }
 
     /**
-     * A gated channel refused the join at the CONTRACT (checkAccess false).
+     * A gated channel refused entry at the CONTRACT (checkAccess false).
      * Carries the clone address so the entry screen can read the requirement
-     * (mode/token/price) and offer pay()/join() instead of a dead-end toast.
+     * (mode/token/price) and offer pay() instead of a dead-end toast.
      */
     class GateAccessDenied(val gateAddress: String) :
         IllegalStateException("You do not have access to this gated channel.")

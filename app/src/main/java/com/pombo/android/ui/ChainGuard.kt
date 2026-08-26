@@ -78,7 +78,6 @@ object ChainGuard {
         "gateSetModerator",
         // N-D member transactions. gatePay's wrap/approve sub-txs run inside
         // the same bridge call, so one approval window covers the sequence.
-        "gateJoin",
         "gatePay"
     )
 

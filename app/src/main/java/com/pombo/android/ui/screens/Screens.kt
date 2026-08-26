@@ -330,8 +330,8 @@ fun PomboApp(vm: AppViewModel) {
             )
         }
 
-        // Gate entry screen (N-D): a gated channel refused the join — show the
-        // on-chain requirement and the pay()/join() actions instead of a toast.
+        // Gate entry screen (N-D): a gated channel refused entry — show the
+        // on-chain requirement and the pay() action instead of a toast.
         val gateEntry by vm.gateEntry.collectAsState()
         gateEntry?.let { entry -> GateEntryDialog(vm, entry) }
     }
@@ -451,16 +451,6 @@ internal fun GateEntryDialog(vm: AppViewModel, entry: AppViewModel.GateEntry) {
                     notes.joinToString(" "),
                     color = Color.White.copy(alpha = 0.30f), fontSize = 12.sp, lineHeight = 16.sp,
                     textAlign = androidx.compose.ui.text.style.TextAlign.Center
-                )
-            }
-
-            if ((info.mode == GateModes.TOKEN || info.mode == GateModes.NFT) && holds) {
-                Spacer(Modifier.height(12.dp))
-                Text(
-                    "Register membership on-chain (1 tx)",
-                    color = Color.White.copy(alpha = 0.40f), fontSize = 12.sp,
-                    textDecoration = androidx.compose.ui.text.style.TextDecoration.Underline,
-                    modifier = Modifier.clickableNoRipple { vm.gateEntryJoin() }
                 )
             }
 
@@ -4505,7 +4495,7 @@ private fun ChannelMembersPanel(vm: AppViewModel, channel: Channel, canModerate:
     }
 
     // ── ADD MEMBERS (owner / GRANT only; NONE gates — allow() reverts
-    // WrongMode on TOKEN/NFT/PAID, whose members join()/pay() themselves) ──
+    // WrongMode on TOKEN/NFT/PAID, whose members hold or pay() themselves) ──
     if (perms.canGrant && channel.type == "gated" && manualAddAllowed) {
         Spacer(Modifier.height(16.dp))
         Box(Modifier.fillMaxWidth().height(1.dp).background(Color.White.copy(alpha = 0.05f)))
