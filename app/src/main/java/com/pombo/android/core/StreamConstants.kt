@@ -70,7 +70,7 @@ object StreamConstants {
 
     const val PASSWORD_CHALLENGE_MAGIC = "POMBO_PWD_CHALLENGE_V1"
 
-    // Keys stream (-4) — native channels only. Single partition carrying the
+    // Keys stream (-4) — gated channels only. Single partition carrying the
     // epoch-key protocol; content on -1/-2 is encrypted with a channel-wide
     // epoch key versioned by `kid`. Members publish AND subscribe here (any
     // member may answer a KEY_REQUEST with a KEY_WRAP — k-of-n distribution).

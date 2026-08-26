@@ -12,7 +12,7 @@ data class Channel(
     val messageStreamId: String,
     val ephemeralStreamId: String,
     val adminStreamId: String,
-    /** Keys stream (-4) — native/gated channels (epoch-key distribution, N-A/N-C). */
+    /** Keys stream (-4) — gated channels (epoch-key distribution, N-A/N-C). */
     val keysStreamId: String = "",
     val name: String,
     val type: String,                 // 'public' | 'password' | 'native' | 'gated'

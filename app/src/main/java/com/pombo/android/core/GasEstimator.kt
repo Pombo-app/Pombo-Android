@@ -55,13 +55,13 @@ object GasEstimator {
     data class Costs(
         val public: BigInteger,
         val password: BigInteger,
-        val native: BigInteger,
+        val gated: BigInteger,
         val dmInbox: BigInteger,
         val gasPrice: BigInteger
     ) {
         /** Cost for a channel `type` as used by NewChannel/Channel. */
         fun forType(type: String): BigInteger = when (type) {
-            "native", "gated" -> native
+            "gated" -> gated
             "dmInbox" -> dmInbox
             else -> public
         }
@@ -142,8 +142,8 @@ object GasEstimator {
                 2 * GAS_ADD_STORAGE_NODE +
                 2 * GAS_SET_STORAGE_DAY_COUNT
         )
-        // Native adds the keys stream (-4, with storage) — N-A epoch keys.
-        val nativeCost = cost(
+        // Gated adds the keys stream (-4, with storage) — N-A epoch keys.
+        val gatedCost = cost(
             4 * GAS_CREATE_STREAM +
                 4 * GAS_SET_PERMISSIONS_BATCH +
                 3 * GAS_ADD_STORAGE_NODE +
@@ -160,7 +160,7 @@ object GasEstimator {
         return Costs(
             public = publicCost,
             password = publicCost,
-            native = nativeCost,
+            gated = gatedCost,
             dmInbox = dmInboxCost,
             gasPrice = gasPrice
         )

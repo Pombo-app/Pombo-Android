@@ -13,7 +13,7 @@ import org.json.JSONObject
  * Epoch-key crypto for the keys stream (-4) — byte-exact port of the web's
  * epochKeyCrypto.js (N-A, UNIFIED_IMPLEMENTATION_PLAN.md §5.4, D12–D14).
  *
- * Native channel content on -1/-2 is encrypted with a channel-wide EPOCH KEY,
+ * Gated channel content on -1/-2 is encrypted with a channel-wide EPOCH KEY,
  * versioned by `kid`. The key travels wrapped via ECIES to a fresh per-request
  * keypair (D12) — the same secp256k1 ECDH + HKDF + AES-256-GCM construction as
  * [SealedSenderCrypto], with its own HKDF salt for domain separation.

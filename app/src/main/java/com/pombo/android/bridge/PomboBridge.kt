@@ -313,12 +313,6 @@ class PomboBridge(
          * (ERC-1271) — the bytes arrive already epoch-sealed (0x04).
          */
         gateAddress: String? = null,
-        /**
-         * Epoch piece on a NATIVE channel: publish as the account with
-         * encryptionType NONE (client.publish on a members-only stream would
-         * re-wrap the sealed bytes in the SDK's group-key AES).
-         */
-        asAccount: Boolean = false,
         timeoutMs: Long = 45_000
     ) {
         withTimeout(timeoutMs) { pageReadyFlow.first { it } }
@@ -330,7 +324,6 @@ class PomboBridge(
         if (password != null) args.put("password", password)
         if (identityPk != null) args.put("identityPk", identityPk)
         if (gateAddress != null) args.put("gateAddress", gateAddress)
-        if (asAccount) args.put("asAccount", true)
         val argsB64 = Base64.encodeToString(args.toString().toByteArray(Charsets.UTF_8), Base64.NO_WRAP)
         val dataB64 = Base64.encodeToString(data, Base64.NO_WRAP)
         inFlightBytes.addAndGet(data.size.toLong())
@@ -367,18 +360,12 @@ class PomboBridge(
          * Publish under this throwaway identity — the per-transfer DM chunk
          * key or the channel pseudonym, both minted natively. DM chunk bytes
          * arrive already pair-sealed (SealedSenderCrypto.pairSeal); only the
-         * publisher is decided here. Native/readOnly channels leave this null
-         * and publish under the account.
+         * publisher is decided here. ReadOnly channels leave this null and
+         * publish under the account.
          */
         identityPk: String? = null,
         /** Gated channel chunk: publish as the gate clone (ERC-1271). */
         gateAddress: String? = null,
-        /**
-         * Native epoch chunk: publish as the account with encryptionType NONE
-         * (client.publish on a members-only stream would re-wrap the sealed
-         * bytes in the SDK's group-key AES and break the HTTP hex reader).
-         */
-        asAccount: Boolean = false,
         timeoutMs: Long = 45_000
     ): Long {
         withTimeout(timeoutMs) { pageReadyFlow.first { it } }
@@ -389,7 +376,6 @@ class PomboBridge(
         val args = JSONObject().put("streamId", streamId).put("partition", partition)
         if (identityPk != null) args.put("identityPk", identityPk)
         if (gateAddress != null) args.put("gateAddress", gateAddress)
-        if (asAccount) args.put("asAccount", true)
         val argsB64 = Base64.encodeToString(args.toString().toByteArray(Charsets.UTF_8), Base64.NO_WRAP)
         val dataB64 = Base64.encodeToString(data, Base64.NO_WRAP)
         inFlightBytes.addAndGet(data.size.toLong())

@@ -3806,7 +3806,7 @@ private val SendPlaneIcon: androidx.compose.ui.graphics.vector.ImageVector by la
 private fun ChannelTypeIcon(type: String, readOnly: Boolean, tint: Color, size: Dp = 13.dp) {
     Row(verticalAlignment = Alignment.CenterVertically) {
         when (type) {
-            "native", "gated" -> EthereumIcon(tint, Modifier.size(size))
+            "gated" -> EthereumIcon(tint, Modifier.size(size))
             "password" -> Icon(Icons.Outlined.Lock, null, tint = tint, modifier = Modifier.size(size))
             "dm" -> Icon(Icons.Outlined.MailOutline, null, tint = tint, modifier = Modifier.size(size))
             else -> Icon(Icons.Outlined.Public, null, tint = tint, modifier = Modifier.size(size))
@@ -4237,8 +4237,8 @@ private fun ChannelDetailsMain(
     Row(verticalAlignment = Alignment.CenterVertically) {
         val accessTint = Color.White.copy(alpha = 0.70f)
         val accessText: String
-        // Native uses the Ethereum mark, drawn (not a Material icon).
-        if ((channel.type == "native" || channel.type == "gated") && !channel.readOnly) {
+        // Gated uses the Ethereum mark, drawn (not a Material icon).
+        if (channel.type == "gated" && !channel.readOnly) {
             EthereumIcon(accessTint, Modifier.size(16.dp))
             accessText = gateAccess ?: "Verified Membership"
         } else {
@@ -4300,8 +4300,8 @@ private fun ChannelDetailsMain(
     Spacer(Modifier.height(24.dp))
     Box(Modifier.fillMaxWidth().height(1.dp).background(Color.White.copy(alpha = 0.05f)))
     Spacer(Modifier.height(16.dp))
-    val isNative = channel.type == "native" || channel.type == "gated"
-    if (isNative) {
+    val isGated = channel.type == "gated"
+    if (isGated) {
         ChannelNavRow("Members", leadingIcon = Icons.Outlined.People) { onOpenSub(ChannelSubPanel.MEMBERS) }
         Spacer(Modifier.height(8.dp))
     }
@@ -4506,7 +4506,7 @@ private fun ChannelMembersPanel(vm: AppViewModel, channel: Channel, canModerate:
 
     // ── ADD MEMBERS (owner / GRANT only; NONE gates — allow() reverts
     // WrongMode on TOKEN/NFT/PAID, whose members join()/pay() themselves) ──
-    if (perms.canGrant && (channel.type == "native" || channel.type == "gated") && manualAddAllowed) {
+    if (perms.canGrant && channel.type == "gated" && manualAddAllowed) {
         Spacer(Modifier.height(16.dp))
         Box(Modifier.fillMaxWidth().height(1.dp).background(Color.White.copy(alpha = 0.05f)))
         Spacer(Modifier.height(16.dp))
@@ -4613,7 +4613,7 @@ private fun ChannelMembersPanel(vm: AppViewModel, channel: Channel, canModerate:
     }
 
     // ── STREAM PERMISSIONS (owner only) ─────────────────────────────
-    if (canModerate && (channel.type == "native" || channel.type == "gated")) {
+    if (canModerate && channel.type == "gated") {
         Spacer(Modifier.height(16.dp))
         Box(Modifier.fillMaxWidth().height(1.dp).background(Color.White.copy(alpha = 0.05f)))
         Spacer(Modifier.height(16.dp))
@@ -6451,7 +6451,7 @@ internal fun PrimaryButton(text: String, enabled: Boolean = true, onClick: () ->
 
 /**
  * The Ethereum logo (two stacked triangles), the glyph the web uses for a
- * native channel's "Verified Membership" access line (HeaderUI.js:479). Material
+ * gated channel's "Verified Membership" access line (HeaderUI.js). Material
  * has no Ethereum icon and Icons.Diamond is a gemstone, not this mark, so it is
  * drawn straight from the web's SVG path (24x24 viewport).
  */
@@ -6500,7 +6500,7 @@ private fun CrownIcon(tint: Color, modifier: Modifier = Modifier) {
 internal fun channelTypeLabel(type: String): String = when (type) {
     "public" -> "Public"
     "password" -> "Password protected"
-    "native", "gated" -> "Private (members)"
+    "gated" -> "Private (members)"
     "dm" -> "Direct message"
     else -> type
 }
