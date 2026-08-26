@@ -46,12 +46,11 @@ class EpochKeyManager(
     private val checkGateAccess: suspend (messageStreamId: String, requester: String) -> Boolean =
         { _, _ -> true },
     /**
-     * D14 per-mode history scope (N-D): true when this channel's gate hands
-     * out ONLY the current epoch — PAID gates, where a subscription buys the
-     * future, never the channel's past. The wiring is FAIL-CLOSED: a gated
-     * channel whose mode cannot be read answers current-only (missing old
-     * epochs get re-requested once the RPC heals; leaked ones cannot be
-     * taken back). Ungated channels return false.
+     * True only when the channel's gate cannot be read: every gate mode
+     * hands out ALL retained epochs, so an unreadable gate is the one case
+     * that answers current-only (FAIL-CLOSED — missing old epochs get
+     * re-requested once the RPC heals, leaked ones cannot be taken back).
+     * Ungated channels return false.
      */
     private val currentEpochOnly: suspend (messageStreamId: String) -> Boolean =
         { _ -> false }
@@ -665,9 +664,10 @@ class EpochKeyManager(
     }
 
     /**
-     * Answer with wraps for every epoch we hold from `fromEpoch` on (D14)
-     * MINUS the epochs an observed wrap already covers — the N-B suppression
-     * that turns thirty identical envelopes into one.
+     * Answer with wraps for every epoch we hold from `fromEpoch` on,
+     * regardless of gate mode, MINUS the epochs an observed wrap already
+     * covers — the suppression that turns thirty identical envelopes into
+     * one.
      */
     private suspend fun answerRequest(
         messageStreamId: String, keysStreamId: String,
@@ -683,15 +683,14 @@ class EpochKeyManager(
             }
             return
         }
-        // D14: a PAID gate hands out ONLY the current epoch — the history
-        // scope of a subscription is the future (fail-closed in the wiring).
-        val paidOnly = currentEpochOnly(messageStreamId)
+        // True only when the gate is unreadable — fail-closed in the wiring.
+        val currentOnly = currentEpochOnly(messageStreamId)
         val toWrap = mutex.withLock {
             val s = getState(messageStreamId)
             val covered = s.seenWraps[requestId] ?: emptySet<String>()
             s.epochs
                 .filterKeys { it !in covered }
-                .filterValues { it.epoch >= fromEpoch && (!paidOnly || it.epoch == s.currentEpoch) }
+                .filterValues { it.epoch >= fromEpoch && (!currentOnly || it.epoch == s.currentEpoch) }
                 .map { (keyId, e) -> Triple(keyId, e.keyHex, e.epoch) }
         }
         if (toWrap.isEmpty()) return
