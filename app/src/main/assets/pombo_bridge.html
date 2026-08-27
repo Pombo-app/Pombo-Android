@@ -892,12 +892,16 @@ const api = {
     // History via storage-node resend (last N) — returns everything in an array.
     // With `password`, sealed rows are opened during the drain (see
     // _sealedOpener) and come back as parsed objects.
+    // With `raw`, the SDK skips its validation pipeline: stored envelopes are
+    // NOT re-checked against the present gate state (which would erase
+    // ex-members' history) — the Kotlin side establishes authorship from
+    // meta.signer instead, so `raw` must always travel with `recoverSigner`.
     async resend(a) {
         if (!client) throw new Error('client not connected');
         const pwKey = a.password ? await api._pwKey(a.password) : null;
         const stream = await client.resend(
             { streamId: a.streamId, partition: a.partition },
-            { last: a.last || 50 }
+            a.raw ? { last: a.last || 50, raw: true } : { last: a.last || 50 }
         );
         const out = [];
         const opener = api._sealedOpener(pwKey);
@@ -935,7 +939,9 @@ const api = {
         const pwKey = a.password ? await api._pwKey(a.password) : null;
         const stream = await client.resend(
             { streamId: a.streamId, partition: a.partition },
-            { from: { timestamp: 0 }, to: { timestamp: a.before } }
+            a.raw
+                ? { from: { timestamp: 0 }, to: { timestamp: a.before }, raw: true }
+                : { from: { timestamp: 0 }, to: { timestamp: a.before } }
         );
         const all = [];
         const opener = api._sealedOpener(pwKey);
@@ -1677,7 +1683,6 @@ const api = {
         'function allow(address user)',
         'function allowBatch(address[] users)',
         'function revokeAllow(address user)',
-        'function join()',
         'function pay()',
         'function payWithPermit(uint256 permitValue, uint256 deadline, uint8 v, bytes32 r, bytes32 s)',
         'function ban(address user, bool eraseHistory)',
@@ -1933,11 +1938,6 @@ const api = {
         });
         return { ok: true };
     },
-
-    // { gate } — TOKEN/NFT gates: opt in to sticky membership (everMember).
-    // Optional by design — without it, selling the asset before ever joining
-    // forfeits the published history (§7.11).
-    async gateJoin(a) { return api._gateTx(a.gate, 'join', []); },
 
     // { gate } -> { ok, txHash, wrapped, approved } — pay one subscription
     // period (renewing early extends from the current end). WPOL-priced gates

@@ -2274,19 +2274,6 @@ class AppViewModel(app: Application) : AndroidViewModel(app), PomboBridge.Listen
         }
     }
 
-    /** Optional TOKEN/NFT membership registration (sticky everMember). */
-    fun gateEntryJoin() = viewModelScope.launch {
-        val entry = _gateEntry.value ?: return@launch
-        chainAction(
-            "Register membership",
-            "Registers your address on this channel's gate so your messages stay valid even after selling the asset."
-        ) {
-            runWithToast("Registering membership…", "Membership registered on-chain", "Registration failed") {
-                manager.gateJoin(entry.info.gateAddress)
-            }
-        }
-    }
-
     // ---- Create-form helpers (N-D token fields) ----
 
     suspend fun gateTokenMeta(token: String) = manager.gateTokenMeta(token)

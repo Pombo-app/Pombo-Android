@@ -90,8 +90,8 @@ class EpochKeyManager(
         /**
          * Addresses seen authoring a KEY_REQUEST (live or -4 history). Every
          * reader of a gated channel must request keys, so this enumerates
-         * members for TOKEN/NFT/PAID gates where join()/pay() bypasses the
-         * owner — the N-D no-indexer decision.
+         * members for TOKEN/NFT/PAID gates where holding or pay() bypasses
+         * the owner — no indexer, no event scan.
          */
         val seenRequesters = LinkedHashSet<String>()
         /** N-D weekly rotation timer (gated channels, admin-side). */
