@@ -143,6 +143,7 @@ import androidx.compose.material.icons.outlined.Campaign
 import androidx.compose.material.icons.outlined.Key
 import androidx.compose.material.icons.outlined.Lock
 import androidx.compose.material.icons.outlined.Public
+import androidx.compose.material.icons.outlined.Storage
 import androidx.compose.material.icons.outlined.People
 import androidx.compose.material.icons.outlined.VerifiedUser
 import androidx.compose.material.icons.outlined.Visibility
@@ -4140,6 +4141,7 @@ private fun ChannelSettingsSheet(vm: AppViewModel, channel: Channel, canModerate
                     null -> ChannelDetailsMain(vm, channel, canModerate, onOpenSub = { sub = it }, onDismiss = onDismiss)
                     ChannelSubPanel.MEMBERS -> ChannelMembersPanel(vm, channel, canModerate)
                     ChannelSubPanel.MODERATION -> ChannelModerationPanel(vm, channel, canModerate)
+                    ChannelSubPanel.STORAGE -> ChannelStoragePanel(vm, channel, canModerate)
                     ChannelSubPanel.DELETE -> ChannelDeletePanel(vm, channel, onDismiss)
                     ChannelSubPanel.DESTROY -> ChannelDestroyPanel(vm, channel, onDismiss)
                 }
@@ -4166,6 +4168,7 @@ private fun ChannelSettingsSheet(vm: AppViewModel, channel: Channel, canModerate
 private enum class ChannelSubPanel(val label: String) {
     MEMBERS("Members"),
     MODERATION("Moderation"),
+    STORAGE("Storage"),
     /** Local leave — the streams stay on-chain. */
     DELETE("Leave Channel"),
     /** On-chain delete of all three streams — irreversible for everyone. */
@@ -4489,13 +4492,6 @@ private fun ChannelDetailsMain(
         )
     }
 
-    // STORAGE flows inline under a separator on mobile. (Notifications is the
-    // pill at the top of this panel now, matching the web, not a row here.)
-    Spacer(Modifier.height(24.dp))
-    Box(Modifier.fillMaxWidth().height(1.dp).background(Color.White.copy(alpha = 0.05f)))
-    Spacer(Modifier.height(24.dp))
-    ChannelStoragePanel(vm, channel, canModerate)
-
     // Nav rows — the web's #channel-mobile-unified shows exactly three, gated by
     // channel type and permission (showMembersTab/showModerationTab/showDangerTab):
     //   Members   — native (closed / on-chain) channels only. Membership there
@@ -4517,6 +4513,10 @@ private fun ChannelDetailsMain(
         ChannelNavRow("Moderation", leadingIcon = Icons.Outlined.VerifiedUser) { onOpenSub(ChannelSubPanel.MODERATION) }
         Spacer(Modifier.height(8.dp))
     }
+    if (channel.type != "dm") {
+        ChannelNavRow("Storage", leadingIcon = Icons.Outlined.Storage) { onOpenSub(ChannelSubPanel.STORAGE) }
+        Spacer(Modifier.height(8.dp))
+    }
     if (isGated && canModerate) {
         // Key responder: THIS device keeps answering key requests for the
         // channel — foreground sweep plus the background worker.
@@ -4535,13 +4535,11 @@ private fun ChannelDetailsMain(
                 tint = Color.White.copy(alpha = 0.40f), modifier = Modifier.size(18.dp)
             )
             Spacer(Modifier.width(12.dp))
-            Column(Modifier.weight(1f)) {
-                Text("Key responder", color = Color.White.copy(alpha = 0.70f), fontSize = 14.sp)
-                Text(
-                    "This device answers key requests, even in the background",
-                    color = Color.White.copy(alpha = 0.30f), fontSize = 12.sp, lineHeight = 16.sp
-                )
-            }
+            Text(
+                "Background Key Responder", color = Color.White.copy(alpha = 0.70f),
+                fontSize = 14.sp, modifier = Modifier.weight(1f)
+            )
+            Spacer(Modifier.width(12.dp))
             Text(
                 if (responderOn) "ON" else "OFF",
                 color = if (responderOn) Color(0xFF34D399) else Color.White.copy(alpha = 0.30f),
@@ -4710,7 +4708,7 @@ private fun ChannelMembersPanel(vm: AppViewModel, channel: Channel, canModerate:
                     MemberLabel(addr, ensName, nicknames[lower], declaredNames[lower])
                     Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.padding(top = 2.dp)) {
                         if (isCreator) MemberBadge("Owner", Color(0xFFEAB308))
-                        else if (row.moderator) MemberBadge("Admin", Color(0xFFA855F7))
+                        else if (row.moderator) MemberBadge("Moderator", Color(0xFFA855F7))
                         // Paid gates: each subscriber's own clock (N-F). Rows
                         // passed the access filter, so the date is normally
                         // in the future.
@@ -5131,7 +5129,7 @@ private fun MemberKebab(
             ) {
                 Icon(Icons.Filled.VpnKey, contentDescription = null, tint = if (canGrant) purple else Color.White.copy(alpha = 0.70f), modifier = Modifier.size(16.dp))
                 Spacer(Modifier.width(8.dp))
-                Text("Admin", color = if (canGrant) purple else Color.White.copy(alpha = 0.70f), fontSize = 14.sp, modifier = Modifier.weight(1f))
+                Text("Moderator", color = if (canGrant) purple else Color.White.copy(alpha = 0.70f), fontSize = 14.sp, modifier = Modifier.weight(1f))
                 Spacer(Modifier.width(8.dp))
                 Text(if (canGrant) "ON" else "OFF", color = if (canGrant) purple else Color.White.copy(alpha = 0.30f), fontSize = 12.sp)
             }
