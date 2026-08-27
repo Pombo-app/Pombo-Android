@@ -4648,6 +4648,20 @@ private fun ChannelMembersPanel(vm: AppViewModel, channel: Channel, canModerate:
     val manualAddAllowed = channel.type != "gated" || gateMode == null || gateMode == GateModes.NONE
     val creatorAddr = (channel.createdBy ?: channel.messageStreamId.substringBefore('/')).lowercase()
 
+    // Names for the rows, in the app's order: ENS, contact nickname, the name
+    // published with their messages, address. The roster carries no name, so a
+    // member who never posted and is not a contact shows their address.
+    val contacts by vm.contacts.collectAsState()
+    val nicknames = remember(contacts) {
+        contacts.mapNotNull { c -> c.nickname?.let { c.address.lowercase() to it } }.toMap()
+    }
+    val messages by vm.messages.collectAsState()
+    val declaredNames = remember(messages) {
+        messages.mapNotNull { m ->
+            m.senderName?.takeIf { it.isNotBlank() }?.let { m.sender.lowercase() to it }
+        }.toMap()
+    }
+
     // ── CURRENT MEMBERS ─────────────────────────────────────────────
     Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
         Text(
@@ -4693,15 +4707,7 @@ private fun ChannelMembersPanel(vm: AppViewModel, channel: Channel, canModerate:
                 )
                 Spacer(Modifier.width(8.dp))
                 Column(Modifier.weight(1f)) {
-                    if (ensName != null) {
-                        Text(ensName, color = Color.White.copy(alpha = 0.85f), fontSize = 13.sp, maxLines = 1)
-                    } else {
-                        Text(
-                            "${addr.take(8)}...${addr.takeLast(6)}",
-                            color = Color.White.copy(alpha = 0.70f), fontSize = 12.sp,
-                            fontFamily = androidx.compose.ui.text.font.FontFamily.Monospace
-                        )
-                    }
+                    MemberLabel(addr, ensName, nicknames[lower], declaredNames[lower])
                     Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.padding(top = 2.dp)) {
                         if (isCreator) MemberBadge("Owner", Color(0xFFEAB308))
                         else if (row.moderator) MemberBadge("Admin", Color(0xFFA855F7))
@@ -4921,6 +4927,32 @@ private fun RefreshButton(onClick: () -> Unit) {
         "↻ Refresh", color = Color.White.copy(alpha = 0.60f), fontSize = 13.sp,
         modifier = Modifier.clickableNoRipple(onClick)
     )
+}
+
+/**
+ * How a person is named in the members and banned lists, in the app's own
+ * order: ENS name, then the local contact nickname, then the display name they
+ * publish with their messages, then the address in full. The address is not
+ * shortened here — in a list of members it is the identity, not a decoration,
+ * and a truncated one cannot be checked against anything.
+ */
+@Composable
+internal fun MemberLabel(
+    address: String,
+    ensName: String?,
+    nickname: String?,
+    declaredName: String?
+) {
+    val name = ensName ?: nickname ?: declaredName
+    if (name != null) {
+        Text(name, color = Color.White.copy(alpha = 0.85f), fontSize = 13.sp, maxLines = 1)
+    } else {
+        Text(
+            address,
+            color = Color.White.copy(alpha = 0.70f), fontSize = 10.sp,
+            fontFamily = androidx.compose.ui.text.font.FontFamily.Monospace
+        )
+    }
 }
 
 /** Role pill — Owner (yellow) / Admin (purple), color/20 fill + color text. */
@@ -5506,6 +5538,16 @@ private fun ChannelModerationPanel(vm: AppViewModel, channel: Channel, canModera
     var chainBanned by remember(channel.messageStreamId) { mutableStateOf<List<String>>(emptyList()) }
     var permissions by remember { mutableStateOf<List<com.pombo.android.core.GraphApi.StreamPermission>>(emptyList()) }
     var reloadKey by remember { mutableStateOf(0) }
+    val contacts by vm.contacts.collectAsState()
+    val nicknames = remember(contacts) {
+        contacts.mapNotNull { c -> c.nickname?.let { c.address.lowercase() to it } }.toMap()
+    }
+    val messages by vm.messages.collectAsState()
+    val declaredNames = remember(messages) {
+        messages.mapNotNull { m ->
+            m.senderName?.takeIf { it.isNotBlank() }?.let { m.sender.lowercase() to it }
+        }.toMap()
+    }
 
     LaunchedEffect(channel.messageStreamId, reloadKey) {
         chainBanned = if (channel.type == "gated") vm.gateBannedMembers() else emptyList()
@@ -5543,10 +5585,7 @@ private fun ChannelModerationPanel(vm: AppViewModel, channel: Channel, canModera
                 Avatar(addr, size = 28.dp, cornerRadiusFraction = 0.5, ensAvatarUrl = ensAvatars[addr])
                 Spacer(Modifier.width(10.dp))
                 Column(Modifier.weight(1f)) {
-                    Text(
-                        ensNames[addr] ?: shortAddress(addr),
-                        color = Color.White.copy(alpha = 0.80f), fontSize = 13.sp
-                    )
+                    MemberLabel(addr, ensNames[addr], nicknames[addr], declaredNames[addr])
                     Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.padding(top = 2.dp)) {
                         if (onChain) MemberBadge("Protocol", Color(0xFFF87171))
                         if (onChain && onClient) Spacer(Modifier.width(4.dp))
