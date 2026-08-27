@@ -3845,34 +3845,35 @@ private fun ExploreCard(
                 if (tags.isNotEmpty() || ch.authorMode != null) {
                     // Audience icon (never identity — both modes guarantee
                     // authorship to participants) rides centered above the
-                    // tag row, in the card-metadata corner.
-                    Column(
+                    // LAST tag, in the card-metadata corner.
+                    Row(
                         Modifier.align(Alignment.BottomEnd),
-                        horizontalAlignment = Alignment.CenterHorizontally
+                        horizontalArrangement = Arrangement.spacedBy(6.dp),
+                        verticalAlignment = Alignment.Bottom
                     ) {
-                        ch.authorMode?.let { mode ->
-                            Icon(
-                                if (mode == "members") Icons.Outlined.People else Icons.Outlined.Public,
-                                contentDescription = if (mode == "members")
-                                    "Authors visible to members only" else "Author on the wire",
-                                tint = Color.White.copy(alpha = 0.50f),
-                                modifier = Modifier.size(16.dp)
+                        val tagText: @Composable (String) -> Unit = { t ->
+                            Text(
+                                t,
+                                color = Color.White.copy(alpha = 0.50f), fontSize = 11.exp,
+                                fontWeight = FontWeight.Medium,
+                                modifier = Modifier
+                                    .background(Color.White.copy(alpha = 0.05f), RoundedCornerShape(4.dp))
+                                    .padding(horizontal = 6.dp, vertical = 4.dp)
                             )
-                            if (tags.isNotEmpty()) Spacer(Modifier.height(4.dp))
                         }
-                        if (tags.isNotEmpty()) {
-                            Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                                tags.forEach { t ->
-                                    Text(
-                                        t,
-                                        color = Color.White.copy(alpha = 0.50f), fontSize = 11.exp,
-                                        fontWeight = FontWeight.Medium,
-                                        modifier = Modifier
-                                            .background(Color.White.copy(alpha = 0.05f), RoundedCornerShape(4.dp))
-                                            .padding(horizontal = 6.dp, vertical = 4.dp)
-                                    )
-                                }
+                        tags.dropLast(1).forEach { tagText(it) }
+                        Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                            ch.authorMode?.let { mode ->
+                                Icon(
+                                    if (mode == "members") Icons.Outlined.People else Icons.Outlined.Public,
+                                    contentDescription = if (mode == "members")
+                                        "Authors visible to members only" else "Author on the wire",
+                                    tint = Color.White.copy(alpha = 0.50f),
+                                    modifier = Modifier.size(16.dp)
+                                )
+                                if (tags.isNotEmpty()) Spacer(Modifier.height(4.dp))
                             }
+                            tags.lastOrNull()?.let { tagText(it) }
                         }
                     }
                 }
