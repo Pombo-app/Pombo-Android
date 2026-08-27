@@ -152,10 +152,13 @@ object SyncMerge {
 
     /**
      * Union-merge of the epoch-key slice (web mergeEpochKeys). Entries are
-     * content-addressed (keyId → immutable key, epoch → immutable announce),
-     * so union is exact: base wins per entry — an adopted key must never
-     * regress — and currentEpoch only moves forward. Channels the channel
-     * merge dropped retire their keys with them.
+     * content-addressed (keyId → immutable key, epoch → immutable announce,
+     * requestId → immutable pending id), so union is exact: base wins per
+     * entry — an adopted key must never regress — and currentEpoch only moves
+     * forward. Pending request ids union so a v2 wrap answered later opens on
+     * every device of the account; helloEpochs union so a second device does
+     * not re-hello an epoch. Channels the channel merge dropped retire their
+     * keys with them.
      */
     private fun mergeEpochKeys(
         base: JSONObject?,
@@ -185,6 +188,14 @@ object SyncMerge {
             b.optJSONObject("announces")?.let { src -> src.keys().forEach { announces.put(it, src.get(it)) } }
             entry.put("announces", announces)
             entry.put("currentEpoch", maxOf(b.optInt("currentEpoch"), i.optInt("currentEpoch")))
+            val pendingRequests = JSONObject()
+            i.optJSONObject("pendingRequests")?.let { src -> src.keys().forEach { pendingRequests.put(it, src.get(it)) } }
+            b.optJSONObject("pendingRequests")?.let { src -> src.keys().forEach { pendingRequests.put(it, src.get(it)) } }
+            entry.put("pendingRequests", pendingRequests)
+            val helloEpochs = sortedSetOf<Int>()
+            i.optJSONArray("helloEpochs")?.let { src -> for (k in 0 until src.length()) helloEpochs.add(src.optInt(k)) }
+            b.optJSONArray("helloEpochs")?.let { src -> for (k in 0 until src.length()) helloEpochs.add(src.optInt(k)) }
+            entry.put("helloEpochs", JSONArray(helloEpochs.filter { it > 0 }))
             result.put(streamId, entry)
         }
         return result

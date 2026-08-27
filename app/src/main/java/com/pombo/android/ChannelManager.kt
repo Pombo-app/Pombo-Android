@@ -224,6 +224,51 @@ class ChannelManager(
                 Log.w(TAG, "gateInfo failed, answering current epoch only: ${e.message}")
                 true
             }
+        },
+        myPrivateKey = myPrivateKey,
+        publishRoster = { keysStreamId, data ->
+            val channel = channelByStream(keysStreamId) ?: throw IllegalStateException(
+                "Unknown channel for $keysStreamId — cannot publish roster")
+            val gate = channel.gateAddress ?: throw IllegalStateException(
+                "Gate address unknown for ${channel.messageStreamId} — cannot publish roster")
+            bridge.call("publishAsGate", JSONObject()
+                .put("streamId", keysStreamId)
+                .put("partition", StreamConstants.P_ROSTER)
+                .put("content", data)
+                .put("gateAddress", gate))
+        },
+        resendRoster = { keysStreamId ->
+            val entries = mutableListOf<com.pombo.android.core.EpochKeyManager.Entry>()
+            val gatedChannel = channelByStream(keysStreamId)?.takeIf { it.type == "gated" }
+            try {
+                val res = bridge.call("resend", JSONObject()
+                    .put("streamId", keysStreamId)
+                    .put("partition", StreamConstants.P_ROSTER)
+                    .put("last", 500)
+                    .put("recoverSigner", gatedChannel != null), 30_000)
+                val arr = res.optJSONArray("messages")
+                if (arr != null) for (i in 0 until arr.length()) {
+                    val entry = arr.optJSONObject(i) ?: continue
+                    val content = entry.opt("content") as? JSONObject ?: continue
+                    val meta = entry.optJSONObject("meta") ?: JSONObject()
+                    val publisher = if (gatedChannel != null) {
+                        gatedAuthor(gatedChannel, keysStreamId, meta) ?: continue
+                    } else meta.optString("publisherId").ifEmpty { null }
+                    entries.add(com.pombo.android.core.EpochKeyManager.Entry(
+                        content,
+                        publisher,
+                        meta.optLong("timestamp", 0L)))
+                }
+            } catch (e: kotlinx.coroutines.CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                Log.d(TAG, "roster resend empty (${e.message})")
+            }
+            entries
+        },
+        keysPartitionCount = { keysStreamId ->
+            bridge.call("getStreamInfo", JSONObject().put("streamId", keysStreamId))
+                .optJSONObject("metadata")?.optInt("partitions", 1) ?: 1
         }
     )
 
@@ -1202,7 +1247,16 @@ class ChannelManager(
         val channel = _current.value ?: return emptyList()
         if (channel.type == "gated") {
             val gate = channel.gateAddress ?: return channel.members.map { MemberRow(it) }
-            val candidates = (channel.members + epochKeys.seenRequesters(channel.messageStreamId))
+            // Roster (-4/P1) is the persistent, device-independent candidate
+            // source; seenRequesters stays as the fallback for channels
+            // created before the roster partition existed.
+            val roster = try {
+                val keysId = channel.keysStreamId.ifEmpty {
+                    StreamConstants.deriveKeysId(channel.messageStreamId)
+                }
+                epochKeys.rosterMembers(channel.messageStreamId, keysId).map { it.account }
+            } catch (e: Exception) { emptyList() }
+            val candidates = (channel.members + epochKeys.seenRequesters(channel.messageStreamId) + roster)
                 .map { it.lowercase() }.distinct()
             return try {
                 val res = bridge.call("gateMembers", JSONObject()

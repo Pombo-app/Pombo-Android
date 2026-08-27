@@ -102,6 +102,54 @@ class EpochKeyCryptoTest {
         assertFalse(EpochKeyCrypto.isEpochEnvelope(JSONObject().put("e", "aes-256-gcm").put("ct", "x").put("iv", "y")))
     }
 
+    // ---- Wrap v2 (ECIES to the STATIC account key, tag over requestId) ----
+    // Vectors: Pombo Web tests/vectors/gen_wrap_v2_vectors.mjs
+    // (docs/GATED-CHANNELS-wrap-v2-vectors.json)
+
+    private val v2AccountPriv = "0x59c6995e998f97a5a0044966f0945389dc9e86dae88c7a8412f4603b6b78690d"
+    private val v2Spk = "0x02ba5734d8f7091719471e7f7ed6b9df170dc70cc661ca05e688601ad984f068b0"
+    private val v2EpochKey = "0x4242424242424242424242424242424242424242424242424242424242424242"
+    private val v2RequestId = "a1b2c3d4e5f60718293a4b5c6d7e8f90"
+    private val v2KeyId = "3.deadbeef42"
+    private val v2Tag = "0xcdad7dad64d437644100796b2ed9b1fad92440e6a1d2a78b1f45b0eb5e3f1444"
+    private val v2Wrapped = JSONObject()
+        .put("epk", "0x02824398a01a2ecd3553aa833574b540fd7cbead68c1c25b0f47cde96f3322ddc2")
+        .put("iv", "AQIDBAUGBwgJCgsM")
+        .put("ct", "EFk19R38/LdMzrfLDAdTnwmf03rAFhns0Ya9XUn26EsgGjhYyzPGniq3WwzP0JxX")
+
+    @Test
+    fun `v2 wrap tag matches the web`() {
+        assertEquals(v2Tag, EpochKeyCrypto.computeWrapTagV2(v2RequestId, v2KeyId))
+        assertNotEquals(v2Tag, EpochKeyCrypto.computeWrapTagV2("other-request", v2KeyId))
+    }
+
+    @Test
+    fun `opens a web-produced v2 wrap with the account key`() {
+        assertEquals(v2EpochKey, EpochKeyCrypto.unwrapEpochKeyStatic(v2Wrapped, v2AccountPriv))
+    }
+
+    @Test
+    fun `android v2 wrap round-trips to the web account key`() {
+        val wrapped = EpochKeyCrypto.wrapEpochKeyToStatic(v2EpochKey, v2Spk)
+        assertEquals(v2EpochKey, EpochKeyCrypto.unwrapEpochKeyStatic(wrapped, v2AccountPriv))
+    }
+
+    @Test
+    fun `v1 and v2 wraps are domain-separated`() {
+        val v1 = EpochKeyCrypto.wrapEpochKey(v2EpochKey, v2Spk)
+        try {
+            EpochKeyCrypto.unwrapEpochKeyStatic(v1, v2AccountPriv)
+            throw AssertionError("a v1 wrap must never open through the v2 salt")
+        } catch (e: Exception) { /* expected: GCM tag failure */ }
+    }
+
+    @Test
+    fun `spk pins to the account address`() {
+        assertEquals("0x70997970c51812dc3a010c7d01b50e0d17dc79c8",
+            SealedSenderCrypto.pubkeyToAddress(v2Spk))
+        assertEquals(null, SealedSenderCrypto.pubkeyToAddress("0xdeadbeef"))
+    }
+
     // ---- Binary envelope (0x04, MEDIA_DATA frames and storage chunks) ----
 
     /** Sealed by the web's sealBinaryWithEpochKey with [epochKey] and [keyId]. */

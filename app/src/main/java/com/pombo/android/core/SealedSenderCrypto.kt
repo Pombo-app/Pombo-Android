@@ -232,6 +232,22 @@ object SealedSenderCrypto {
     }
 
     /**
+     * Address of a compressed secp256k1 public key (ethers computeAddress) —
+     * how a claimed pubkey is pinned to the account that signed the envelope
+     * carrying it. Lowercase 0x address, or null for a malformed key.
+     */
+    fun pubkeyToAddress(pubCompressedHex: String): String? {
+        return try {
+            val point = CURVE.curve.decodePoint(hexToBytes(pubCompressedHex)).normalize()
+            val uncompressed = point.getEncoded(false)
+            val addr = keccak256(uncompressed.copyOfRange(1, 65)).copyOfRange(12, 32)
+            "0x" + addr.joinToString("") { "%02x".format(it) }
+        } catch (e: Exception) {
+            null
+        }
+    }
+
+    /**
      * Standard public-key recovery (SEC 1 §4.1.6) from a 65-byte r‖s‖v
      * signature over `msgHash` — what ethers.recoverAddress does. Returns the
      * lowercase 0x address, or null when the signature does not recover.
