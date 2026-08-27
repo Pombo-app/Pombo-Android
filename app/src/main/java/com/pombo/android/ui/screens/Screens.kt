@@ -453,7 +453,7 @@ internal fun GateEntryDialog(vm: AppViewModel, entry: AppViewModel.GateEntry) {
                 val members = mode == "members"
                 Text(
                     if (members) "Authors visible to members only"
-                    else "Every message is publicly signed by its author",
+                    else "Every message is signed by its author on the wire",
                     color = if (members) Color.White.copy(alpha = 0.40f)
                     else Color(0xFFFBBF24).copy(alpha = 0.70f),
                     fontSize = 12.sp,
@@ -1711,39 +1711,6 @@ internal fun CreateChannelDialog(vm: AppViewModel, onDismiss: () -> Unit, onCrea
                         modifier = Modifier.padding(top = 6.dp)
                     )
 
-                    Spacer(Modifier.height(16.dp))
-                    SectionLabel("Classification")
-                    Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                        listOf("personal" to "Personal", "community" to "Community").forEach { (value, label) ->
-                            val active = classification == value
-                            Box(
-                                Modifier.weight(1f)
-                                    .background(
-                                        if (active) Color.White.copy(alpha = 0.10f) else Color.White.copy(alpha = 0.05f),
-                                        RoundedCornerShape(8.dp)
-                                    )
-                                    .border(
-                                        1.dp,
-                                        Color.White.copy(alpha = if (active) 0.10f else 0.05f),
-                                        RoundedCornerShape(8.dp)
-                                    )
-                                    .clickableNoRipple { classification = value }
-                                    .padding(vertical = 8.dp),
-                                contentAlignment = Alignment.Center
-                            ) {
-                                Text(
-                                    label,
-                                    color = if (active) Color.White else Color.White.copy(alpha = 0.50f),
-                                    fontSize = 12.sp, fontWeight = FontWeight.Medium
-                                )
-                            }
-                        }
-                    }
-                    Text(
-                        "For organizing your channels locally.",
-                        color = Color.White.copy(alpha = 0.30f), fontSize = 12.sp,
-                        modifier = Modifier.padding(top = 6.dp)
-                    )
                 }
 
                 // Author visibility applies to every gated variant (Closed
@@ -1754,7 +1721,7 @@ internal fun CreateChannelDialog(vm: AppViewModel, onDismiss: () -> Unit, onCrea
                     Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                         listOf(
                             Triple(false, "Members only", Icons.Outlined.People),
-                            Triple(true, "Everyone", Icons.Outlined.Public)
+                            Triple(true, "On the wire", Icons.Outlined.Public)
                         ).forEach { (value, label, icon) ->
                             val active = authorEveryone == value
                             val activeText = if (value) Color(0xFFFBBF24).copy(alpha = 0.90f) else Color.White
@@ -1789,7 +1756,10 @@ internal fun CreateChannelDialog(vm: AppViewModel, onDismiss: () -> Unit, onCrea
                         }
                     }
                     Text(
-                        "Who can see who wrote each message. Cannot be changed later.",
+                        if (authorEveryone)
+                            "Storage is protected from pollution. Every message exposes its author's account."
+                        else
+                            "Full author privacy. Removed members can pollute storage until you reset the key with a paid on-chain action.",
                         color = Color.White.copy(alpha = 0.30f), fontSize = 12.sp,
                         modifier = Modifier.padding(top = 6.dp)
                     )
@@ -1974,6 +1944,45 @@ internal fun CreateChannelDialog(vm: AppViewModel, onDismiss: () -> Unit, onCrea
                     listOf("1 day", "6 months", "1 year").forEach {
                         Text(it, color = Color.White.copy(alpha = 0.60f), fontSize = 10.sp)
                     }
+                }
+
+                // Classification: local-only organization, so it closes the page.
+                if (kind == ChannelKind.CLOSED || kind == ChannelKind.GATED || kind == ChannelKind.PAID) {
+                    Spacer(Modifier.height(20.dp))
+                    Box(Modifier.fillMaxWidth().height(1.dp).background(Color.White.copy(alpha = 0.05f)))
+                    Spacer(Modifier.height(16.dp))
+                    SectionLabel("Classification")
+                    Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        listOf("personal" to "Personal", "community" to "Community").forEach { (value, label) ->
+                            val active = classification == value
+                            Box(
+                                Modifier.weight(1f)
+                                    .background(
+                                        if (active) Color.White.copy(alpha = 0.10f) else Color.White.copy(alpha = 0.05f),
+                                        RoundedCornerShape(8.dp)
+                                    )
+                                    .border(
+                                        1.dp,
+                                        Color.White.copy(alpha = if (active) 0.10f else 0.05f),
+                                        RoundedCornerShape(8.dp)
+                                    )
+                                    .clickableNoRipple { classification = value }
+                                    .padding(vertical = 8.dp),
+                                contentAlignment = Alignment.Center
+                            ) {
+                                Text(
+                                    label,
+                                    color = if (active) Color.White else Color.White.copy(alpha = 0.50f),
+                                    fontSize = 12.sp, fontWeight = FontWeight.Medium
+                                )
+                            }
+                        }
+                    }
+                    Text(
+                        "For organizing your channels locally.",
+                        color = Color.White.copy(alpha = 0.30f), fontSize = 12.sp,
+                        modifier = Modifier.padding(top = 6.dp)
+                    )
                 }
 
                 Spacer(Modifier.height(24.dp))
