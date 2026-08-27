@@ -106,21 +106,10 @@ object StreamConstants {
     fun deriveAdminId(messageStreamId: String): String =
         messageStreamId.replace(Regex("-1$"), SUFFIX_ADMIN)
 
-    /**
-     * Inverse of [deriveEphemeralId]. Media signals and pieces arrive addressed
-     * to the ephemeral stream, but transfers are tracked by the channel's
-     * message stream id (the key everything else uses), so the routing has to
-     * map back. Works for DM inboxes too: `<addr>/Pombo-DM-2` -> `-DM-1`.
-     */
-    fun deriveMessageId(ephemeralStreamId: String): String =
-        ephemeralStreamId.replace(Regex("-2$"), SUFFIX_MESSAGE)
-
     fun deriveKeysId(messageStreamId: String): String =
         messageStreamId.replace(Regex("-1$"), SUFFIX_KEYS)
 
     fun isEphemeralStream(streamId: String): Boolean = streamId.endsWith(SUFFIX_EPHEMERAL)
-
-    fun isMessageStream(streamId: String): Boolean = streamId.endsWith(SUFFIX_MESSAGE)
 
     fun isKeysStream(streamId: String): Boolean = streamId.endsWith(SUFFIX_KEYS)
 }

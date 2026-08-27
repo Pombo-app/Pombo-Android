@@ -68,8 +68,8 @@ object ChainGuard {
         "createDMInbox",
         "repairDmInbox",
         // PomboGate transactions (N-C gated channels). Reads (gateCheckAccess,
-        // gateInfo, gateMembers, gateCanModerate, gateTokenMeta,
-        // gateTokenBalance, gatePaidUntil) are free eth_calls.
+        // gateInfo, gateMembers, gateTokenMeta, gateTokenBalance,
+        // gatePaidUntil) are free eth_calls.
         "gateCreate",
         "gateAllow",
         "gateAllowBatch",
