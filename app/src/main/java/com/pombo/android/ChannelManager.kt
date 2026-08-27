@@ -1346,7 +1346,11 @@ class ChannelManager(
             }
             epochKeys.rosterMembers(channel.messageStreamId, keysId).map { it.account }
         } catch (e: Exception) { emptyList() }
-        val candidates = (channel.members + epochKeys.seenRequesters(channel.messageStreamId) + roster)
+        // knownBanned: the ban drops them from `members` and the roster stops
+        // carrying them, so without it a banned address falls out of the
+        // candidate set and Moderation loses the entry it exists to show.
+        val candidates = (channel.members + channel.knownBanned +
+            epochKeys.seenRequesters(channel.messageStreamId) + roster)
             .map { it.lowercase() }.distinct()
         return try {
             val res = bridge.call("gateMembers", JSONObject()
@@ -1368,11 +1372,32 @@ class ChannelManager(
                     paidUntil = m.optLong("paidUntil", 0L)
                 ))
             }
+            rememberBanned(channel, out)
             out
         } catch (e: Exception) {
             Log.w(TAG, "gateMembers failed: ${e.message}")
             emptyList()
         }
+    }
+
+    /**
+     * Remember every banned address the gate reports, so it stays a candidate
+     * once the roster and the members cache have let go of it. Self-healing:
+     * bans made before this record existed stick the first time they are seen.
+     */
+    private fun rememberBanned(channel: Channel, flags: List<GateMemberFlags>) {
+        val known = channel.knownBanned.map { it.lowercase() }.toSet()
+        val fresh = flags.filter { it.banned }
+            .map { it.address.lowercase() }
+            .filterNot { it in known }
+        if (fresh.isEmpty()) return
+        val updated = _channels.value.find { it.messageStreamId == channel.messageStreamId }
+            ?.let { it.copy(knownBanned = (it.knownBanned + fresh).distinct()) } ?: return
+        _channels.value = _channels.value.map {
+            if (it.messageStreamId == updated.messageStreamId) updated else it
+        }
+        store.save(_channels.value)
+        if (_current.value?.messageStreamId == updated.messageStreamId) _current.value = updated
     }
 
     /** Addresses the GATE has banned (Moderation panel's protocol-level list). */
@@ -3098,7 +3123,8 @@ class ChannelManager(
             }
             val updated = channel.copy(
                 members = channel.members.filterNot { it.equals(addr, ignoreCase = true) },
-                rotatedForBanned = rotated
+                rotatedForBanned = rotated,
+                knownBanned = (channel.knownBanned + addr.lowercase()).distinct()
             )
             _channels.value = _channels.value.map { if (it.messageStreamId == updated.messageStreamId) updated else it }
             store.save(_channels.value)

@@ -43,6 +43,12 @@ data class Channel(
      * admin would rotate again on every open for the same ban.
      */
     val rotatedForBanned: List<String> = emptyList(),
+    /**
+     * Addresses banned from this device, kept as gate-read candidates: the ban
+     * drops them from [members] and the roster stops carrying them, so without
+     * this the Moderation list loses the one entry it exists to show.
+     */
+    val knownBanned: List<String> = emptyList(),
     val storageEnabled: Boolean = false,
     /** Which storage node holds the history: 'streamr' (Pombo cluster) or 'custom'. */
     val storageProvider: String = "streamr",
@@ -85,6 +91,7 @@ data class Channel(
         .put("password", password ?: JSONObject.NULL)
         .put("members", JSONArray(members))
         .put("rotatedForBanned", JSONArray(rotatedForBanned))
+        .put("knownBanned", JSONArray(knownBanned))
         .put("storageEnabled", storageEnabled)
         .put("storageProvider", storageProvider)
         .put("storageDays", storageDays ?: JSONObject.NULL)
@@ -107,6 +114,10 @@ data class Channel(
             o.optJSONArray("rotatedForBanned")?.let { arr ->
                 for (i in 0 until arr.length()) arr.optString(i)?.let { rotatedForBanned.add(it) }
             }
+            val knownBanned = mutableListOf<String>()
+            o.optJSONArray("knownBanned")?.let { arr ->
+                for (i in 0 until arr.length()) arr.optString(i)?.let { knownBanned.add(it) }
+            }
             return Channel(
                 messageStreamId = o.getString("messageStreamId"),
                 ephemeralStreamId = o.optString("ephemeralStreamId"),
@@ -126,6 +137,7 @@ data class Channel(
                 password = if (o.isNull("password")) null else o.optString("password").ifEmpty { null },
                 members = members,
                 rotatedForBanned = rotatedForBanned,
+                knownBanned = knownBanned,
                 storageEnabled = o.optBoolean("storageEnabled", false),
                 storageProvider = o.optString("storageProvider", "streamr").ifEmpty { "streamr" },
                 storageDays = if (o.isNull("storageDays")) null else o.optInt("storageDays"),
