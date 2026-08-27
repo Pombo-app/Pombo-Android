@@ -1129,12 +1129,12 @@ enum class ChannelKind(val id: String, val label: String, val blurb: String) {
     GATED(
         "gated", "Gated",
         "Access follows an on-chain asset: anyone holding the token or NFT can join, read and write. " +
-            "Selling the asset cuts new access; messages already published stay."
+            "Selling the asset cuts new access."
     ),
     PAID(
         "gated", "Paid",
         "Subscription channel: members pay a fixed price in an ERC-20 token for a period of access. " +
-            "Payments go directly to your wallet; renewing extends from the current end."
+            "Payments go in full, directly to your wallet."
     )
 }
 
