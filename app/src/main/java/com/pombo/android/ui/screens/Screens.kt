@@ -335,6 +335,18 @@ fun PomboApp(vm: AppViewModel) {
         // on-chain requirement and the pay() action instead of a toast.
         val gateEntry by vm.gateEntry.collectAsState()
         gateEntry?.let { entry -> GateEntryDialog(vm, entry) }
+
+        // Post-join local identity panel: an entry into a channel with no
+        // on-chain name (direct link, invite, gate entry) that did not ask
+        // for one. Shows over the opening channel, key request included.
+        val pendingIdentity by vm.pendingLocalIdentity.collectAsState()
+        pendingIdentity?.let { ch ->
+            LocalChannelIdentityDialog(
+                channel = ch,
+                onDismiss = vm::dismissLocalIdentity,
+                onSave = { name, cls -> vm.saveLocalIdentity(ch, name, cls) }
+            )
+        }
     }
 }
 
@@ -2555,9 +2567,11 @@ private fun ChipPicker(options: List<Pair<String, String>>, selected: String, on
 }
 
 @Composable
-internal fun JoinChannelDialog(onDismiss: () -> Unit, onJoin: (String, String?) -> Unit) {
+internal fun JoinChannelDialog(onDismiss: () -> Unit, onJoin: (String, String?, String?, String?) -> Unit) {
     var id by remember { mutableStateOf("") }
     var password by remember { mutableStateOf("") }
+    var localName by remember { mutableStateOf("") }
+    var classification by remember { mutableStateOf("personal") }
 
     AlertDialog(
         onDismissRequest = onDismiss,
@@ -2586,14 +2600,115 @@ internal fun JoinChannelDialog(onDismiss: () -> Unit, onJoin: (String, String?) 
                     visualTransformation = PasswordVisualTransformation(),
                     colors = pomboFieldColors(), modifier = Modifier.fillMaxWidth()
                 )
+                Spacer(Modifier.height(12.dp))
+                OutlinedTextField(
+                    value = localName, onValueChange = { localName = it },
+                    label = { Text("Local name (optional)") }, colors = pomboFieldColors(),
+                    modifier = Modifier.fillMaxWidth()
+                )
+                Text(
+                    "Stored locally only. Channels with a public name keep it.",
+                    color = Color.White.copy(alpha = 0.30f), fontSize = 11.sp,
+                    modifier = Modifier.padding(top = 4.dp)
+                )
+                Spacer(Modifier.height(12.dp))
+                ClassificationChips(classification) { classification = it }
             }
         },
         confirmButton = {
-            TextButton(onClick = { onJoin(id, password.ifEmpty { null }) }, enabled = id.isNotBlank()) {
+            TextButton(
+                onClick = { onJoin(id, password.ifEmpty { null }, localName.trim().ifEmpty { null }, classification) },
+                enabled = id.isNotBlank()
+            ) {
                 Text("Join", color = if (id.isNotBlank()) PomboColors.Accent else PomboColors.TextDim, fontWeight = FontWeight.Bold)
             }
         },
         dismissButton = { TextButton(onClick = onDismiss) { Text("Cancel", color = PomboColors.TextDim) } }
+    )
+}
+
+/** Personal/Community selector shared by the join dialog and the local identity panel. */
+@Composable
+internal fun ClassificationChips(selected: String, onSelect: (String) -> Unit) {
+    Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+        listOf("personal" to "Personal", "community" to "Community").forEach { (value, label) ->
+            val active = selected == value
+            Box(
+                Modifier.weight(1f)
+                    .background(
+                        if (active) Color.White.copy(alpha = 0.10f) else Color.White.copy(alpha = 0.05f),
+                        RoundedCornerShape(8.dp)
+                    )
+                    .border(
+                        1.dp,
+                        Color.White.copy(alpha = if (active) 0.10f else 0.05f),
+                        RoundedCornerShape(8.dp)
+                    )
+                    .clickableNoRipple { onSelect(value) }
+                    .padding(vertical = 8.dp),
+                contentAlignment = Alignment.Center
+            ) {
+                Text(
+                    label,
+                    color = if (active) Color.White else Color.White.copy(alpha = 0.50f),
+                    fontSize = 12.sp, fontWeight = FontWeight.Medium
+                )
+            }
+        }
+    }
+}
+
+/**
+ * Post-join panel for a channel with no on-chain name (web: "Name This
+ * Channel" mode of the join-closed modal). Skipping keeps the ID-derived or
+ * invite-suggested name; both are editable later in Channel Details.
+ */
+@Composable
+internal fun LocalChannelIdentityDialog(
+    channel: Channel,
+    onDismiss: () -> Unit,
+    onSave: (String, String) -> Unit
+) {
+    var name by remember(channel.messageStreamId) { mutableStateOf(channel.name) }
+    var classification by remember(channel.messageStreamId) {
+        mutableStateOf(channel.classification ?: "personal")
+    }
+
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        modifier = Modifier.border(1.dp, PomboColors.Border, RoundedCornerShape(16.dp)),
+        shape = RoundedCornerShape(16.dp),
+        containerColor = PomboColors.Surface,
+        titleContentColor = PomboColors.Text,
+        textContentColor = PomboColors.Text,
+        title = { Text("Name This Channel") },
+        text = {
+            Column {
+                Text(
+                    "This channel has no public name. Give it one for your devices.",
+                    color = PomboColors.TextDim, fontSize = 12.sp
+                )
+                Spacer(Modifier.height(8.dp))
+                OutlinedTextField(
+                    value = name, onValueChange = { name = it },
+                    label = { Text("Channel name") }, colors = pomboFieldColors(),
+                    modifier = Modifier.fillMaxWidth()
+                )
+                Text(
+                    "This name is stored locally only",
+                    color = Color.White.copy(alpha = 0.30f), fontSize = 11.sp,
+                    modifier = Modifier.padding(top = 4.dp)
+                )
+                Spacer(Modifier.height(12.dp))
+                ClassificationChips(classification) { classification = it }
+            }
+        },
+        confirmButton = {
+            TextButton(onClick = { onSave(name, classification) }, enabled = name.isNotBlank()) {
+                Text("Save", color = if (name.isNotBlank()) PomboColors.Accent else PomboColors.TextDim, fontWeight = FontWeight.Bold)
+            }
+        },
+        dismissButton = { TextButton(onClick = onDismiss) { Text("Skip", color = PomboColors.TextDim) } }
     )
 }
 
@@ -4068,6 +4183,10 @@ private fun ChannelDetailsMain(
     var editName by remember(channel.name) { mutableStateOf(channel.name) }
     var editDesc by remember(channel.description) { mutableStateOf(channel.description) }
     val busy by vm.busy.collectAsState()
+    // A member of a channel whose name never went on-chain (hidden exposure)
+    // renames locally, like a DM nickname. Name only — the description stays
+    // the owner's.
+    val memberLocalRename = channel.type != "dm" && !canModerate && channel.exposure != "visible"
     // Picked photo goes through the crop dialog first (web crop modal): drag
     // to frame, pinch/slider to zoom, and only the confirmed 512² is published.
     var cropUri by remember { mutableStateOf<android.net.Uri?>(null) }
@@ -4185,10 +4304,11 @@ private fun ChannelDetailsMain(
                     channel.name, color = Color.White.copy(alpha = 0.90f),
                     fontSize = 20.sp, fontWeight = FontWeight.SemiBold, maxLines = 1
                 )
-                // Web canEditName = (type === 'dm' || canDelete) && !preview.
-                // A DM's name is a local nickname, so it is always yours to
-                // change even though you have no permissions on the stream.
-                val canEditName = channel.type == "dm" || canModerate
+                // Web canEditName = (type === 'dm' || canDelete || no
+                // on-chain name) && !preview. A DM's name is a local
+                // nickname, so it is always yours to change even though you
+                // have no permissions on the stream.
+                val canEditName = channel.type == "dm" || canModerate || memberLocalRename
                 if (canEditName) {
                     Spacer(Modifier.width(8.dp))
                     Icon(
@@ -4219,8 +4339,16 @@ private fun ChannelDetailsMain(
     if (editing) {
         // Web saveChannelName: only non-DM edits touch the description and
         // the chain. A DM's name is a local nickname — no description, no
-        // on-chain write, no gas caveat.
-        if (channel.type != "dm") {
+        // on-chain write, no gas caveat. A member's local rename is the same
+        // deal, and the hint replaces the gas warning.
+        if (memberLocalRename) {
+            Spacer(Modifier.height(6.dp))
+            Text(
+                "This name is stored locally only",
+                color = Color.White.copy(alpha = 0.30f), fontSize = 12.sp
+            )
+        }
+        if (channel.type != "dm" && !memberLocalRename) {
             Spacer(Modifier.height(20.dp))
             SectionLabel("Description")
             OutlinedTextField(
@@ -4230,18 +4358,22 @@ private fun ChannelDetailsMain(
                 textStyle = androidx.compose.ui.text.TextStyle(fontSize = 14.sp, color = PomboColors.Text),
                 colors = pomboFieldColors(), modifier = Modifier.fillMaxWidth()
             )
-            Spacer(Modifier.height(10.dp))
-            // Gas warning — the web shows the same caveat before an on-chain edit.
-            Row(
-                Modifier.fillMaxWidth()
-                    .background(Color(0xFFF59E0B).copy(alpha = 0.05f), RoundedCornerShape(12.dp))
-                    .border(1.dp, Color(0xFFF59E0B).copy(alpha = 0.10f), RoundedCornerShape(12.dp))
-                    .padding(12.dp)
-            ) {
-                Text(
-                    "Saving writes the stream metadata on-chain and costs gas.",
-                    color = Color(0xFFF59E0B).copy(alpha = 0.80f), fontSize = 12.sp
-                )
+            // Gas warning — the web shows the same caveat before an on-chain
+            // edit. Hidden channels save locally (updateChannelMetadata skips
+            // the chain), so no caveat there.
+            if (channel.exposure == "visible") {
+                Spacer(Modifier.height(10.dp))
+                Row(
+                    Modifier.fillMaxWidth()
+                        .background(Color(0xFFF59E0B).copy(alpha = 0.05f), RoundedCornerShape(12.dp))
+                        .border(1.dp, Color(0xFFF59E0B).copy(alpha = 0.10f), RoundedCornerShape(12.dp))
+                        .padding(12.dp)
+                ) {
+                    Text(
+                        "Saving writes the stream metadata on-chain and costs gas.",
+                        color = Color(0xFFF59E0B).copy(alpha = 0.80f), fontSize = 12.sp
+                    )
+                }
             }
         }
         Spacer(Modifier.height(10.dp))
@@ -4251,8 +4383,11 @@ private fun ChannelDetailsMain(
                     .background(PomboColors.Accent, RoundedCornerShape(8.dp))
                     .clickableNoRipple {
                         if (!busy) {
-                            if (channel.type == "dm") vm.renameDm(channel, editName)
-                            else vm.updateChannelMetadata(editName, editDesc)
+                            when {
+                                channel.type == "dm" -> vm.renameDm(channel, editName)
+                                memberLocalRename -> vm.renameChannelLocal(channel, editName)
+                                else -> vm.updateChannelMetadata(editName, editDesc)
+                            }
                             editing = false
                         }
                     }

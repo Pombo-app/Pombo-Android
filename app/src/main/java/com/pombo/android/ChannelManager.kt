@@ -569,6 +569,37 @@ class ChannelManager(
     private val _isPreview = MutableStateFlow(false)
     val isPreview: StateFlow<Boolean> = _isPreview.asStateFlow()
 
+    /**
+     * A just-joined channel without an on-chain name whose entry flow did not
+     * ask the user for one: the UI offers the local name + classification
+     * panel over the opening channel. Cleared on save or dismiss.
+     */
+    private val _pendingLocalIdentity = MutableStateFlow<Channel?>(null)
+    val pendingLocalIdentity: StateFlow<Channel?> = _pendingLocalIdentity.asStateFlow()
+
+    fun dismissLocalIdentity() { _pendingLocalIdentity.value = null }
+
+    /**
+     * Local name + classification write for a joined channel. Never touches
+     * the chain; blank name keeps the current one. Propagated by device sync
+     * like a DM nickname.
+     */
+    fun setLocalChannelIdentity(streamId: String, name: String?, classification: String?) {
+        _pendingLocalIdentity.value = null
+        val trimmed = name?.trim()?.takeIf { it.isNotEmpty() }
+        _channels.value = _channels.value.map { ch ->
+            if (ch.messageStreamId == streamId) ch.copy(
+                name = trimmed ?: ch.name,
+                classification = classification ?: ch.classification
+            ) else ch
+        }
+        store.save(_channels.value)
+        if (_current.value?.messageStreamId == streamId) {
+            _current.value = _channels.value.find { it.messageStreamId == streamId } ?: _current.value
+        }
+        onLocalStateChanged()
+    }
+
     private val _messages = MutableStateFlow<List<UiMessage>>(emptyList())
     val messages: StateFlow<List<UiMessage>> = _messages.asStateFlow()
 
@@ -1220,6 +1251,9 @@ class ChannelManager(
         _channels.value = _channels.value.map { if (it.messageStreamId == updated.messageStreamId) updated else it }
         store.save(_channels.value)
         _current.value = updated
+        // Renames ride the channels slice of device sync (like a DM's) — the
+        // push needs scheduling, not just the local save.
+        onLocalStateChanged()
     }
 
     /**
@@ -2135,7 +2169,13 @@ class ChannelManager(
     }
 
     /** channels.js joinChannel flow: permissions -> type -> password (fail-closed). */
-    suspend fun joinChannel(input: String, password: String? = null): Channel {
+    suspend fun joinChannel(
+        input: String,
+        password: String? = null,
+        localName: String? = null,
+        classification: String? = null,
+        named: Boolean = false
+    ): Channel {
         val messageStreamId = input.trim().let {
             if (it.endsWith(StreamConstants.SUFFIX_MESSAGE)) it else it + StreamConstants.SUFFIX_MESSAGE
         }
@@ -2152,15 +2192,18 @@ class ChannelManager(
         var descriptionMeta = ""
         var gateAddress: String? = null
         var metaAuthorMode: String? = null
+        var netNamed = false
+        var metaRead = false
         try {
             val info = bridge.call("getStreamInfo", JSONObject().put("streamId", messageStreamId))
+            metaRead = true
             val desc = info.optJSONObject("metadata")?.optString("description") ?: ""
             if (desc.isNotEmpty()) {
                 val meta = JSONObject(desc)
                 val app = meta.optString("a").ifEmpty { meta.optString("app") }
                 if (app == "pombo") {
                     type = meta.optString("t").ifEmpty { meta.optString("type") }.ifEmpty { null }
-                    meta.optString("n").ifEmpty { null }?.let { if (it != "null") name = it }
+                    meta.optString("n").ifEmpty { null }?.let { if (it != "null") { name = it; netNamed = true } }
                     exposure = meta.optString("e", "hidden")
                     descriptionMeta = meta.optString("d", "")
                     gateAddress = meta.optString("g").lowercase()
@@ -2172,6 +2215,10 @@ class ChannelManager(
                 }
             }
         } catch (e: Exception) { /* metadata is optional */ }
+
+        // The on-chain name is authoritative; a user-typed or invite-suggested
+        // name only fills the hidden-channel case (metadata `n` null).
+        if (!netNamed) localName?.trim()?.takeIf { it.isNotEmpty() }?.let { name = it }
 
         // Gated (N-C): stream permissions belong to the gate clone, never to
         // members — the join gate is the CONTRACT. One cached eth_call.
@@ -2216,10 +2263,15 @@ class ChannelManager(
             password = if (resolvedType == "password") password else null,
             exposure = exposure,
             description = descriptionMeta,
+            classification = classification,
             readOnly = !canPublish && canSubscribe,
             writeOnly = canPublish && !canSubscribe
         )
         addChannel(channel)
+        // Entry into a channel with no on-chain name and no user-typed one:
+        // offer the local name + classification panel over the opening
+        // channel. Unreadable metadata proves nothing — no ask (web parity).
+        if (metaRead && !netNamed && !named) _pendingLocalIdentity.value = channel
         return channel
     }
 
