@@ -5652,9 +5652,24 @@ class ChannelManager(
             val membersOnly = channel.authorMode == "members" && !isAdminStream
             var sharedKeyHex: String? = null
             if (membersOnly) {
-                val pub = epochKeys.publishKeyFor(channel.messageStreamId)
-                    ?: throw IllegalStateException(
-                        "No publish key for ${channel.messageStreamId} — cannot publish on a Members-only channel (waiting for PUB_WRAP)")
+                var pub = epochKeys.publishKeyFor(channel.messageStreamId)
+                if (pub == null) {
+                    // A member can hold the epoch key (reads decrypt fine)
+                    // while the PUB_WRAP never arrived — the epoch-gated
+                    // recovery below never runs in that state, so the missing
+                    // publish key gets its own one-shot attempt. The wrap
+                    // arrives asynchronously: this send may still fail, but
+                    // the request is now in flight for the retry.
+                    epochKeys.ensureChannelKeys(
+                        channel.messageStreamId, keysId,
+                        channel.storageDays ?: 180,
+                        allowMint = System.currentTimeMillis() - channel.createdAt < 3_600_000,
+                        memberCount = channel.members.size,
+                        gated = channel.type == "gated")
+                    pub = epochKeys.publishKeyFor(channel.messageStreamId)
+                }
+                if (pub == null) throw IllegalStateException(
+                    "No publish key for ${channel.messageStreamId} — cannot publish on a Members-only channel (waiting for PUB_WRAP)")
                 val auth = epochKeys.authorshipFor(channel.messageStreamId)
                     ?: throw IllegalStateException("No wallet available to bind the channel pseudonym")
                 clean = com.pombo.android.core.Authorship.seal(
