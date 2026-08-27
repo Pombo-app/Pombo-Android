@@ -3815,7 +3815,7 @@ private fun ExploreCard(
         // corner at the same height — one row of card height instead of two,
         // and no orphaned lone badge. Subscribe = recurring (accent-tinted
         // verb); Hold = mere possession, "in your wallet" = "you pay nothing".
-        if (ch.gateVerb != null || tags.isNotEmpty()) {
+        if (ch.gateVerb != null || tags.isNotEmpty() || ch.authorMode != null) {
             Spacer(Modifier.height(6.dp))
             Box(Modifier.fillMaxWidth()) {
                 ch.gateVerb?.let { verb ->
@@ -3840,38 +3840,39 @@ private fun ExploreCard(
                             ch.gateQualifier ?: "",
                             color = Color.White.copy(alpha = 0.40f), fontSize = 11.exp
                         )
-                        // Author-visibility AUDIENCE icon (never identity —
-                        // both modes guarantee authorship to participants):
-                        // group = members only; globe = everyone, amber
-                        // because "publicly attributable forever" is what a
-                        // buyer must notice before entering.
+                    }
+                }
+                if (tags.isNotEmpty() || ch.authorMode != null) {
+                    // Audience icon (never identity — both modes guarantee
+                    // authorship to participants) rides centered above the
+                    // tag row, in the card-metadata corner.
+                    Column(
+                        Modifier.align(Alignment.BottomEnd),
+                        horizontalAlignment = Alignment.CenterHorizontally
+                    ) {
                         ch.authorMode?.let { mode ->
-                            Spacer(Modifier.height(3.dp))
                             Icon(
                                 if (mode == "members") Icons.Outlined.People else Icons.Outlined.Public,
                                 contentDescription = if (mode == "members")
-                                    "Authors visible to members only" else "Authors visible to everyone",
-                                tint = if (mode == "members") Color.White.copy(alpha = 0.60f)
-                                    else Color(0xFFFBBF24).copy(alpha = 0.70f),
-                                modifier = Modifier.size(14.dp)
+                                    "Authors visible to members only" else "Author on the wire",
+                                tint = Color.White.copy(alpha = 0.50f),
+                                modifier = Modifier.size(16.dp)
                             )
+                            if (tags.isNotEmpty()) Spacer(Modifier.height(4.dp))
                         }
-                    }
-                }
-                if (tags.isNotEmpty()) {
-                    Row(
-                        Modifier.align(Alignment.BottomEnd),
-                        horizontalArrangement = Arrangement.spacedBy(6.dp)
-                    ) {
-                        tags.forEach { t ->
-                            Text(
-                                t,
-                                color = Color.White.copy(alpha = 0.50f), fontSize = 11.exp,
-                                fontWeight = FontWeight.Medium,
-                                modifier = Modifier
-                                    .background(Color.White.copy(alpha = 0.05f), RoundedCornerShape(4.dp))
-                                    .padding(horizontal = 6.dp, vertical = 4.dp)
-                            )
+                        if (tags.isNotEmpty()) {
+                            Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                                tags.forEach { t ->
+                                    Text(
+                                        t,
+                                        color = Color.White.copy(alpha = 0.50f), fontSize = 11.exp,
+                                        fontWeight = FontWeight.Medium,
+                                        modifier = Modifier
+                                            .background(Color.White.copy(alpha = 0.05f), RoundedCornerShape(4.dp))
+                                            .padding(horizontal = 6.dp, vertical = 4.dp)
+                                    )
+                                }
+                            }
                         }
                     }
                 }
