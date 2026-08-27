@@ -124,6 +124,34 @@ class SettingsStore(context: Context) {
             .apply()
 
     /**
+     * Gated channels this DEVICE keeps answering key requests for (the owner
+     * key-responder). Local-only on purpose: syncing it would surprise-drain
+     * every device of the account — serving keys is a duty of the device the
+     * owner chose, not of the account. Each entry carries everything a
+     * headless sweep needs (the bridge-owned channel map does not exist in a
+     * dead process): m = messageStreamId, k = keysStreamId, g = gateAddress,
+     * tag = the channel's k-anonymous push tag.
+     */
+    var keyResponderChannels: List<KeyResponderEntry>
+        get() = try {
+            val arr = org.json.JSONArray(prefs.getString(scoped(KEY_RESPONDER), null) ?: "[]")
+            (0 until arr.length()).mapNotNull { i ->
+                val o = arr.optJSONObject(i) ?: return@mapNotNull null
+                val m = o.optString("m").ifEmpty { return@mapNotNull null }
+                KeyResponderEntry(m, o.optString("k"), o.optString("g"), o.optString("tag"))
+            }
+        } catch (e: Exception) {
+            emptyList()
+        }
+        set(value) = prefs.edit()
+            .putString(scoped(KEY_RESPONDER), org.json.JSONArray(value.map { e ->
+                org.json.JSONObject()
+                    .put("m", e.messageStreamId).put("k", e.keysStreamId)
+                    .put("g", e.gateAddress).put("tag", e.tag)
+            }).toString())
+            .apply()
+
+    /**
      * How eagerly cross-device sync runs (Settings → Account). Per account,
      * because "how my data moves between my devices" is a property of the
      * account, not of this handset.
@@ -179,8 +207,17 @@ class SettingsStore(context: Context) {
         const val KEY_RPC_PRESET = "rpc_preset"
         const val KEY_RPC_CUSTOM = "rpc_custom_url"
         const val KEY_SYNC_MODE = "sync_mode"
+        const val KEY_RESPONDER = "key_responder_channels"
     }
 }
+
+/** One channel this device answers key requests for. */
+data class KeyResponderEntry(
+    val messageStreamId: String,
+    val keysStreamId: String,
+    val gateAddress: String,
+    val tag: String
+)
 
 /**
  * When cross-device sync is allowed to run by itself.

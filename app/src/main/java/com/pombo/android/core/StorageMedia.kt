@@ -405,6 +405,10 @@ class StorageMedia(
         /** Gated channel: the clone address — chunks and warm-up pings publish
          *  through it (ERC-1271), and verify matches rows against it. */
         gateAddress: String? = null,
+        /** Members-only channel: chunks publish under the SHARED key instead
+         *  of the clone — the clone path would stamp the uploader's account
+         *  onto every stored chunk. */
+        sharedPublishKeyHex: String? = null,
         messageId: String? = null, transferId: String? = null
     ): SendResult {
         if (source.size <= 0L) throw IllegalStateException("File is empty")
@@ -528,11 +532,13 @@ class StorageMedia(
             } else null
             val publishIdentityPk = when {
                 chunkIdentityPk != null -> chunkIdentityPk
+                sharedPublishKeyHex != null -> sharedPublishKeyHex
                 channelEphemeral -> channelEntry(messageStreamId).identityPk
                 else -> null
             }
             val verifyPublisher = when {
                 chunkIdentityPk != null -> EthereumSigner.address(chunkIdentityPk)
+                sharedPublishKeyHex != null -> EthereumSigner.address(sharedPublishKeyHex)
                 channelEphemeral -> channelEntry(messageStreamId).publisherId.lowercase()
                 gateAddress != null -> gateAddress.lowercase()
                 else -> null

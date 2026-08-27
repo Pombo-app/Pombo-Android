@@ -54,7 +54,9 @@ object GraphApi {
         /** Streamr guarantees the address prefixing the stream ID owns it. */
         val createdBy: String,
         /** Gated (N-C): the PomboGate clone from metadata `g`, lowercase. */
-        val gateAddress: String? = null
+        val gateAddress: String? = null,
+        /** Author visibility from metadata `m` (1 = Members only). */
+        val authorMode: String? = null
     )
 
     private suspend fun query(cacheKey: String, gql: String): JSONObject? {
@@ -118,7 +120,10 @@ object GraphApi {
             updatedAt = updatedAt * 1000,
             createdBy = streamId.substringBefore('/'),
             gateAddress = meta.str("g").lowercase()
-                .takeIf { Regex("^0x[0-9a-f]{40}$").matches(it) }
+                .takeIf { Regex("^0x[0-9a-f]{40}$").matches(it) },
+            authorMode = if (meta.str("t") == "gated") {
+                if (meta.optInt("m") == 1) "members" else "everyone"
+            } else null
         )
     }
 

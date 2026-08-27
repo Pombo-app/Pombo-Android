@@ -140,6 +140,7 @@ import androidx.compose.material.icons.outlined.Notifications
 import androidx.compose.material.icons.filled.Notifications
 import androidx.compose.material.icons.outlined.FileUpload
 import androidx.compose.material.icons.outlined.Campaign
+import androidx.compose.material.icons.outlined.Key
 import androidx.compose.material.icons.outlined.Lock
 import androidx.compose.material.icons.outlined.Public
 import androidx.compose.material.icons.outlined.People
@@ -443,6 +444,21 @@ internal fun GateEntryDialog(vm: AppViewModel, entry: AppViewModel.GateEntry) {
                 Spacer(Modifier.height(16.dp))
                 Text(text, color = tone, fontSize = 14.sp,
                     textAlign = androidx.compose.ui.text.style.TextAlign.Center)
+            }
+
+            // Author visibility is a privacy promise the user must see before
+            // paying or entering (web: gate-entry-authors).
+            entry.authorMode?.let { mode ->
+                Spacer(Modifier.height(10.dp))
+                val members = mode == "members"
+                Text(
+                    if (members) "Authors visible to members only"
+                    else "Every message is signed by its author on the wire",
+                    color = if (members) Color.White.copy(alpha = 0.40f)
+                    else Color(0xFFFBBF24).copy(alpha = 0.70f),
+                    fontSize = 12.sp,
+                    textAlign = androidx.compose.ui.text.style.TextAlign.Center
+                )
             }
 
             if (notes.isNotEmpty()) {
@@ -1113,12 +1129,12 @@ enum class ChannelKind(val id: String, val label: String, val blurb: String) {
     GATED(
         "gated", "Gated",
         "Access follows an on-chain asset: anyone holding the token or NFT can join, read and write. " +
-            "Selling the asset cuts new access; messages already published stay."
+            "Selling the asset cuts new access."
     ),
     PAID(
         "gated", "Paid",
         "Subscription channel: members pay a fixed price in an ERC-20 token for a period of access. " +
-            "Payments go directly to your wallet; renewing extends from the current end."
+            "Payments go in full, directly to your wallet."
     )
 }
 
@@ -1181,7 +1197,9 @@ data class NewChannel(
     val gateToken: String? = null,
     val gateMinBalance: String? = null,
     val gatePrice: String? = null,
-    val gateDurationSeconds: Long? = null
+    val gateDurationSeconds: Long? = null,
+    /** Author visibility ('members' | 'everyone'), IMMUTABLE post-creation. */
+    val authorMode: String = "members"
 )
 
 /** Quick-pick token chips (N-D): presets + Custom. */
@@ -1223,6 +1241,9 @@ private fun TokenPresetRow(
 @Composable
 internal fun CreateChannelDialog(vm: AppViewModel, onDismiss: () -> Unit, onCreate: (NewChannel) -> Unit) {
     var kind by remember { mutableStateOf(ChannelKind.OPEN) }
+    // Author visibility (gated variants; immutable post-creation): false =
+    // Members only (the default), true = Everyone.
+    var authorEveryone by remember { mutableStateOf(false) }
     var name by remember { mutableStateOf("") }
     var password by remember { mutableStateOf("") }
     var visible by remember { mutableStateOf(false) }
@@ -1286,7 +1307,8 @@ internal fun CreateChannelDialog(vm: AppViewModel, onDismiss: () -> Unit, onCrea
         members = members,
         storageProvider = storageProvider,
         customStorageAddress = customStorage.trim().ifBlank { null },
-        storageDays = storageDays.toInt()
+        storageDays = storageDays.toInt(),
+        authorMode = if (authorEveryone) "everyone" else "members"
     )
 
     // Low-balance confirm fires AFTER async gate resolution — remember the
@@ -1689,12 +1711,21 @@ internal fun CreateChannelDialog(vm: AppViewModel, onDismiss: () -> Unit, onCrea
                         modifier = Modifier.padding(top = 6.dp)
                     )
 
+                }
+
+                // Author visibility applies to every gated variant (Closed
+                // included) and is IMMUTABLE after creation.
+                if (kind == ChannelKind.CLOSED || kind == ChannelKind.GATED || kind == ChannelKind.PAID) {
                     Spacer(Modifier.height(16.dp))
-                    SectionLabel("Classification")
+                    SectionLabel("Identity on the wire")
                     Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                        listOf("personal" to "Personal", "community" to "Community").forEach { (value, label) ->
-                            val active = classification == value
-                            Box(
+                        listOf(
+                            Triple(false, "Sealed", Icons.Outlined.People),
+                            Triple(true, "Visible", Icons.Outlined.Public)
+                        ).forEach { (value, label, icon) ->
+                            val active = authorEveryone == value
+                            val activeText = if (value) Color(0xFFFBBF24).copy(alpha = 0.90f) else Color.White
+                            Row(
                                 Modifier.weight(1f)
                                     .background(
                                         if (active) Color.White.copy(alpha = 0.10f) else Color.White.copy(alpha = 0.05f),
@@ -1705,20 +1736,30 @@ internal fun CreateChannelDialog(vm: AppViewModel, onDismiss: () -> Unit, onCrea
                                         Color.White.copy(alpha = if (active) 0.10f else 0.05f),
                                         RoundedCornerShape(8.dp)
                                     )
-                                    .clickableNoRipple { classification = value }
+                                    .clickableNoRipple { authorEveryone = value }
                                     .padding(vertical = 8.dp),
-                                contentAlignment = Alignment.Center
+                                horizontalArrangement = Arrangement.Center,
+                                verticalAlignment = Alignment.CenterVertically
                             ) {
+                                Icon(
+                                    icon, contentDescription = null,
+                                    tint = if (active) activeText else Color.White.copy(alpha = 0.50f),
+                                    modifier = Modifier.size(14.dp)
+                                )
+                                Spacer(Modifier.width(6.dp))
                                 Text(
                                     label,
-                                    color = if (active) Color.White else Color.White.copy(alpha = 0.50f),
+                                    color = if (active) activeText else Color.White.copy(alpha = 0.50f),
                                     fontSize = 12.sp, fontWeight = FontWeight.Medium
                                 )
                             }
                         }
                     }
                     Text(
-                        "For organizing your channels locally.",
+                        if (authorEveryone)
+                            "Storage is protected from pollution. Every message exposes its author's account."
+                        else
+                            "Full author privacy. Removed members can pollute storage until you reset the key with a paid on-chain action.",
                         color = Color.White.copy(alpha = 0.30f), fontSize = 12.sp,
                         modifier = Modifier.padding(top = 6.dp)
                     )
@@ -1903,6 +1944,45 @@ internal fun CreateChannelDialog(vm: AppViewModel, onDismiss: () -> Unit, onCrea
                     listOf("1 day", "6 months", "1 year").forEach {
                         Text(it, color = Color.White.copy(alpha = 0.60f), fontSize = 10.sp)
                     }
+                }
+
+                // Classification: local-only organization, so it closes the page.
+                if (kind == ChannelKind.CLOSED || kind == ChannelKind.GATED || kind == ChannelKind.PAID) {
+                    Spacer(Modifier.height(20.dp))
+                    Box(Modifier.fillMaxWidth().height(1.dp).background(Color.White.copy(alpha = 0.05f)))
+                    Spacer(Modifier.height(16.dp))
+                    SectionLabel("Classification")
+                    Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        listOf("personal" to "Personal", "community" to "Community").forEach { (value, label) ->
+                            val active = classification == value
+                            Box(
+                                Modifier.weight(1f)
+                                    .background(
+                                        if (active) Color.White.copy(alpha = 0.10f) else Color.White.copy(alpha = 0.05f),
+                                        RoundedCornerShape(8.dp)
+                                    )
+                                    .border(
+                                        1.dp,
+                                        Color.White.copy(alpha = if (active) 0.10f else 0.05f),
+                                        RoundedCornerShape(8.dp)
+                                    )
+                                    .clickableNoRipple { classification = value }
+                                    .padding(vertical = 8.dp),
+                                contentAlignment = Alignment.Center
+                            ) {
+                                Text(
+                                    label,
+                                    color = if (active) Color.White else Color.White.copy(alpha = 0.50f),
+                                    fontSize = 12.sp, fontWeight = FontWeight.Medium
+                                )
+                            }
+                        }
+                    }
+                    Text(
+                        "For organizing your channels locally.",
+                        color = Color.White.copy(alpha = 0.30f), fontSize = 12.sp,
+                        modifier = Modifier.padding(top = 6.dp)
+                    )
                 }
 
                 Spacer(Modifier.height(24.dp))
@@ -3941,7 +4021,7 @@ private fun ChannelSettingsSheet(vm: AppViewModel, channel: Channel, canModerate
                 when (sub) {
                     null -> ChannelDetailsMain(vm, channel, canModerate, onOpenSub = { sub = it }, onDismiss = onDismiss)
                     ChannelSubPanel.MEMBERS -> ChannelMembersPanel(vm, channel, canModerate)
-                    ChannelSubPanel.MODERATION -> ChannelModerationPanel(vm, canModerate)
+                    ChannelSubPanel.MODERATION -> ChannelModerationPanel(vm, channel, canModerate)
                     ChannelSubPanel.DELETE -> ChannelDeletePanel(vm, channel, onDismiss)
                     ChannelSubPanel.DESTROY -> ChannelDestroyPanel(vm, channel, onDismiss)
                 }
@@ -4297,6 +4377,39 @@ private fun ChannelDetailsMain(
     }
     if (canModerate) {
         ChannelNavRow("Moderation", leadingIcon = Icons.Outlined.VerifiedUser) { onOpenSub(ChannelSubPanel.MODERATION) }
+        Spacer(Modifier.height(8.dp))
+    }
+    if (isGated && canModerate) {
+        // Key responder: THIS device keeps answering key requests for the
+        // channel — foreground sweep plus the background worker.
+        val responderRev by vm.keyResponderRev.collectAsState()
+        val responderOn = remember(responderRev, channel.messageStreamId) { vm.isKeyResponder(channel) }
+        Row(
+            Modifier.fillMaxWidth()
+                .background(Color.White.copy(alpha = 0.03f), RoundedCornerShape(12.dp))
+                .border(1.dp, Color.White.copy(alpha = 0.05f), RoundedCornerShape(12.dp))
+                .clickableNoRipple { vm.setKeyResponder(channel, !responderOn) }
+                .padding(horizontal = 16.dp, vertical = 16.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Icon(
+                Icons.Outlined.Key, contentDescription = null,
+                tint = Color.White.copy(alpha = 0.40f), modifier = Modifier.size(18.dp)
+            )
+            Spacer(Modifier.width(12.dp))
+            Column(Modifier.weight(1f)) {
+                Text("Key responder", color = Color.White.copy(alpha = 0.70f), fontSize = 14.sp)
+                Text(
+                    "This device answers key requests, even in the background",
+                    color = Color.White.copy(alpha = 0.30f), fontSize = 12.sp, lineHeight = 16.sp
+                )
+            }
+            Text(
+                if (responderOn) "ON" else "OFF",
+                color = if (responderOn) Color(0xFF34D399) else Color.White.copy(alpha = 0.30f),
+                fontSize = 12.sp, fontWeight = FontWeight.Medium
+            )
+        }
         Spacer(Modifier.height(8.dp))
     }
     if (canModerate) {
@@ -5110,7 +5223,7 @@ private fun ChannelStoragePanel(vm: AppViewModel, channel: Channel, canModerate:
 }
 
 @Composable
-private fun ChannelModerationPanel(vm: AppViewModel, canModerate: Boolean) {
+private fun ChannelModerationPanel(vm: AppViewModel, channel: Channel, canModerate: Boolean) {
     val pins by vm.pins.collectAsState()
     val hidden by vm.hiddenIds.collectAsState()
     val banned by vm.bannedMembers.collectAsState()
@@ -5197,6 +5310,31 @@ private fun ChannelModerationPanel(vm: AppViewModel, canModerate: Boolean) {
         "Pin and hide from a message's own menu.",
         color = Color.White.copy(alpha = 0.40f), fontSize = 12.sp
     )
+
+    if (canModerate && channel.type == "gated" && channel.authorMode == "members") {
+        Spacer(Modifier.height(20.dp))
+        Box(Modifier.fillMaxWidth().height(1.dp).background(Color.White.copy(alpha = 0.05f)))
+        Spacer(Modifier.height(20.dp))
+        SectionLabel("Reset Publish Key")
+        Spacer(Modifier.height(6.dp))
+        Text(
+            "Replaces the channel's shared publish key (2 transactions). Former members " +
+                "who kept the old key lose the ability to write. Current members pick up " +
+                "the new key automatically.",
+            color = Color.White.copy(alpha = 0.40f), fontSize = 12.sp
+        )
+        Spacer(Modifier.height(10.dp))
+        val amber = Color(0xFFFBBF24)
+        Box(
+            Modifier
+                .fillMaxWidth()
+                .background(amber.copy(alpha = 0.10f), RoundedCornerShape(12.dp))
+                .border(1.dp, amber.copy(alpha = 0.20f), RoundedCornerShape(12.dp))
+                .clickableNoRipple { vm.rekeyPublishKey() }
+                .padding(vertical = 12.dp),
+            contentAlignment = Alignment.Center
+        ) { Text("Reset Publish Key", color = amber, fontSize = 13.sp) }
+    }
 
     confirmUnban?.let { addr ->
         androidx.compose.ui.window.Dialog(onDismissRequest = { confirmUnban = null }) {

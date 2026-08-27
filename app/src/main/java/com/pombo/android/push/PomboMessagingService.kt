@@ -32,6 +32,24 @@ class PomboMessagingService : FirebaseMessagingService() {
         if (tag.isNullOrEmpty()) return
 
         val myAddress = com.pombo.android.identity.WalletStore(applicationContext).address
+
+        // Key-request wake ('keys'): NEVER a notification. Someone published
+        // a KEY_REQUEST on a channel sharing this tag — if this device is the
+        // key responder for one of them, sweep and answer. App up: through
+        // the live bridge; dead process: a one-shot worker boots a headless
+        // bridge. Anything else about this wake is silence by contract.
+        if (data["channelType"] == "keys") {
+            val settings = com.pombo.android.data.SettingsStore(applicationContext)
+                .apply { scopeAddress = myAddress }
+            if (settings.keyResponderChannels.none { it.tag.equals(tag, ignoreCase = true) }) return
+            if (ForegroundGate.inForeground) {
+                KeyResponderGate.sweepNow?.invoke()
+            } else {
+                KeyResponderWorker.enqueueNow(applicationContext)
+            }
+            return
+        }
+
         val registry = PushRegistry(applicationContext).apply { scopeAddress = myAddress }
         val entry = registry.byTag(tag) ?: return
 

@@ -196,6 +196,16 @@ object SyncMerge {
             i.optJSONArray("helloEpochs")?.let { src -> for (k in 0 until src.length()) helloEpochs.add(src.optInt(k)) }
             b.optJSONArray("helloEpochs")?.let { src -> for (k in 0 until src.length()) helloEpochs.add(src.optInt(k)) }
             entry.put("helloEpochs", JSONArray(helloEpochs.filter { it > 0 }))
+            // Publish key: higher rev wins (a re-key must supersede on every
+            // device); ties keep base.
+            val higherRev = { x: JSONObject?, y: JSONObject? ->
+                if (x == null) y else if (y == null) x
+                else if (y.optInt("rev") > x.optInt("rev")) y else x
+            }
+            higherRev(b.optJSONObject("pubKey"), i.optJSONObject("pubKey"))
+                ?.let { entry.put("pubKey", it) }
+            higherRev(b.optJSONObject("pubAnnounce"), i.optJSONObject("pubAnnounce"))
+                ?.let { entry.put("pubAnnounce", it) }
             result.put(streamId, entry)
         }
         return result

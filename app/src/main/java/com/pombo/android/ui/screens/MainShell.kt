@@ -3815,7 +3815,7 @@ private fun ExploreCard(
         // corner at the same height — one row of card height instead of two,
         // and no orphaned lone badge. Subscribe = recurring (accent-tinted
         // verb); Hold = mere possession, "in your wallet" = "you pay nothing".
-        if (ch.gateVerb != null || tags.isNotEmpty()) {
+        if (ch.gateVerb != null || tags.isNotEmpty() || ch.authorMode != null) {
             Spacer(Modifier.height(6.dp))
             Box(Modifier.fillMaxWidth()) {
                 ch.gateVerb?.let { verb ->
@@ -3842,12 +3842,16 @@ private fun ExploreCard(
                         )
                     }
                 }
-                if (tags.isNotEmpty()) {
+                if (tags.isNotEmpty() || ch.authorMode != null) {
+                    // Audience icon (never identity — both modes guarantee
+                    // authorship to participants) rides centered above the
+                    // LAST tag, in the card-metadata corner.
                     Row(
                         Modifier.align(Alignment.BottomEnd),
-                        horizontalArrangement = Arrangement.spacedBy(6.dp)
+                        horizontalArrangement = Arrangement.spacedBy(6.dp),
+                        verticalAlignment = Alignment.Bottom
                     ) {
-                        tags.forEach { t ->
+                        val tagText: @Composable (String) -> Unit = { t ->
                             Text(
                                 t,
                                 color = Color.White.copy(alpha = 0.50f), fontSize = 11.exp,
@@ -3856,6 +3860,20 @@ private fun ExploreCard(
                                     .background(Color.White.copy(alpha = 0.05f), RoundedCornerShape(4.dp))
                                     .padding(horizontal = 6.dp, vertical = 4.dp)
                             )
+                        }
+                        tags.dropLast(1).forEach { tagText(it) }
+                        Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                            ch.authorMode?.let { mode ->
+                                Icon(
+                                    if (mode == "members") Icons.Outlined.People else Icons.Outlined.Public,
+                                    contentDescription = if (mode == "members")
+                                        "Authors visible to members only" else "Author on the wire",
+                                    tint = Color.White.copy(alpha = 0.50f),
+                                    modifier = Modifier.size(16.dp)
+                                )
+                                if (tags.isNotEmpty()) Spacer(Modifier.height(4.dp))
+                            }
+                            tags.lastOrNull()?.let { tagText(it) }
                         }
                     }
                 }

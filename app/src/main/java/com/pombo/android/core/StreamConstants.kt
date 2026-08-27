@@ -90,6 +90,11 @@ object StreamConstants {
     const val KEY_REQUEST = "key_request"
     const val KEY_WRAP = "key_wrap"
     const val MEMBER_HELLO = "member_hello"
+    // Members-only channels: the SHARED publish key's anchor and wraps —
+    // same crypto as KEY_WRAP, verified against the announce keyHash AND the
+    // announced address. Higher `rev` supersedes (the admin re-key valve).
+    const val PUB_ANNOUNCE = "pub_announce"
+    const val PUB_WRAP = "pub_wrap"
 
     // History windows (web config.js: stream.initialMessages / loadMoreCount)
     const val INITIAL_MESSAGES = 50
@@ -101,21 +106,10 @@ object StreamConstants {
     fun deriveAdminId(messageStreamId: String): String =
         messageStreamId.replace(Regex("-1$"), SUFFIX_ADMIN)
 
-    /**
-     * Inverse of [deriveEphemeralId]. Media signals and pieces arrive addressed
-     * to the ephemeral stream, but transfers are tracked by the channel's
-     * message stream id (the key everything else uses), so the routing has to
-     * map back. Works for DM inboxes too: `<addr>/Pombo-DM-2` -> `-DM-1`.
-     */
-    fun deriveMessageId(ephemeralStreamId: String): String =
-        ephemeralStreamId.replace(Regex("-2$"), SUFFIX_MESSAGE)
-
     fun deriveKeysId(messageStreamId: String): String =
         messageStreamId.replace(Regex("-1$"), SUFFIX_KEYS)
 
     fun isEphemeralStream(streamId: String): Boolean = streamId.endsWith(SUFFIX_EPHEMERAL)
-
-    fun isMessageStream(streamId: String): Boolean = streamId.endsWith(SUFFIX_MESSAGE)
 
     fun isKeysStream(streamId: String): Boolean = streamId.endsWith(SUFFIX_KEYS)
 }

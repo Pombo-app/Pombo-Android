@@ -36,7 +36,7 @@ object EpochKeyCrypto {
     private const val KEYWRAP_STATIC_HKDF_SALT = "pombo-keywrap-static-v2"
     private const val WRAP_TAG_DOMAIN = "POMBO_WRAP_TAG_V1"
     private const val WRAP_TAG_DOMAIN_V2 = "POMBO_WRAP_TAG_V2"
-    const val ENVELOPE_KIND = "epoch-aes-gcm"
+    private const val ENVELOPE_KIND = "epoch-aes-gcm"
 
     /** Fresh 256-bit epoch key, 0x-prefixed hex. */
     fun generateEpochKey(): String = "0x" + ByteArray(32).also { random.nextBytes(it) }
@@ -211,7 +211,7 @@ object EpochKeyCrypto {
      * storage chunks). The partitions' other frames claim 0x01/0x03 (media)
      * and 0x02 (sealed sender) — never reuse any of them.
      */
-    const val BINARY_EPOCH_VERSION: Byte = 0x04
+    private const val BINARY_EPOCH_VERSION: Byte = 0x04
 
     /** Parsed epoch binary envelope: the kid in the clear, iv and ct raw. */
     data class BinaryEnvelope(val kid: String, val iv: ByteArray, val ct: ByteArray)

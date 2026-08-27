@@ -150,4 +150,8 @@ dependencies {
     implementation("io.coil-kt:coil-gif:2.7.0")
 
     implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.9.0")
+
+    // Key-responder background base: the periodic sweep that answers retained
+    // key requests with the app dead (a headless bridge inside a worker).
+    implementation("androidx.work:work-runtime-ktx:2.9.1")
 }

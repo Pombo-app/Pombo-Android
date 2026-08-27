@@ -385,6 +385,80 @@ class AppViewModel(app: Application) : AndroidViewModel(app), PomboBridge.Listen
     fun isDmMuted(peerAddress: String?): Boolean =
         peerAddress != null && peerAddress.lowercase() in settingsStore.mutedDmPeers
 
+    // ==================== owner key-responder ====================
+
+    /** Bumped after the per-channel toggle so the panel re-reads the store. */
+    private val _keyResponderRev = MutableStateFlow(0)
+    val keyResponderRev: StateFlow<Int> = _keyResponderRev.asStateFlow()
+
+    private var keyResponderJob: kotlinx.coroutines.Job? = null
+    private val keyResponderSweepMs = 45_000L
+
+    fun isKeyResponder(channel: Channel): Boolean =
+        settingsStore.keyResponderChannels.any { it.messageStreamId == channel.messageStreamId }
+
+    /**
+     * Marks THIS device as the standing key responder for the channel: it
+     * keeps answering retained KEY_REQUESTs while the app is up (45s sweep)
+     * and from the background (15-minute worker + FCM 'keys' wakes). Local
+     * per device on purpose — serving keys is a duty of the device the owner
+     * chose, not of the account.
+     */
+    fun setKeyResponder(channel: Channel, on: Boolean) = viewModelScope.launch {
+        val others = settingsStore.keyResponderChannels
+            .filterNot { it.messageStreamId == channel.messageStreamId }
+        if (on) {
+            val tag = try { manager.keyResponderTag(channel) } catch (e: Exception) { "" }
+            if (tag.isEmpty()) {
+                toast("Could not derive the channel tag", com.pombo.android.ui.ToastKind.WARNING)
+                return@launch
+            }
+            settingsStore.keyResponderChannels = others + com.pombo.android.data.KeyResponderEntry(
+                channel.messageStreamId,
+                channel.keysStreamId.ifEmpty {
+                    com.pombo.android.core.StreamConstants.deriveKeysId(channel.messageStreamId)
+                },
+                channel.gateAddress ?: "",
+                tag
+            )
+            toast("Key responder on — this device answers key requests", com.pombo.android.ui.ToastKind.INFO)
+        } else {
+            settingsStore.keyResponderChannels = others
+            toast("Key responder off", com.pombo.android.ui.ToastKind.INFO)
+        }
+        _keyResponderRev.value++
+        syncKeyResponderSchedule()
+        startKeyResponderLoop()
+    }
+
+    private fun syncKeyResponderSchedule() {
+        if (settingsStore.keyResponderChannels.isEmpty()) {
+            com.pombo.android.push.KeyResponderWorker.cancelPeriodic(getApplication())
+        } else {
+            com.pombo.android.push.KeyResponderWorker.schedulePeriodic(getApplication())
+        }
+    }
+
+    /**
+     * The in-app half: while foregrounded and connected, sweep the marked
+     * channels every 45s. Reads the store each lap, so account switches and
+     * toggles need no restart; the background worker owns the rest.
+     */
+    private fun startKeyResponderLoop() {
+        if (keyResponderJob?.isActive == true) return
+        keyResponderJob = viewModelScope.launch {
+            while (true) {   // dies with viewModelScope: delay() cancels
+                if (appInForeground && _status.value == NetStatus.CONNECTED) {
+                    val entries = settingsStore.keyResponderChannels
+                    if (entries.isNotEmpty()) {
+                        runCatching { manager.sweepKeyResponder(entries) }
+                    }
+                }
+                delay(keyResponderSweepMs)
+            }
+        }
+    }
+
     // ==================== DM push (web dm-push-enabled sub-toggle) ====================
 
     private val _dmPushEnabled = MutableStateFlow(settingsStore.dmPushEnabled)
@@ -884,6 +958,19 @@ class AppViewModel(app: Application) : AndroidViewModel(app), PomboBridge.Listen
     suspend fun streamPermissions(): List<com.pombo.android.core.GraphApi.StreamPermission> =
         manager.streamPermissions()
 
+    /** Admin-only: replaces the shared publish key of a Members-only channel. */
+    fun rekeyPublishKey(onDone: () -> Unit = {}) = viewModelScope.launch {
+        chainAction(
+            "Reset publish key",
+            "Replaces the channel's shared publish key and revokes the old one (2 transactions)."
+        ) {
+            runWithToast("Resetting publish key…", "Publish key reset", "Failed to reset publish key") {
+                manager.rekeyPublishKey()
+            }
+        }
+        onDone()
+    }
+
     /** Owner-only: toggles a member's "Can add members" (GRANT) permission. */
     fun setMemberGrant(address: String, canGrant: Boolean, onDone: () -> Unit = {}) = viewModelScope.launch {
         chainAction(
@@ -1300,6 +1387,15 @@ class AppViewModel(app: Application) : AndroidViewModel(app), PomboBridge.Listen
                 unreadStore.setWatermark(conversationId, ts)
             }
         }
+        // FCM 'keys' wake with the app up: sweep through the live bridge now
+        // instead of waiting for the next 45s lap or booting a headless one.
+        com.pombo.android.push.KeyResponderGate.sweepNow = {
+            viewModelScope.launch {
+                runCatching { manager.sweepKeyResponder(settingsStore.keyResponderChannels) }
+            }
+        }
+        syncKeyResponderSchedule()
+        startKeyResponderLoop()
         manager.onIncomingMessage = { channel, sender, preview ->
             // Nothing to notify about if the user is already looking at it —
             // and a muted DM peer stays silent on the in-app path too.
@@ -2133,7 +2229,8 @@ class AppViewModel(app: Application) : AndroidViewModel(app), PomboBridge.Listen
                 gateToken = spec.gateToken,
                 gateMinBalance = spec.gateMinBalance,
                 gatePrice = spec.gatePrice,
-                gateDuration = spec.gateDurationSeconds
+                gateDuration = spec.gateDurationSeconds,
+                authorMode = spec.authorMode
             ) {
                 step += 1
                 val label = when {
@@ -2175,6 +2272,8 @@ class AppViewModel(app: Application) : AndroidViewModel(app), PomboBridge.Listen
         val channelName: String?,
         /** Renewing from inside the channel: pay is always offered, no "Enter". */
         val renewal: Boolean = false,
+        /** Author visibility ('members' | 'everyone'), when locally known. */
+        val authorMode: String? = null,
         val retry: suspend () -> Unit
     )
 
@@ -2202,7 +2301,12 @@ class AppViewModel(app: Application) : AndroidViewModel(app), PomboBridge.Listen
         renewal: Boolean = false, retry: suspend () -> Unit
     ) {
         try {
-            _gateEntry.value = GateEntry(manager.gateEntryInfo(gateAddress), channelName, renewal, retry)
+            // Author visibility comes from stream metadata, which the gate
+            // contract knows nothing about — resolve it from local caches.
+            val authorMode = manager.channels.value
+                .firstOrNull { it.gateAddress.equals(gateAddress, ignoreCase = true) }?.authorMode
+                ?: _explore.value.firstOrNull { it.gateAddress.equals(gateAddress, ignoreCase = true) }?.authorMode
+            _gateEntry.value = GateEntry(manager.gateEntryInfo(gateAddress), channelName, renewal, authorMode, retry)
         } catch (e: Exception) {
             toast(
                 "Could not read the gate contract: ${com.pombo.android.core.ChainErrors.friendly(e)}",
@@ -2339,7 +2443,8 @@ class AppViewModel(app: Application) : AndroidViewModel(app), PomboBridge.Listen
                         lastText = cached?.text.orEmpty(),
                         lastSenderAddress = cached?.senderAddress.orEmpty(),
                         readOnly = info.readOnly,
-                        gateAddress = info.gateAddress
+                        gateAddress = info.gateAddress,
+                        authorMode = info.authorMode
                     )
                 }
                 _exploreLoading.value = false

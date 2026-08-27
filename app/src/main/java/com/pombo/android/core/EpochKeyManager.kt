@@ -74,7 +74,22 @@ class EpochKeyManager(
     private val resendRoster: suspend (keysStreamId: String) -> List<Entry> =
         { emptyList() },
     /** The -4 stream's on-chain partition count — the roster capability probe. */
-    private val keysPartitionCount: suspend (keysStreamId: String) -> Int = { 1 }
+    private val keysPartitionCount: suspend (keysStreamId: String) -> Int = { 1 },
+    /**
+     * Fire-and-forget wake to the push relay after publishing a KEY_REQUEST
+     * ('keys' kind, k-anonymous channel tag): an owner running the key
+     * responder gets woken and answers in seconds instead of on the next
+     * sweep. Silent by contract — receivers never turn it into a
+     * notification.
+     */
+    private val emitKeysWake: (messageStreamId: String) -> Unit = {},
+    /**
+     * Members-only author visibility: true when this channel publishes -1/-2
+     * under the SHARED key, which makes the publish key part of what a
+     * joiner needs (and what answers hand out). Ungated / Everyone channels
+     * return false.
+     */
+    private val sharedPublishFor: suspend (messageStreamId: String) -> Boolean = { false }
 ) {
     data class Entry(val data: JSONObject, val publisherId: String?, val timestamp: Long)
 
@@ -129,9 +144,32 @@ class EpochKeyManager(
         var rosterPartitions: Int? = null
         /** (at, members) — rosterMembers result cache. */
         var rosterCache: Pair<Long, List<RosterMember>>? = null
+        /**
+         * Members-only: the channel's SHARED publish key — persisted+synced
+         * (channel key material, like the epochs). Never rotates by routine;
+         * a re-key bumps rev.
+         */
+        var pubKey: PubKey? = null
+        /** Latest pub_announce accepted — the trust anchor pub wraps verify against. */
+        var pubAnnounce: PubAnnounce? = null
+        /** Newest pub_announce timestamp seen in storage (TTL re-announce). */
+        var pubAnnounceFreshness = 0L
+        /**
+         * Session pseudonym for our own publishes: (priv, pub, bindProof) —
+         * MEMORY ONLY; members resolve the account from the bind proof, so
+         * pseudonym churn across sessions is invisible.
+         */
+        var pseudonym: Pseudonym? = null
         /** N-D weekly rotation timer (gated channels, admin-side). */
         var rotationJob: kotlinx.coroutines.Job? = null
     }
+
+    class PubKey(val keyId: String, val keyHex: String, val address: String, val rev: Int)
+    class PubAnnounce(
+        val keyId: String, val keyHash: String, val address: String, val rev: Int,
+        val publisher: String, val timestamp: Long
+    )
+    class Pseudonym(val privateKey: String, val publicKey: String, val bindProof: String)
 
     private class PendingRequest(
         val requestId: String, val privateKey: String,
@@ -193,7 +231,7 @@ class EpochKeyManager(
     private fun adminOf(messageStreamId: String): String? =
         messageStreamId.substringBefore('/').lowercase().takeIf { it.length == 42 }
 
-    fun isOwnAdmin(messageStreamId: String): Boolean =
+    private fun isOwnAdmin(messageStreamId: String): Boolean =
         myAddress()?.lowercase() == adminOf(messageStreamId)
 
     // ---- Lifecycle ----
@@ -245,6 +283,22 @@ class EpochKeyManager(
                 if (epoch > 0) s.helloEpochs.add(epoch)
             }
         }
+        // Higher rev wins — a persisted re-key must never regress.
+        persisted.optJSONObject("pubKey")?.let { pk ->
+            if (pk.optInt("rev") > (s.pubKey?.rev ?: 0)) {
+                s.pubKey = PubKey(
+                    pk.optString("keyId"), pk.optString("keyHex"),
+                    pk.optString("address"), pk.optInt("rev"))
+            }
+        }
+        persisted.optJSONObject("pubAnnounce")?.let { pa ->
+            if (pa.optInt("rev") > (s.pubAnnounce?.rev ?: 0)) {
+                s.pubAnnounce = PubAnnounce(
+                    pa.optString("keyId"), pa.optString("keyHash"),
+                    pa.optString("address"), pa.optInt("rev"),
+                    pa.optString("publisher"), pa.optLong("timestamp"))
+            }
+        }
     }
 
     private fun persist(messageStreamId: String, s: ChannelState) {
@@ -269,9 +323,21 @@ class EpochKeyManager(
         }
         val helloEpochs = org.json.JSONArray()
         for (epoch in s.helloEpochs) helloEpochs.put(epoch)
-        store.save(messageStreamId, JSONObject()
+        val out = JSONObject()
             .put("epochs", epochs).put("announces", announces).put("currentEpoch", s.currentEpoch)
-            .put("pendingRequests", pendingRequests).put("helloEpochs", helloEpochs))
+            .put("pendingRequests", pendingRequests).put("helloEpochs", helloEpochs)
+        s.pubKey?.let {
+            out.put("pubKey", JSONObject()
+                .put("keyId", it.keyId).put("keyHex", it.keyHex)
+                .put("address", it.address).put("rev", it.rev))
+        }
+        s.pubAnnounce?.let {
+            out.put("pubAnnounce", JSONObject()
+                .put("keyId", it.keyId).put("keyHash", it.keyHash)
+                .put("address", it.address).put("rev", it.rev)
+                .put("publisher", it.publisher).put("timestamp", it.timestamp))
+        }
+        store.save(messageStreamId, out)
     }
 
     /** Drop runtime + persisted state (channel left/deleted). */
@@ -322,6 +388,7 @@ class EpochKeyManager(
         var toReannounce = false
         val storedRequests = mutableListOf<Entry>()
         val storedV2Wraps = mutableListOf<JSONObject>()
+        val storedV2PubWraps = mutableListOf<JSONObject>()
         var haveKeys = false
         mutex.withLock {
             val s = getState(messageStreamId)
@@ -332,6 +399,23 @@ class EpochKeyManager(
                     StreamConstants.KEY_ANNOUNCE -> {
                         if (applyAnnounceLocked(messageStreamId, s, entry.data, entry.publisherId, entry.timestamp)) {
                             changed = true
+                        }
+                    }
+                    StreamConstants.PUB_ANNOUNCE -> {
+                        if (applyPubAnnounceLocked(messageStreamId, s, entry.data, entry.publisherId, entry.timestamp)) {
+                            changed = true
+                        }
+                    }
+                    StreamConstants.PUB_WRAP -> {
+                        val rid = entry.data.optString("requestId")
+                        val kid = entry.data.optString("keyId")
+                        if (rid.isNotEmpty() && kid.isNotEmpty()) {
+                            recordSeenWrapLocked(s, rid, kid)
+                            if (entry.data.optInt("v", 1) == 2 &&
+                                (s.pendingRequests.containsKey(rid) || s.pendingRequest?.requestId == rid)
+                            ) {
+                                storedV2PubWraps.add(entry.data)
+                            }
                         }
                     }
                     // Coverage bookkeeping: a stored wrap means someone
@@ -361,7 +445,8 @@ class EpochKeyManager(
             if (changed) persist(messageStreamId, s)
             haveKeys = s.epochs.isNotEmpty()
             toBootstrap = s.announces.isEmpty() && isOwnAdmin(messageStreamId)
-            toRequest = s.announces.isNotEmpty() && missingEpochsLocked(s).isNotEmpty()
+            toRequest = s.announces.isNotEmpty()
+                && (missingEpochsLocked(s).isNotEmpty() || needsPubKeyLocked(s))
             if (!toBootstrap && isOwnAdmin(messageStreamId)) {
                 val cur = s.announces[s.currentEpoch]
                 if (cur != null && s.epochs.containsKey(cur.keyId)) {
@@ -382,9 +467,23 @@ class EpochKeyManager(
                 Log.w(TAG, "stored v2 wrap adoption failed: ${e.message}")
             }
         }
+        for (wrap in storedV2PubWraps) {
+            try {
+                handlePubWrap(messageStreamId, wrap)
+            } catch (e: Exception) {
+                Log.w(TAG, "stored pub wrap adoption failed: ${e.message}")
+            }
+        }
 
         if (toBootstrap) bootstrapOrReannounce(messageStreamId, keysStreamId, allowMint)
         else if (toReannounce) reannounceCurrent(messageStreamId, keysStreamId)
+        if (isOwnAdmin(messageStreamId)) {
+            try {
+                maybeAnnouncePub(messageStreamId, keysStreamId, retentionDays)
+            } catch (e: Exception) {
+                Log.w(TAG, "pub announce self-heal failed: ${e.message}")
+            }
+        }
         if (toRequest) sendKeyRequest(messageStreamId, keysStreamId)
         else if (!toBootstrap && !isOwnAdmin(messageStreamId)) {
             mutex.withLock {
@@ -508,17 +607,19 @@ class EpochKeyManager(
     private val announceRetention = java.util.Collections.synchronizedSet(HashSet<String>())
 
     /**
-     * Fire-and-forget retention loop for a just-published KEY_ANNOUNCE (same
-     * pattern as the password challenge). A create-time publish can race the
-     * storage node learning its -4 assignment, or leave a cold node before
-     * any neighbour is connected (R2 publishes into an empty room) — either
-     * way the announce is lost, a joiner never gets an anchor, and the
-     * publishing session masks the missing-from-storage re-announce because
-     * its own freshness entry looks recent. Verify by resend that the -4
-     * actually returns the keyId; republish until it does.
+     * Fire-and-forget retention loop for a just-published announce — epoch
+     * (KEY_ANNOUNCE) or publish key (PUB_ANNOUNCE), same pattern as the
+     * password challenge. A create-time publish can race the storage node
+     * learning its -4 assignment, or leave a cold node before any neighbour
+     * is connected (R2 publishes into an empty room) — either way the
+     * announce is lost, a joiner never gets an anchor, and the publishing
+     * session masks the missing-from-storage re-announce because its own
+     * freshness entry looks recent. Verify by resend that the -4 actually
+     * returns the keyId; republish until it does.
      */
     private fun retainAnnounce(messageStreamId: String, keysStreamId: String, announce: JSONObject) {
         val keyId = announce.optString("keyId")
+        val type = announce.optString("t")
         if (keyId.isEmpty() || !announceRetention.add(keyId)) return
         scope.launch {
             try {
@@ -527,7 +628,7 @@ class EpochKeyManager(
                     if (mutex.withLock { state[messageStreamId] } == null) return@launch
                     try {
                         val found = resendKeys(keysStreamId).any {
-                            it.data.optString("t") == StreamConstants.KEY_ANNOUNCE &&
+                            it.data.optString("t") == type &&
                                 it.data.optString("keyId") == keyId
                         }
                         if (found) {
@@ -550,6 +651,153 @@ class EpochKeyManager(
     private fun missingEpochsLocked(s: ChannelState): List<Int> {
         val adopted = s.epochs.values.map { it.epoch }.toSet()
         return s.announces.keys.filter { it !in adopted }
+    }
+
+    /** Caller holds the lock. A Members-only channel is not writable until
+     *  the announced publish key (at its announced rev) is held. */
+    private fun needsPubKeyLocked(s: ChannelState): Boolean =
+        s.pubAnnounce != null && s.pubKey?.keyId != s.pubAnnounce?.keyId
+
+    /**
+     * Validate and apply a publish-key announce (Members-only channels).
+     * Higher rev wins — a re-key is the admin's escape valve and must
+     * supersede everywhere; within the same rev the epoch-announce conflict
+     * rule applies. Caller holds the lock.
+     */
+    private fun applyPubAnnounceLocked(
+        messageStreamId: String, s: ChannelState,
+        data: JSONObject, publisherId: String?, timestamp: Long
+    ): Boolean {
+        val admin = adminOf(messageStreamId)
+        if (publisherId == null || publisherId.lowercase() != admin) {
+            Log.w(TAG, "PUB_ANNOUNCE from non-admin REJECTED: $publisherId on ${messageStreamId.takeLast(30)}")
+            return false
+        }
+        val rev = data.optInt("rev", 0)
+        val keyId = data.optString("keyId")
+        val keyHash = data.optString("keyHash").lowercase()
+        val addr = data.optString("addr").lowercase()
+        if (rev < 1 || keyId.isEmpty() || keyHash.isEmpty() || !ADDR_RE.matches(addr)) return false
+
+        // Freshness follows the HIGHEST rev seen, never the stream: a
+        // retained copy of a superseded announce must not mask a re-key
+        // announce that storage lost, or no session would ever republish it
+        // and members would stay unable to write until retention aged the
+        // old copy out.
+        val heldRev = s.pubAnnounce?.rev ?: 0
+        if (rev > heldRev) {
+            s.pubAnnounceFreshness = timestamp
+        } else if (rev == heldRev && timestamp > s.pubAnnounceFreshness) {
+            s.pubAnnounceFreshness = timestamp
+        }
+
+        val existing = s.pubAnnounce
+        if (existing != null) {
+            if (existing.rev > rev) return false
+            if (existing.rev == rev) {
+                val keep = existing.timestamp < timestamp ||
+                    (existing.timestamp == timestamp && existing.publisher <= publisherId.lowercase())
+                if (keep) return false
+            }
+        }
+        s.pubAnnounce = PubAnnounce(keyId, keyHash, addr, rev, publisherId.lowercase(), timestamp)
+        // A held key of an older keyId is superseded — stop publishing under
+        // it and let the request cycle fetch the new one.
+        if (s.pubKey != null && s.pubKey!!.keyId != keyId && s.pubKey!!.rev < rev) {
+            s.pubKey = null
+        }
+        return true
+    }
+
+    /**
+     * A publish-key wrap: same addressing as a KEY_WRAP, verified against the
+     * PUB_ANNOUNCE keyHash AND against the announced address — the unwrapped
+     * secret must BE the announced publisher key.
+     */
+    private suspend fun handlePubWrap(messageStreamId: String, data: JSONObject) {
+        val accountKey = myPrivateKey()
+        var adoptedKeyId: String? = null
+        mutex.withLock {
+            val s = getState(messageStreamId)
+            val rid = data.optString("requestId")
+            val keyId = data.optString("keyId")
+            if (rid.isNotEmpty() && keyId.isNotEmpty()) recordSeenWrapLocked(s, rid, keyId)
+            val announce = s.pubAnnounce ?: return
+            if (keyId.isEmpty() || keyId != announce.keyId) return
+            if (s.pubKey?.keyId == keyId) return                        // already held
+            val tag = data.optString("tag").ifEmpty { return }
+
+            val keyHex = if (data.optInt("v", 1) == 2) {
+                val mine = s.pendingRequests.containsKey(rid) || s.pendingRequest?.requestId == rid
+                if (!mine) return
+                if (!tag.equals(EpochKeyCrypto.computeWrapTagV2(rid, keyId), ignoreCase = true)) return
+                if (accountKey == null) return
+                try {
+                    EpochKeyCrypto.unwrapEpochKeyStatic(data, accountKey)
+                } catch (e: Exception) {
+                    Log.w(TAG, "pub wrap failed to open: ${e.message}"); return
+                }
+            } else {
+                val pending = s.pendingRequest ?: return
+                if (rid != pending.requestId) return
+                if (!tag.equals(EpochKeyCrypto.computeWrapTag(pending.publicKey, keyId), ignoreCase = true)) return
+                try {
+                    EpochKeyCrypto.unwrapEpochKey(data, pending.privateKey)
+                } catch (e: Exception) {
+                    Log.w(TAG, "pub wrap failed to open: ${e.message}"); return
+                }
+            }
+
+            if (!EpochKeyCrypto.computeKeyHash(keyHex).equals(announce.keyHash, ignoreCase = true)) {
+                Log.w(TAG, "pub wrap REJECTED — keyHash mismatch")
+                return
+            }
+            val derived = try { EthereumSigner.address(keyHex) } catch (e: Exception) { return }
+            if (!derived.equals(announce.address, ignoreCase = true)) {
+                Log.w(TAG, "pub wrap REJECTED — key does not match the announced address")
+                return
+            }
+            s.pubKey = PubKey(keyId, keyHex, announce.address, announce.rev)
+            persist(messageStreamId, s)
+            adoptedKeyId = keyId
+        }
+        adoptedKeyId?.let {
+            Log.i(TAG, "adopted the publish key on ${messageStreamId.takeLast(30)}")
+            onKeyAdopted(messageStreamId, it)
+        }
+    }
+
+    /**
+     * Admin-side self-heal for the publish-key anchor: announce the held key
+     * whenever storage has no fresh copy — idempotent by construction, like
+     * the epoch re-announce.
+     */
+    private suspend fun maybeAnnouncePub(messageStreamId: String, keysStreamId: String, retentionDays: Int) {
+        var announce: JSONObject? = null
+        mutex.withLock {
+            val s = state[messageStreamId] ?: return
+            val held = s.pubKey ?: return
+            if ((s.pubAnnounce?.rev ?: 0) > held.rev) return   // we hold the superseded key
+            val retentionMs = retentionDays.toLong() * 86_400_000L
+            if (s.pubAnnounceFreshness != 0L &&
+                System.currentTimeMillis() - s.pubAnnounceFreshness < (retentionMs * 0.8).toLong()) return
+            announce = JSONObject()
+                .put("t", StreamConstants.PUB_ANNOUNCE)
+                .put("keyId", held.keyId)
+                .put("keyHash", EpochKeyCrypto.computeKeyHash(held.keyHex))
+                .put("addr", held.address)
+                .put("rev", held.rev)
+        }
+        val ann = announce ?: return
+        publishKeys(keysStreamId, ann)
+        mutex.withLock {
+            val s = getState(messageStreamId)
+            applyPubAnnounceLocked(messageStreamId, s, ann, myAddress(), System.currentTimeMillis())
+            s.pubAnnounceFreshness = System.currentTimeMillis()
+            persist(messageStreamId, s)
+        }
+        Log.i(TAG, "publish key announced on ${keysStreamId.takeLast(30)}")
+        retainAnnounce(messageStreamId, keysStreamId, ann)
     }
 
     /**
@@ -668,6 +916,17 @@ class EpochKeyManager(
             }
             StreamConstants.KEY_REQUEST -> handleRequest(messageStreamId, keysStreamId, data, publisherId, memberCount)
             StreamConstants.KEY_WRAP -> handleWrap(messageStreamId, keysStreamId, data)
+            StreamConstants.PUB_ANNOUNCE -> {
+                val needRequest = mutex.withLock {
+                    val s = getState(messageStreamId)
+                    if (!s.loaded) { loadPersisted(messageStreamId, s); s.loaded = true }
+                    val changed = applyPubAnnounceLocked(messageStreamId, s, data, publisherId, timestamp)
+                    if (changed) persist(messageStreamId, s)
+                    changed && needsPubKeyLocked(s)
+                }
+                if (needRequest) sendKeyRequest(messageStreamId, keysStreamId)
+            }
+            StreamConstants.PUB_WRAP -> handlePubWrap(messageStreamId, data)
         }
     }
 
@@ -801,7 +1060,6 @@ class EpochKeyManager(
                 .filterValues { it.epoch >= fromEpoch && (!currentOnly || it.epoch == s.currentEpoch) }
                 .map { (keyId, e) -> Triple(keyId, e.keyHex, e.epoch) }
         }
-        if (toWrap.isEmpty()) return
         var sent = 0
         for ((keyId, keyHex, epoch) in toWrap) {
             try {
@@ -834,6 +1092,46 @@ class EpochKeyManager(
                 sent += 1
             } catch (e: Exception) {
                 Log.w(TAG, "failed to wrap $keyId for request $requestId: ${e.message}")
+            }
+        }
+
+        // Members-only: the shared publish key rides along with the epochs —
+        // a joiner needs both before the channel is writable for them.
+        val pub = if (sharedPublishFor(messageStreamId)) {
+            mutex.withLock {
+                val s = getState(messageStreamId)
+                val held = s.pubKey
+                if (held != null && s.pubAnnounce?.keyId == held.keyId
+                    && held.keyId !in (s.seenWraps[requestId] ?: emptySet<String>())
+                ) held else null
+            }
+        } else null
+        if (pub != null) {
+            try {
+                val envelope = if (staticKey != null) {
+                    val wrapped = EpochKeyCrypto.wrapEpochKeyToStatic(pub.keyHex, staticKey)
+                    JSONObject()
+                        .put("t", StreamConstants.PUB_WRAP).put("v", 2)
+                        .put("requestId", requestId).put("keyId", pub.keyId)
+                        .put("tag", EpochKeyCrypto.computeWrapTagV2(requestId, pub.keyId))
+                        .put("epk", wrapped.getString("epk"))
+                        .put("iv", wrapped.getString("iv"))
+                        .put("ct", wrapped.getString("ct"))
+                } else {
+                    val wrapped = EpochKeyCrypto.wrapEpochKey(pub.keyHex, pubkey)
+                    JSONObject()
+                        .put("t", StreamConstants.PUB_WRAP)
+                        .put("requestId", requestId).put("keyId", pub.keyId)
+                        .put("tag", EpochKeyCrypto.computeWrapTag(pubkey, pub.keyId))
+                        .put("epk", wrapped.getString("epk"))
+                        .put("iv", wrapped.getString("iv"))
+                        .put("ct", wrapped.getString("ct"))
+                }
+                publishKeys(keysStreamId, envelope)
+                mutex.withLock { recordSeenWrapLocked(getState(messageStreamId), requestId, pub.keyId) }
+                sent += 1
+            } catch (e: Exception) {
+                Log.w(TAG, "failed to wrap the publish key for request $requestId: ${e.message}")
             }
         }
         if (sent > 0) Log.d(TAG, "answered request $requestId with $sent ${if (staticKey != null) "v2 " else ""}wrap(s)")
@@ -962,7 +1260,7 @@ class EpochKeyManager(
                 REQUEST_RETRY_FAST_MS else REQUEST_MIN_INTERVAL_MS
             if (pending != null && System.currentTimeMillis() - pending.sentAt < interval) return
             val missing = missingEpochsLocked(s)
-            if (missing.isEmpty()) return
+            if (missing.isEmpty() && !needsPubKeyLocked(s)) return
             val (priv, pub) = EpochKeyCrypto.generateRequestKeypair()
             val requestId = PomboCrypto.randomHex(16)
             s.pendingRequest = PendingRequest(requestId, priv, pub, System.currentTimeMillis())
@@ -971,13 +1269,17 @@ class EpochKeyManager(
                 .put("t", StreamConstants.KEY_REQUEST)
                 .put("requestId", requestId)
                 .put("pubkey", pub)
-                .put("fromEpoch", missing.min())
+                .put("fromEpoch", if (missing.isNotEmpty()) missing.min() else 1)
             val spk = myPrivateKey()?.let {
                 try { EthereumSigner.compressedPublicKey(it) } catch (e: Exception) { null }
             }
             if (spk != null) {
                 request!!.put("spk", spk)
-                s.pendingRequests[requestId] = PendingId(missing.min(), System.currentTimeMillis())
+                // Pub-only requests (epochs complete, publish key missing)
+                // have no missing epoch — same floor as fromEpoch above.
+                s.pendingRequests[requestId] = PendingId(
+                    if (missing.isNotEmpty()) missing.min() else 1,
+                    System.currentTimeMillis())
                 while (s.pendingRequests.size > PENDING_REQUESTS_MAX) {
                     s.pendingRequests.keys.firstOrNull()?.let { s.pendingRequests.remove(it) }
                 }
@@ -985,6 +1287,7 @@ class EpochKeyManager(
             }
         }
         publishKeys(keysStreamId, request ?: return)
+        emitKeysWake(messageStreamId)
         Log.i(TAG, "requested missing epochs on ${keysStreamId.takeLast(30)}")
     }
 
@@ -997,7 +1300,7 @@ class EpochKeyManager(
     suspend fun retryRequestIfWaiting(messageStreamId: String, keysStreamId: String): Boolean {
         val waiting = mutex.withLock {
             val s = state[messageStreamId] ?: return false
-            missingEpochsLocked(s).isNotEmpty()
+            missingEpochsLocked(s).isNotEmpty() || needsPubKeyLocked(s)
         }
         if (waiting) sendKeyRequest(messageStreamId, keysStreamId)
         return waiting
@@ -1025,6 +1328,93 @@ class EpochKeyManager(
     suspend fun loadPersistedState(messageStreamId: String) = mutex.withLock {
         val s = getState(messageStreamId)
         if (!s.loaded) { loadPersisted(messageStreamId, s); s.loaded = true }
+    }
+
+    // ---- Shared publish key (Members-only) ----
+
+    /**
+     * Fresh publish keypair for a new Members-only channel. Its ADDRESS gets
+     * the PUBLISH grants in the creation batch; the private half is
+     * distributed to members via PUB_WRAPs on -4.
+     */
+    fun mintPublishKey(rev: Int = 1): PubKey {
+        val (priv, _) = EpochKeyCrypto.generateRequestKeypair()
+        return PubKey("p$rev.${PomboCrypto.randomHex(6)}", priv, EthereumSigner.address(priv), rev)
+    }
+
+    /** Creation-time adopt of a freshly minted publish key (admin device). */
+    suspend fun adoptPublishKey(messageStreamId: String, pubKey: PubKey) = mutex.withLock {
+        val s = getState(messageStreamId)
+        if (!s.loaded) { loadPersisted(messageStreamId, s); s.loaded = true }
+        s.pubKey = pubKey
+        persist(messageStreamId, s)
+    }
+
+    /** The held publish key, or null while waiting for a PUB_WRAP. */
+    suspend fun publishKeyFor(messageStreamId: String): PubKey? = mutex.withLock {
+        state[messageStreamId]?.pubKey
+    }
+
+    /**
+     * Admin escape valve: replaces the shared publish key when a former
+     * member keeps writing with the old one. Chain first — an announced key
+     * the network rejects would strand every member, while a granted key
+     * that was never announced is harmless.
+     */
+    suspend fun rekeyPublishKey(
+        messageStreamId: String,
+        keysStreamId: String,
+        chainGrants: suspend (newAddress: String, oldAddress: String?) -> Unit
+    ): Int {
+        check(isOwnAdmin(messageStreamId)) { "only the channel admin can reset the publish key" }
+        val (newKey, oldAddress) = mutex.withLock {
+            val s = getState(messageStreamId)
+            if (!s.loaded) { loadPersisted(messageStreamId, s); s.loaded = true }
+            val rev = maxOf(s.pubKey?.rev ?: 0, s.pubAnnounce?.rev ?: 0) + 1
+            Pair(mintPublishKey(rev), s.pubKey?.address ?: s.pubAnnounce?.address)
+        }
+        chainGrants(newKey.address, oldAddress)
+        // Adopt before announcing so a concurrent answerRequest wraps the new key.
+        mutex.withLock {
+            val s = getState(messageStreamId)
+            s.pubKey = newKey
+            persist(messageStreamId, s)
+        }
+        val ann = JSONObject()
+            .put("t", StreamConstants.PUB_ANNOUNCE)
+            .put("keyId", newKey.keyId)
+            .put("keyHash", EpochKeyCrypto.computeKeyHash(newKey.keyHex))
+            .put("addr", newKey.address)
+            .put("rev", newKey.rev)
+        publishKeys(keysStreamId, ann)
+        mutex.withLock {
+            val s = getState(messageStreamId)
+            applyPubAnnounceLocked(messageStreamId, s, ann, myAddress(), System.currentTimeMillis())
+            s.pubAnnounceFreshness = System.currentTimeMillis()
+            persist(messageStreamId, s)
+        }
+        Log.i(TAG, "publish key reset to rev ${newKey.rev} on ${messageStreamId.takeLast(30)}")
+        // Members cannot write until this announce is readable from storage —
+        // verify retention exactly like a fresh epoch announce.
+        retainAnnounce(messageStreamId, keysStreamId, ann)
+        return newKey.rev
+    }
+
+    /**
+     * Session authorship material for our own publishes in a Members-only
+     * channel: pseudonym keypair + account bind proof, minted lazily once
+     * per session per channel. Memory only — members resolve the ACCOUNT
+     * from the bind proof, so pseudonym churn across sessions is invisible.
+     */
+    suspend fun authorshipFor(messageStreamId: String): Pseudonym? {
+        mutex.withLock { state[messageStreamId]?.pseudonym }?.let { return it }
+        val accountKey = myPrivateKey() ?: return null
+        val (priv, pub) = EpochKeyCrypto.generateRequestKeypair()
+        val minted = Pseudonym(priv, pub, Authorship.createBindProof(messageStreamId, pub, accountKey))
+        return mutex.withLock {
+            val s = getState(messageStreamId)
+            s.pseudonym ?: minted.also { s.pseudonym = it }
+        }
     }
 
     // ---- Roster (-4/P1) ----

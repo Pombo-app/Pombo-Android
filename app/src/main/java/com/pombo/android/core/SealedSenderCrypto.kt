@@ -248,6 +248,13 @@ object SealedSenderCrypto {
     }
 
     /**
+     * Public form of [ecrecover] for DOMAIN-SEPARATED digests built in
+     * Kotlin (never caller-supplied opaque digests — the same rule as
+     * EthereumSigner.signDigest).
+     */
+    fun recoverAddress(digest: ByteArray, sig65: ByteArray): String? = ecrecover(digest, sig65)
+
+    /**
      * Standard public-key recovery (SEC 1 §4.1.6) from a 65-byte r‖s‖v
      * signature over `msgHash` — what ethers.recoverAddress does. Returns the
      * lowercase 0x address, or null when the signature does not recover.

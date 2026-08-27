@@ -24,6 +24,14 @@ data class Channel(
      * fail loudly, never fall back to a key the network rejects.
      */
     val gateAddress: String? = null,
+    /**
+     * Author visibility ('members' | 'everyone'), IMMUTABLE, from the -1
+     * metadata's `m` flag: 'members' publishes -1/-2 under the channel's
+     * SHARED key with authorship sealed inside the epoch envelope. Null on
+     * non-gated channels; a gated channel persisted without it is from
+     * before the mode existed — Everyone by definition.
+     */
+    val authorMode: String? = null,
     val createdAt: Long = System.currentTimeMillis(),
     val createdBy: String? = null,
     val joinedAt: Long? = null,
@@ -64,6 +72,7 @@ data class Channel(
         // Same shape as the web ({ address }) — sync merges whole channel
         // objects, so the two platforms must serialize the gate identically.
         .put("gate", gateAddress?.let { JSONObject().put("address", it) } ?: JSONObject.NULL)
+        .put("authorMode", authorMode ?: JSONObject.NULL)
         .put("createdAt", createdAt)
         .put("createdBy", createdBy ?: JSONObject.NULL)
         .put("joinedAt", joinedAt ?: JSONObject.NULL)
@@ -96,6 +105,9 @@ data class Channel(
                 type = o.optString("type", "public"),
                 gateAddress = o.optJSONObject("gate")
                     ?.optString("address")?.lowercase()?.ifEmpty { null },
+                authorMode = if (o.isNull("authorMode")) {
+                    if (o.optString("type") == "gated") "everyone" else null
+                } else o.optString("authorMode").ifEmpty { null },
                 createdAt = o.optLong("createdAt", 0L),
                 // isNull first: Android's optString yields the literal "null" for JSON null.
                 createdBy = if (o.isNull("createdBy")) null else o.optString("createdBy").ifEmpty { null },

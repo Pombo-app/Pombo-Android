@@ -262,15 +262,8 @@ const api = {
         return { address: w.address, privateKey: w.privateKey };
     },
 
-    // Signs the Pombo canonical hash: keccak256(utf8(data)) -> personal_sign of the hex.
+    // Verifies the Pombo canonical hash: keccak256(utf8(data)) -> personal_sign recovery.
     // Byte-compatible with identityManager.createMessageHash + authManager.signMessage.
-    async signCanonical(a) {
-        if (!wallet) throw new Error('no identity');
-        const hash = window.ethers.keccak256(window.ethers.toUtf8Bytes(a.data));
-        const signature = await wallet.signMessage(hash);
-        return { hash: hash, signature: signature };
-    },
-
     async verifyCanonical(a) {
         const hash = window.ethers.keccak256(window.ethers.toUtf8Bytes(a.data));
         const address = window.ethers.verifyMessage(hash, a.signature);
@@ -562,7 +555,7 @@ const api = {
     // Allowed on -3 on purpose: in a gated channel the clone holds the only
     // publish grant, and owner-only authority moved to ingest (Kotlin drops
     // -3 messages whose SIGNER is not the namespace admin).
-    //   { streamId, partition, content?|contentB64?, gateAddress } -> { ok, timestamp }
+    //   { streamId, partition, content, gateAddress } -> { ok, timestamp }
     async publishAsGate(a) {
         if (!wallet) throw new Error('no identity');
         if (!a.gateAddress) throw new Error('publishAsGate requires gateAddress');
@@ -571,8 +564,7 @@ const api = {
             throw new Error('SignatureType.ERC_1271 not exposed — refresh pombo-vendor.bundle.js');
         }
         const identity = nativeIdentity;
-        const data = a.contentB64 != null ? b64ToU8(a.contentB64) : a.content;
-        const msg = await api._publishAs(identity, a.streamId, a.partition, data, {
+        const msg = await api._publishAs(identity, a.streamId, a.partition, a.content, {
             // LOWERCASE, always — Trap 4: a checksummed publisherId makes every
             // receiver's signature validation reject the message in silence.
             publisherId: String(a.gateAddress).toLowerCase(),
@@ -619,19 +611,15 @@ const api = {
     },
 
     // Kotlin-facing wrapper: publish under a random (or given) ephemeral key.
-    //   { streamId, partition, content?|contentB64?, privateKey? }
+    //   { streamId, partition, content, privateKey? }
     //   -> { ok, timestamp, publisherId }
-    // JSON content via `content`; binary via base64 `contentB64` (same reason
-    // as bridgePublishBinary: a Uint8Array through JSON.stringify mangles).
-    // Smoke-test and diagnostics surface for now — the channel/DM sealing
-    // wrappers that production paths use live bridge-side and call _publishAs
-    // directly, so ephemeral private keys never cross the bridge.
+    // Binary goes through bridgePublishBinary/bridgePublishStorageChunk,
+    // which hand the bytes over outside the JSON envelope.
     async publishAs(a) {
         api._refuseAdminStream(a.streamId);
         const pk = a.privateKey || ('0x' + api._randomHex(32));
         const identity = window.EthereumKeyPairIdentity.fromPrivateKey(pk);
-        const data = a.contentB64 != null ? b64ToU8(a.contentB64) : a.content;
-        const msg = await api._publishAs(identity, a.streamId, a.partition, data);
+        const msg = await api._publishAs(identity, a.streamId, a.partition, a.content);
         return {
             ok: true,
             timestamp: msg.timestamp,
@@ -1052,13 +1040,6 @@ const api = {
         return { ok: true };
     },
 
-    async setStorageDays(a) {
-        if (!client) throw new Error('client not connected');
-        const stream = await client.getStream(a.streamId);
-        await stream.setStorageDayCount(a.storageDays);
-        return { ok: true };
-    },
-
     // Delete one stream on-chain. Mirrors streamr.js deleteStream's per-stream
     // half: "stream does not exist" counts as success, because the caller may
     // be retrying after a partial delete or the channel may predate -3.
@@ -1076,11 +1057,6 @@ const api = {
             }
             throw e;
         }
-    },
-
-    async getAddress() {
-        if (!client) throw new Error('client not connected');
-        return { address: await client.getAddress() };
     },
 
     // ===== ENS (mainnet reverse lookup, like identity.js resolveENS) =====
@@ -1236,8 +1212,7 @@ const api = {
         var tagHexChars = 2 + (PUSH_TAG_BYTES * 2);
         var tag = eth.keccak256(eth.toUtf8Bytes(prefix + streamId)).slice(0, tagHexChars);
 
-        var difficulty = a.difficulty || PUSH_POW_DIFFICULTY;
-        var target = '0'.repeat(difficulty);
+        var target = '0'.repeat(PUSH_POW_DIFFICULTY);
         // 10-second epoch is entropy against replay; the relay recomputes it.
         var epoch = Math.floor(Date.now() / 10000);
         var startTime = Date.now();
@@ -1252,7 +1227,10 @@ const api = {
                         pow: pow,
                         nonce: nonce,
                         epoch: epoch,
-                        channelType: a.native ? 'private' : 'public',
+                        // `kind` overrides for non-message wakes (e.g. 'keys',
+                        // a key-request wake): the relay forwards channelType
+                        // verbatim and receivers branch on it.
+                        channelType: a.kind ? String(a.kind) : (a.native ? 'private' : 'public'),
                         timestamp: Date.now()
                     }
                 };
@@ -1866,20 +1844,6 @@ const api = {
             });
             return { members: members };
         });
-    },
-
-    // { gate, user } -> { canModerate } — owner or moderator
-    async gateCanModerate(a) {
-        try {
-            const info = await api.gateInfo(a);
-            if (info.owner === String(a.user).toLowerCase()) return { canModerate: true };
-        } catch (e) { /* fall through to the moderator read */ }
-        try {
-            const isMod = await api._gateWithProvider(function () {
-                return api._gateRead(a.gate).moderators(a.user);
-            });
-            return { canModerate: !!isMod };
-        } catch (e) { return { canModerate: false }; }
     },
 
     async gateAllow(a) { return api._gateTx(a.gate, 'allow', [a.user]); },
