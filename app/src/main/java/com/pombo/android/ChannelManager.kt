@@ -1305,50 +1305,189 @@ class ChannelManager(
      * CURRENT state comes from the contract; `access` is the mode-aware
      * membership signal (allowlist only means Closed).
      */
-    /** Members-panel row: address plus the PAID subscription end (0 = n/a). */
-    data class MemberRow(val address: String, val paidUntil: Long = 0L)
+    /**
+     * Members-panel row. The roles come from the CONTRACT (the web reads the
+     * same flags): stream permissions say nothing about a gate moderator,
+     * whose only grant belongs to the clone.
+     */
+    data class MemberRow(
+        val address: String,
+        val paidUntil: Long = 0L,
+        val isOwner: Boolean = false,
+        val moderator: Boolean = false
+    )
+
+    /** Full contract flags for one candidate of the open gated channel. */
+    data class GateMemberFlags(
+        val address: String,
+        val isOwner: Boolean,
+        val moderator: Boolean,
+        val access: Boolean,
+        val banned: Boolean,
+        val everMember: Boolean,
+        val erased: Boolean,
+        val paidUntil: Long
+    )
+
+    /**
+     * Candidate membership read straight from the gate: the local cache, the
+     * KEY_REQUEST authors seen on -4 and the -4/P1 roster, each answered by
+     * the contract. Empty on failure — every caller decides its own fallback.
+     */
+    suspend fun gateMemberFlags(): List<GateMemberFlags> {
+        val channel = _current.value?.takeIf { it.type == "gated" } ?: return emptyList()
+        val gate = channel.gateAddress ?: return emptyList()
+        // Roster (-4/P1) is the persistent, device-independent candidate
+        // source; seenRequesters stays as the fallback for channels created
+        // before the roster partition existed.
+        val roster = try {
+            val keysId = channel.keysStreamId.ifEmpty {
+                StreamConstants.deriveKeysId(channel.messageStreamId)
+            }
+            epochKeys.rosterMembers(channel.messageStreamId, keysId).map { it.account }
+        } catch (e: Exception) { emptyList() }
+        // knownBanned: the ban drops them from `members` and the roster stops
+        // carrying them, so without it a banned address falls out of the
+        // candidate set and Moderation loses the entry it exists to show.
+        val candidates = (channel.members + channel.knownBanned +
+            epochKeys.seenRequesters(channel.messageStreamId) + roster)
+            .map { it.lowercase() }.distinct()
+        return try {
+            val res = bridge.call("gateMembers", JSONObject()
+                .put("gate", gate)
+                .put("candidates", JSONArray(candidates)), 60_000)
+            val arr = res.optJSONArray("members") ?: return emptyList()
+            val out = mutableListOf<GateMemberFlags>()
+            for (i in 0 until arr.length()) {
+                val m = arr.optJSONObject(i) ?: continue
+                val addr = m.optString("address").ifEmpty { null } ?: continue
+                out.add(GateMemberFlags(
+                    address = addr,
+                    isOwner = m.optBoolean("isOwner"),
+                    moderator = m.optBoolean("moderator"),
+                    access = m.optBoolean("access"),
+                    banned = m.optBoolean("banned"),
+                    everMember = m.optBoolean("everMember"),
+                    erased = m.optBoolean("erased"),
+                    paidUntil = m.optLong("paidUntil", 0L)
+                ))
+            }
+            rememberBanned(channel, out)
+            out
+        } catch (e: Exception) {
+            Log.w(TAG, "gateMembers failed: ${e.message}")
+            emptyList()
+        }
+    }
+
+    /**
+     * Remember every banned address the gate reports, so it stays a candidate
+     * once the roster and the members cache have let go of it. Self-healing:
+     * bans made before this record existed stick the first time they are seen.
+     */
+    private fun rememberBanned(channel: Channel, flags: List<GateMemberFlags>) {
+        val known = channel.knownBanned.map { it.lowercase() }.toSet()
+        val fresh = flags.filter { it.banned }
+            .map { it.address.lowercase() }
+            .filterNot { it in known }
+        if (fresh.isEmpty()) return
+        val updated = _channels.value.find { it.messageStreamId == channel.messageStreamId }
+            ?.let { it.copy(knownBanned = (it.knownBanned + fresh).distinct()) } ?: return
+        _channels.value = _channels.value.map {
+            if (it.messageStreamId == updated.messageStreamId) updated else it
+        }
+        store.save(_channels.value)
+        if (_current.value?.messageStreamId == updated.messageStreamId) _current.value = updated
+    }
+
+    /** Addresses the GATE has banned (Moderation panel's protocol-level list). */
+    suspend fun gateBannedMembers(): List<String> =
+        gateMemberFlags().filter { it.banned }.map { it.address }
+
+    /**
+     * Rotate the epoch for bans this device never rotated for.
+     *
+     * Only the channel admin can announce an epoch, so a moderator's ban cuts
+     * key distribution immediately but leaves the banned member holding the
+     * current key until an admin shows up. Comparing the gate's banned set
+     * with the one we last rotated for closes that window on the admin's next
+     * open, whoever did the banning and whenever. No event scan: free RPCs cap
+     * eth_getLogs at 10k blocks, and the flags read is one we already make.
+     */
+    private suspend fun rotateForPendingBans(channel: Channel) {
+        if (channel.type != "gated" || channel.gateAddress == null) return
+        val me = myAddress()?.lowercase() ?: return
+        if (me != channel.messageStreamId.substringBefore('/').lowercase()) return
+
+        val banned = try { gateBannedMembers().map { it.lowercase() } }
+            catch (e: Exception) { return }
+        if (banned.isEmpty()) return
+        val covered = channel.rotatedForBanned.map { it.lowercase() }.toSet()
+        if (banned.all { it in covered }) return
+
+        val keysId = channel.keysStreamId.ifEmpty { StreamConstants.deriveKeysId(channel.messageStreamId) }
+        try {
+            epochKeys.rotateEpoch(channel.messageStreamId, keysId)
+            val updated = channel.copy(rotatedForBanned = banned)
+            _channels.value = _channels.value.map {
+                if (it.messageStreamId == updated.messageStreamId) updated else it
+            }
+            store.save(_channels.value)
+            if (_current.value?.messageStreamId == updated.messageStreamId) _current.value = updated
+            Log.i(TAG, "Rotated the epoch for bans made while the admin was away")
+        } catch (e: Exception) {
+            Log.w(TAG, "Deferred rotation for pending bans failed (will retry next open): ${e.message}")
+        }
+    }
 
     suspend fun channelMembers(): List<MemberRow> {
         val channel = _current.value ?: return emptyList()
         if (channel.type == "gated") {
-            val gate = channel.gateAddress ?: return channel.members.map { MemberRow(it) }
-            // Roster (-4/P1) is the persistent, device-independent candidate
-            // source; seenRequesters stays as the fallback for channels
-            // created before the roster partition existed.
-            val roster = try {
-                val keysId = channel.keysStreamId.ifEmpty {
-                    StreamConstants.deriveKeysId(channel.messageStreamId)
-                }
-                epochKeys.rosterMembers(channel.messageStreamId, keysId).map { it.account }
-            } catch (e: Exception) { emptyList() }
-            val candidates = (channel.members + epochKeys.seenRequesters(channel.messageStreamId) + roster)
-                .map { it.lowercase() }.distinct()
-            return try {
-                val res = bridge.call("gateMembers", JSONObject()
-                    .put("gate", gate)
-                    .put("candidates", JSONArray(candidates)), 60_000)
-                val arr = res.optJSONArray("members")
-                    ?: return channel.members.map { MemberRow(it) }
-                val out = mutableListOf<MemberRow>()
-                for (i in 0 until arr.length()) {
-                    val m = arr.optJSONObject(i) ?: continue
-                    if (!m.optBoolean("isOwner") && !m.optBoolean("moderator")
-                        && !m.optBoolean("access")) continue   // banned/ex-members
-                    m.optString("address").ifEmpty { null }?.let {
-                        out.add(MemberRow(it, m.optLong("paidUntil", 0L)))
-                    }
-                }
-                out
-            } catch (e: Exception) {
-                Log.w(TAG, "gateMembers failed, using local cache: ${e.message}")
-                channel.members.map { MemberRow(it) }
-            }
+            if (channel.gateAddress == null) return channel.members.map { MemberRow(it) }
+            val flags = gateMemberFlags()
+            if (flags.isEmpty()) return channel.members.map { MemberRow(it) }
+            return flags
+                .filter { it.isOwner || it.moderator || it.access }   // banned/ex-members
+                .map { MemberRow(it.address, it.paidUntil, it.isOwner, it.moderator) }
         }
         val owner = channelOwner(channel)
         val members = com.pombo.android.core.GraphApi.streamMembers(channel.messageStreamId)
         return (listOfNotNull(owner) + members.filter { !it.equals(owner, ignoreCase = true) })
             .distinct().map { MemberRow(it) }
     }
+
+    /**
+     * May this account manage the open gated channel's membership? The gate's
+     * owner or one of its moderators (web: canAddMembers). Stream permissions
+     * cannot answer it: a moderator holds none, every grant is the clone's.
+     * Fail-closed, cached per (gate, account) for the session.
+     */
+    suspend fun canManageGate(): Boolean {
+        val channel = _current.value?.takeIf { it.type == "gated" } ?: return false
+        val gate = channel.gateAddress ?: return false
+        val me = myAddress()?.lowercase() ?: return false
+        gateManageCache["$gate:$me"]?.let { return it }
+        val allowed = try {
+            val res = bridge.call("gateMembers", JSONObject()
+                .put("gate", gate)
+                .put("candidates", JSONArray(listOf(me))), 30_000)
+            val arr = res.optJSONArray("members")
+            var ok = false
+            if (arr != null) for (i in 0 until arr.length()) {
+                val m = arr.optJSONObject(i) ?: continue
+                if (!m.optString("address").equals(me, ignoreCase = true)) continue
+                ok = m.optBoolean("isOwner") || m.optBoolean("moderator")
+            }
+            ok
+        } catch (e: Exception) {
+            Log.w(TAG, "canManageGate failed (fail-closed): ${e.message}")
+            return false
+        }
+        gateManageCache["$gate:$me"] = allowed
+        return allowed
+    }
+
+    private val gateManageCache = java.util.concurrent.ConcurrentHashMap<String, Boolean>()
 
     /**
      * Channel Details access line for the CURRENT channel's gate (N-D):
@@ -1588,25 +1727,30 @@ class ChannelManager(
             throw IllegalStateException("Cannot remove the channel creator")
         }
 
-        // Gated (N-C): removing IS the ban — one gate transaction cuts
-        // checkAccess (no new epoch keys), the rotation below cuts reads from
-        // here on, and the contract's sticky isValidSignature keeps their
-        // history readable for everyone else (Q10). `erased` is a separate,
-        // explicit owner choice — never set here.
+        // Gated: removing takes the address off the allowlist WITHOUT the ban
+        // mark, so re-adding later is a plain allow(). The rotation below cuts
+        // their reads, and the contract's sticky isValidSignature keeps their
+        // history readable for everyone else (Q10). Only Closed gates have an
+        // allowlist: elsewhere membership is the asset or the subscription, and
+        // Ban is the only way to cut it.
         if (channel.type == "gated") {
             val gate = channel.gateAddress
                 ?: throw IllegalStateException("Gate address unknown (repair pending)")
-            bridge.call("gateBan", JSONObject()
-                .put("gate", gate).put("user", addr).put("erase", false), 180_000)
+            check(currentGateMode() == GATE_MODE_NONE) {
+                "Only Closed channels have an allowlist to remove from — use Ban instead"
+            }
+            bridge.call("gateRevokeAllow", JSONObject()
+                .put("gate", gate).put("user", addr), 180_000)
             val keysIdGated = channel.keysStreamId.ifEmpty { StreamConstants.deriveKeysId(channel.messageStreamId) }
             val updated = channel.copy(members = channel.members.filterNot { it.equals(addr, ignoreCase = true) })
             _channels.value = _channels.value.map { if (it.messageStreamId == updated.messageStreamId) updated else it }
             store.save(_channels.value)
             _current.value = updated
+            gateManageCache.clear()
             try {
                 epochKeys.rotateEpoch(channel.messageStreamId, keysIdGated)
             } catch (e: Exception) {
-                Log.w(TAG, "Epoch rotation after gate ban FAILED — banned member can still read new messages until the next rotation: ${e.message}")
+                Log.w(TAG, "Epoch rotation after removal FAILED — the removed member can still read new messages until the next rotation: ${e.message}")
             }
             return
         }
@@ -1650,8 +1794,9 @@ class ChannelManager(
         val keysId = channel.keysStreamId.ifEmpty { StreamConstants.deriveKeysId(channel.messageStreamId) }
         return epochKeys.rekeyPublishKey(channel.messageStreamId, keysId) { newAddress, oldAddress ->
             val assignments = JSONArray().apply {
+                // PUBLISH alone: the shared key writes, the clone reads.
                 put(JSONObject().put("userId", newAddress)
-                    .put("permissions", JSONArray(listOf("subscribe", "publish"))))
+                    .put("permissions", JSONArray(listOf("publish"))))
                 if (oldAddress != null) put(JSONObject().put("userId", oldAddress)
                     .put("permissions", JSONArray()))
             }
@@ -1979,11 +2124,14 @@ class ChannelManager(
                 // address — every member publishes under it, so the transport
                 // carries no authorship. -4 keeps clone-only (KEY_REQUESTs
                 // must name the requester) and -3 stays owner-published.
+                // The shared key only ever writes: reading is the clone's job
+                // (members subscribe through ERC-1271), so it gets PUBLISH
+                // alone. Same grant shape on re-key.
                 val contentPerms = if (sharedPub != null) JSONArray().apply {
                     put(JSONObject().put("userId", gateAddress)
                         .put("permissions", JSONArray(listOf("subscribe", "publish"))))
                     put(JSONObject().put("userId", sharedPub.address)
-                        .put("permissions", JSONArray(listOf("subscribe", "publish"))))
+                        .put("permissions", JSONArray(listOf("publish"))))
                 } else clonePerms
                 val cloneSubOnly = JSONObject()
                     .put("userId", gateAddress)
@@ -2942,6 +3090,67 @@ class ChannelManager(
             channel, _bannedMembers,
             if (ban) _bannedMembers.value + addr else _bannedMembers.value - addr
         )
+    }
+
+    /**
+     * The two enforcement levels behind one Ban action.
+     *
+     * CLIENT is the ADMIN_STATE ban: every client hides the author's messages,
+     * free and reversible, and only the creator may publish it. PROTOCOL is
+     * the gate ban: `checkAccess` goes false, so no responder hands out keys,
+     * and the epoch rotation that follows cuts reads from here on. Costs gas.
+     */
+    suspend fun banMemberLevels(address: String, client: Boolean, protocol: Boolean) {
+        val channel = _current.value ?: throw IllegalStateException("No channel open")
+        val addr = address.trim()
+        if (channelOwner(channel)?.equals(addr, ignoreCase = true) == true) {
+            throw IllegalStateException("Cannot ban the channel creator")
+        }
+        if (protocol) {
+            val gate = channel.gateAddress
+                ?: throw IllegalStateException("Only gated channels have a protocol-level ban")
+            bridge.call("gateBan", JSONObject()
+                .put("gate", gate).put("user", addr).put("erase", false), 180_000)
+            gateManageCache.clear()
+            val keysId = channel.keysStreamId.ifEmpty { StreamConstants.deriveKeysId(channel.messageStreamId) }
+            var rotated = channel.rotatedForBanned
+            try {
+                epochKeys.rotateEpoch(channel.messageStreamId, keysId)
+                // Covered: the deferred pass must not rotate again for this one.
+                rotated = (rotated + addr.lowercase()).distinct()
+            } catch (e: Exception) {
+                Log.w(TAG, "Epoch rotation after gate ban FAILED — banned member can still read new messages until the next rotation: ${e.message}")
+            }
+            val updated = channel.copy(
+                members = channel.members.filterNot { it.equals(addr, ignoreCase = true) },
+                rotatedForBanned = rotated,
+                knownBanned = (channel.knownBanned + addr.lowercase()).distinct()
+            )
+            _channels.value = _channels.value.map { if (it.messageStreamId == updated.messageStreamId) updated else it }
+            store.save(_channels.value)
+            _current.value = updated
+        }
+        if (client) banMember(addr, true)
+    }
+
+    /**
+     * Lifts whichever bans the address actually carries: the gate ban costs a
+     * transaction, so it is only sent when the contract really has them
+     * banned, and the free ADMIN_STATE entry is always cleared alongside.
+     */
+    suspend fun unbanMemberLevels(address: String) {
+        val channel = _current.value ?: throw IllegalStateException("No channel open")
+        val addr = address.trim()
+        val bannedOnChain = channel.gateAddress != null &&
+            gateBannedMembers().any { it.equals(addr, ignoreCase = true) }
+        if (bannedOnChain) {
+            bridge.call("gateUnban", JSONObject()
+                .put("gate", channel.gateAddress).put("user", addr), 180_000)
+            gateManageCache.clear()
+        }
+        if (_bannedMembers.value.any { it.equals(addr, ignoreCase = true) }) {
+            banMember(addr, false)
+        }
     }
 
     // ==================== DMs (E2E) ====================
@@ -4657,6 +4866,7 @@ class ChannelManager(
                         }
                     }
                     if (!stillCurrent(generation)) return@launch
+                    launch { rotateForPendingBans(channel) }
                 }
                 val loads = launch {
                     listOf(

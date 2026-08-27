@@ -37,6 +37,18 @@ data class Channel(
     val joinedAt: Long? = null,
     val password: String? = null,
     val members: List<String> = emptyList(),
+    /**
+     * Bans this device has already rotated the epoch for. Only the admin can
+     * announce an epoch, so a moderator's ban waits for one; without this the
+     * admin would rotate again on every open for the same ban.
+     */
+    val rotatedForBanned: List<String> = emptyList(),
+    /**
+     * Addresses banned from this device, kept as gate-read candidates: the ban
+     * drops them from [members] and the roster stops carrying them, so without
+     * this the Moderation list loses the one entry it exists to show.
+     */
+    val knownBanned: List<String> = emptyList(),
     val storageEnabled: Boolean = false,
     /** Which storage node holds the history: 'streamr' (Pombo cluster) or 'custom'. */
     val storageProvider: String = "streamr",
@@ -78,6 +90,8 @@ data class Channel(
         .put("joinedAt", joinedAt ?: JSONObject.NULL)
         .put("password", password ?: JSONObject.NULL)
         .put("members", JSONArray(members))
+        .put("rotatedForBanned", JSONArray(rotatedForBanned))
+        .put("knownBanned", JSONArray(knownBanned))
         .put("storageEnabled", storageEnabled)
         .put("storageProvider", storageProvider)
         .put("storageDays", storageDays ?: JSONObject.NULL)
@@ -95,6 +109,14 @@ data class Channel(
             val members = mutableListOf<String>()
             o.optJSONArray("members")?.let { arr ->
                 for (i in 0 until arr.length()) arr.optString(i)?.let { members.add(it) }
+            }
+            val rotatedForBanned = mutableListOf<String>()
+            o.optJSONArray("rotatedForBanned")?.let { arr ->
+                for (i in 0 until arr.length()) arr.optString(i)?.let { rotatedForBanned.add(it) }
+            }
+            val knownBanned = mutableListOf<String>()
+            o.optJSONArray("knownBanned")?.let { arr ->
+                for (i in 0 until arr.length()) arr.optString(i)?.let { knownBanned.add(it) }
             }
             return Channel(
                 messageStreamId = o.getString("messageStreamId"),
@@ -114,6 +136,8 @@ data class Channel(
                 joinedAt = if (o.isNull("joinedAt")) null else o.optLong("joinedAt"),
                 password = if (o.isNull("password")) null else o.optString("password").ifEmpty { null },
                 members = members,
+                rotatedForBanned = rotatedForBanned,
+                knownBanned = knownBanned,
                 storageEnabled = o.optBoolean("storageEnabled", false),
                 storageProvider = o.optString("storageProvider", "streamr").ifEmpty { "streamr" },
                 storageDays = if (o.isNull("storageDays")) null else o.optInt("storageDays"),
