@@ -231,7 +231,7 @@ class EpochKeyManager(
     private fun adminOf(messageStreamId: String): String? =
         messageStreamId.substringBefore('/').lowercase().takeIf { it.length == 42 }
 
-    fun isOwnAdmin(messageStreamId: String): Boolean =
+    private fun isOwnAdmin(messageStreamId: String): Boolean =
         myAddress()?.lowercase() == adminOf(messageStreamId)
 
     // ---- Lifecycle ----

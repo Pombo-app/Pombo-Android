@@ -38,12 +38,12 @@ object Authorship {
 
     class Opened(val author: String, val payload: JSONObject)
 
-    fun bindDigest(messageStreamId: String, pseudonymPubkey: String): ByteArray =
+    private fun bindDigest(messageStreamId: String, pseudonymPubkey: String): ByteArray =
         SealedSenderCrypto.keccak256(
             "$BIND_DOMAIN|${messageStreamId.lowercase()}|${pseudonymPubkey.lowercase()}"
                 .toByteArray(Charsets.UTF_8))
 
-    fun msgDigest(messageStreamId: String, payloadString: String): ByteArray =
+    private fun msgDigest(messageStreamId: String, payloadString: String): ByteArray =
         SealedSenderCrypto.keccak256(
             "$MSG_DOMAIN|${messageStreamId.lowercase()}|$payloadString"
                 .toByteArray(Charsets.UTF_8))
