@@ -343,8 +343,8 @@ fun MainShell(vm: AppViewModel) {
         }
     }
 
-    if (showJoin) JoinChannelDialog(onDismiss = { showJoin = false }) { id, pwd ->
-        vm.joinChannel(id, pwd); showJoin = false
+    if (showJoin) JoinChannelDialog(onDismiss = { showJoin = false }) { id, pwd, name, cls ->
+        vm.joinChannel(id, pwd, name, cls); showJoin = false
     }
 }
 

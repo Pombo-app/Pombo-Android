@@ -751,7 +751,9 @@ class AppViewModel(app: Application) : AndroidViewModel(app), PomboBridge.Listen
     /** Accepts an invite that arrived over DM (web: joinChannelFromInvite). */
     fun acceptInvite(invite: ChannelManager.PendingInvite) = viewModelScope.launch {
         runJoinToast("Joining channel...", "Joined channel successfully!", "Failed to join channel") {
-            val channel = manager.joinChannel(invite.streamId, invite.password)
+            // The sender's name for the channel prefills the local identity
+            // panel; it does not count as the user naming it.
+            val channel = manager.joinChannel(invite.streamId, invite.password, localName = invite.name)
             manager.openChannel(channel.messageStreamId)
             autoEnableChannelPush(channel)
         }
@@ -831,7 +833,7 @@ class AppViewModel(app: Application) : AndroidViewModel(app), PomboBridge.Listen
         _incomingInvite.value = null
         runJoinToast("Joining channel...", "Joined channel successfully!", "Failed to join channel",
             channelName = invite.name) {
-            val channel = manager.joinChannel(invite.streamId, invite.password)
+            val channel = manager.joinChannel(invite.streamId, invite.password, localName = invite.name)
             manager.openChannel(channel.messageStreamId)
         }
     }
@@ -2253,9 +2255,19 @@ class AppViewModel(app: Application) : AndroidViewModel(app), PomboBridge.Listen
         }
     }
 
-    fun joinChannel(input: String, password: String?) = viewModelScope.launch {
+    fun joinChannel(
+        input: String,
+        password: String?,
+        localName: String? = null,
+        classification: String? = null
+    ) = viewModelScope.launch {
         runJoinToast("Joining channel…", "Joined channel", "Failed to join channel") {
-            val channel = manager.joinChannel(input, password?.ifEmpty { null })
+            val channel = manager.joinChannel(
+                input, password?.ifEmpty { null },
+                localName = localName,
+                classification = classification,
+                named = !localName.isNullOrBlank()
+            )
             manager.openChannel(channel.messageStreamId)
             autoEnableChannelPush(channel)
         }
@@ -2263,6 +2275,19 @@ class AppViewModel(app: Application) : AndroidViewModel(app), PomboBridge.Listen
         // on-chain metadata has the real name. Runs after the open so the header
         // is already up.
         runCatching { manager.refreshChannelMetadataFromGraph() }
+    }
+
+    /** Local identity panel (name + classification) for unnamed entries. */
+    val pendingLocalIdentity get() = manager.pendingLocalIdentity
+    fun dismissLocalIdentity() = manager.dismissLocalIdentity()
+    fun saveLocalIdentity(channel: Channel, name: String?, classification: String?) =
+        manager.setLocalChannelIdentity(channel.messageStreamId, name, classification)
+
+    /** Member rename of a channel with no on-chain name: local write + sync. */
+    fun renameChannelLocal(channel: Channel, name: String) {
+        val clean = name.trim()
+        if (clean.isEmpty()) return
+        manager.setLocalChannelIdentity(channel.messageStreamId, clean, null)
     }
 
     // ---- Gate entry screen (N-D): a gated channel refused the join ----
