@@ -89,10 +89,14 @@ class KeyResponderWorker(
                 resendKeys = { keysStreamId ->
                     val gate = byKeysStream[keysStreamId]?.gateAddress?.lowercase()
                     val out = mutableListOf<com.pombo.android.core.EpochKeyManager.Entry>()
+                    // Raw + recoverSigner, same rationale as the in-app resend:
+                    // the ordered pipeline's mesh-side gap-filling stalls on a
+                    // half-connected node; authority is the recovered signer.
                     val res = bridge.call("resend", JSONObject()
                         .put("streamId", keysStreamId)
                         .put("partition", StreamConstants.P_KEY_EXCHANGE)
                         .put("last", 1000)
+                        .put("raw", true)
                         .put("recoverSigner", true), 30_000)
                     val arr = res.optJSONArray("messages")
                     if (arr != null) for (i in 0 until arr.length()) {
@@ -130,7 +134,18 @@ class KeyResponderWorker(
                         true    // unreadable gate answers current-epoch-only
                     }
                 },
-                myPrivateKey = { privateKey }
+                myPrivateKey = { privateKey },
+                // Members-only detection without the channel store: only
+                // Members-only channels ever persist a publish key or its
+                // announce in the epoch slice. Without this the headless
+                // answer handed out epochs but never the PUB_WRAP, leaving a
+                // background-served joiner readable-but-unwritable until the
+                // owner foregrounded the app.
+                sharedPublishFor = { messageStreamId ->
+                    store.load(messageStreamId)?.let {
+                        it.has("pubKey") || it.has("pubAnnounce")
+                    } == true
+                }
             )
 
             for (entry in entries) {
