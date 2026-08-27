@@ -166,10 +166,16 @@ class ChannelManager(
             val entries = mutableListOf<com.pombo.android.core.EpochKeyManager.Entry>()
             val gatedChannel = channelByStream(keysStreamId)?.takeIf { it.type == "gated" }
             try {
+                // Raw: skips the SDK's validation/ordering pipeline. Gap
+                // filling rides the mesh, so on a half-connected node an
+                // ordered resend silently stalls or returns empty while
+                // plain HTTP works. Authority comes from meta.signer
+                // (recoverSigner) — raw always travels with it.
                 val res = bridge.call("resend", JSONObject()
                     .put("streamId", keysStreamId)
                     .put("partition", StreamConstants.P_KEY_EXCHANGE)
                     .put("last", 1000)
+                    .put("raw", gatedChannel != null)
                     .put("recoverSigner", gatedChannel != null), 30_000)
                 val arr = res.optJSONArray("messages")
                 if (arr != null) for (i in 0 until arr.length()) {
@@ -243,10 +249,12 @@ class ChannelManager(
             val entries = mutableListOf<com.pombo.android.core.EpochKeyManager.Entry>()
             val gatedChannel = channelByStream(keysStreamId)?.takeIf { it.type == "gated" }
             try {
+                // Raw + recoverSigner, same rationale as resendKeys above.
                 val res = bridge.call("resend", JSONObject()
                     .put("streamId", keysStreamId)
                     .put("partition", StreamConstants.P_ROSTER)
                     .put("last", 500)
+                    .put("raw", gatedChannel != null)
                     .put("recoverSigner", gatedChannel != null), 30_000)
                 val arr = res.optJSONArray("messages")
                 if (arr != null) for (i in 0 until arr.length()) {
