@@ -5923,21 +5923,33 @@ class ChannelManager(
             if (content is JSONObject && com.pombo.android.core.EpochKeyCrypto.isEpochEnvelope(content)) {
                 val ch = channelByStream(streamId)
                 if (ch != null && isEpochChannel(ch)) {
-                    // Gated: the on-wire publisher is the CLONE — the seeder/
-                    // leecher identity the media controller needs is the
-                    // envelope signer, never the transport publisher.
-                    val author = if (ch.type == "gated") {
+                    val membersOnly = ch.type == "gated" && ch.authorMode == "members"
+                    // Everyone-mode gated: the on-wire publisher is the CLONE —
+                    // the seeder/leecher identity the media controller needs is
+                    // the envelope signer, never the transport publisher.
+                    // Members-only rides the SHARED key instead: the transport
+                    // says nothing, authorship comes from the wrapper inside
+                    // the seal and resolves after decryption.
+                    val envelopeAuthor = if (ch.type == "gated" && !membersOnly) {
                         gatedAuthor(ch, streamId, meta) ?: return
                     } else publisher
                     scope.launch {
                         val keysId = ch.keysStreamId.ifEmpty {
                             StreamConstants.deriveKeysId(ch.messageStreamId)
                         }
-                        val plain = epochKeys.tryDecrypt(
+                        var plain = epochKeys.tryDecrypt(
                             ch.messageStreamId, keysId, content,
                             gated = ch.type == "gated", live = true,
                             timestamp = meta.optLong("timestamp", 0L)
                         ) ?: return@launch
+                        var author = envelopeAuthor
+                        if (membersOnly) {
+                            val opened = com.pombo.android.core.Authorship.open(
+                                ch.messageStreamId, plain) ?: return@launch
+                            if (!liveGateAccessAllows(ch, opened.author)) return@launch
+                            author = opened.author
+                            plain = opened.payload
+                        }
                         media.onSignal(streamId, plain, author)
                     }
                 }
