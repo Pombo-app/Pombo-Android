@@ -956,7 +956,10 @@ class AppViewModel(app: Application) : AndroidViewModel(app), PomboBridge.Listen
 
     suspend fun channelMembers(): List<ChannelManager.MemberRow> = manager.channelMembers()
 
-    /** On-chain permission matrix for the Members panel's Stream Permissions. */
+    /** Gate owner or moderator: who may add, remove and ban members. */
+    suspend fun canManageGate(): Boolean = manager.canManageGate()
+
+    /** On-chain permission matrix for the Moderation panel's grantee table. */
     suspend fun streamPermissions(): List<com.pombo.android.core.GraphApi.StreamPermission> =
         manager.streamPermissions()
 
@@ -1188,6 +1191,57 @@ class AppViewModel(app: Application) : AndroidViewModel(app), PomboBridge.Listen
     fun banMember(address: String, ban: Boolean = true) = moderationAction(
         if (ban) "User banned" else "User unbanned"
     ) { manager.banMember(address, ban) }
+
+    /**
+     * Ban with the levels the modal offers. The protocol level is a
+     * transaction, so it goes through the chain approval; the client level
+     * alone is free and publishes straight away.
+     */
+    fun banMemberLevels(
+        address: String, client: Boolean, protocol: Boolean, onDone: () -> Unit = {}
+    ) = viewModelScope.launch {
+        if (!client && !protocol) return@launch
+        if (protocol) {
+            chainAction("Ban member", "Cuts their access on the gate and rotates the channel key (1 transaction).") {
+                runWithToast("Banning…", "Member banned", "Failed to ban") {
+                    manager.banMemberLevels(address, client, protocol = true)
+                }
+            }
+        } else {
+            try {
+                manager.banMemberLevels(address, client = true, protocol = false)
+                toast("User banned", com.pombo.android.ui.ToastKind.SUCCESS)
+            } catch (e: Exception) {
+                toast(e.message ?: "Failed to ban", com.pombo.android.ui.ToastKind.ERROR, 5000L)
+            }
+        }
+        onDone()
+    }
+
+    /**
+     * Lifts every ban the address carries. Only pays for a transaction when
+     * the gate really has them banned.
+     */
+    fun unbanMemberLevels(address: String, onChain: Boolean, onDone: () -> Unit = {}) = viewModelScope.launch {
+        if (onChain) {
+            chainAction("Unban member", "Restores their access on the gate (1 transaction).") {
+                runWithToast("Unbanning…", "Member unbanned", "Failed to unban") {
+                    manager.unbanMemberLevels(address)
+                }
+            }
+        } else {
+            try {
+                manager.unbanMemberLevels(address)
+                toast("User unbanned", com.pombo.android.ui.ToastKind.SUCCESS)
+            } catch (e: Exception) {
+                toast(e.message ?: "Failed to unban", com.pombo.android.ui.ToastKind.ERROR, 5000L)
+            }
+        }
+        onDone()
+    }
+
+    /** Addresses the gate has banned (Moderation panel's protocol list). */
+    suspend fun gateBannedMembers(): List<String> = manager.gateBannedMembers()
 
     private fun moderationAction(success: String, block: suspend () -> Unit) = viewModelScope.launch {
         try {

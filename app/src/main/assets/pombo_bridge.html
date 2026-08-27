@@ -1847,6 +1847,7 @@ const api = {
     },
 
     async gateAllow(a) { return api._gateTx(a.gate, 'allow', [a.user]); },
+    async gateRevokeAllow(a) { return api._gateTx(a.gate, 'revokeAllow', [a.user]); },
     async gateAllowBatch(a) { return api._gateTx(a.gate, 'allowBatch', [a.users || []]); },
     async gateBan(a) { return api._gateTx(a.gate, 'ban', [a.user, !!a.erase]); },
     async gateUnban(a) { return api._gateTx(a.gate, 'unban', [a.user]); },
