@@ -1769,8 +1769,9 @@ class ChannelManager(
         val keysId = channel.keysStreamId.ifEmpty { StreamConstants.deriveKeysId(channel.messageStreamId) }
         return epochKeys.rekeyPublishKey(channel.messageStreamId, keysId) { newAddress, oldAddress ->
             val assignments = JSONArray().apply {
+                // PUBLISH alone: the shared key writes, the clone reads.
                 put(JSONObject().put("userId", newAddress)
-                    .put("permissions", JSONArray(listOf("subscribe", "publish"))))
+                    .put("permissions", JSONArray(listOf("publish"))))
                 if (oldAddress != null) put(JSONObject().put("userId", oldAddress)
                     .put("permissions", JSONArray()))
             }
@@ -2098,11 +2099,14 @@ class ChannelManager(
                 // address — every member publishes under it, so the transport
                 // carries no authorship. -4 keeps clone-only (KEY_REQUESTs
                 // must name the requester) and -3 stays owner-published.
+                // The shared key only ever writes: reading is the clone's job
+                // (members subscribe through ERC-1271), so it gets PUBLISH
+                // alone. Same grant shape on re-key.
                 val contentPerms = if (sharedPub != null) JSONArray().apply {
                     put(JSONObject().put("userId", gateAddress)
                         .put("permissions", JSONArray(listOf("subscribe", "publish"))))
                     put(JSONObject().put("userId", sharedPub.address)
-                        .put("permissions", JSONArray(listOf("subscribe", "publish"))))
+                        .put("permissions", JSONArray(listOf("publish"))))
                 } else clonePerms
                 val cloneSubOnly = JSONObject()
                     .put("userId", gateAddress)
