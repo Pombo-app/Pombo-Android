@@ -1717,11 +1717,11 @@ internal fun CreateChannelDialog(vm: AppViewModel, onDismiss: () -> Unit, onCrea
                 // included) and is IMMUTABLE after creation.
                 if (kind == ChannelKind.CLOSED || kind == ChannelKind.GATED || kind == ChannelKind.PAID) {
                     Spacer(Modifier.height(16.dp))
-                    SectionLabel("Author Visibility")
+                    SectionLabel("Identity on the wire")
                     Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                         listOf(
-                            Triple(false, "Members only", Icons.Outlined.People),
-                            Triple(true, "On the wire", Icons.Outlined.Public)
+                            Triple(false, "Sealed", Icons.Outlined.People),
+                            Triple(true, "Visible", Icons.Outlined.Public)
                         ).forEach { (value, label, icon) ->
                             val active = authorEveryone == value
                             val activeText = if (value) Color(0xFFFBBF24).copy(alpha = 0.90f) else Color.White
