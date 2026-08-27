@@ -607,17 +607,19 @@ class EpochKeyManager(
     private val announceRetention = java.util.Collections.synchronizedSet(HashSet<String>())
 
     /**
-     * Fire-and-forget retention loop for a just-published KEY_ANNOUNCE (same
-     * pattern as the password challenge). A create-time publish can race the
-     * storage node learning its -4 assignment, or leave a cold node before
-     * any neighbour is connected (R2 publishes into an empty room) — either
-     * way the announce is lost, a joiner never gets an anchor, and the
-     * publishing session masks the missing-from-storage re-announce because
-     * its own freshness entry looks recent. Verify by resend that the -4
-     * actually returns the keyId; republish until it does.
+     * Fire-and-forget retention loop for a just-published announce — epoch
+     * (KEY_ANNOUNCE) or publish key (PUB_ANNOUNCE), same pattern as the
+     * password challenge. A create-time publish can race the storage node
+     * learning its -4 assignment, or leave a cold node before any neighbour
+     * is connected (R2 publishes into an empty room) — either way the
+     * announce is lost, a joiner never gets an anchor, and the publishing
+     * session masks the missing-from-storage re-announce because its own
+     * freshness entry looks recent. Verify by resend that the -4 actually
+     * returns the keyId; republish until it does.
      */
     private fun retainAnnounce(messageStreamId: String, keysStreamId: String, announce: JSONObject) {
         val keyId = announce.optString("keyId")
+        val type = announce.optString("t")
         if (keyId.isEmpty() || !announceRetention.add(keyId)) return
         scope.launch {
             try {
@@ -626,7 +628,7 @@ class EpochKeyManager(
                     if (mutex.withLock { state[messageStreamId] } == null) return@launch
                     try {
                         val found = resendKeys(keysStreamId).any {
-                            it.data.optString("t") == StreamConstants.KEY_ANNOUNCE &&
+                            it.data.optString("t") == type &&
                                 it.data.optString("keyId") == keyId
                         }
                         if (found) {
@@ -795,6 +797,7 @@ class EpochKeyManager(
             persist(messageStreamId, s)
         }
         Log.i(TAG, "publish key announced on ${keysStreamId.takeLast(30)}")
+        retainAnnounce(messageStreamId, keysStreamId, ann)
     }
 
     /**
@@ -1387,6 +1390,9 @@ class EpochKeyManager(
             persist(messageStreamId, s)
         }
         Log.i(TAG, "publish key reset to rev ${newKey.rev} on ${messageStreamId.takeLast(30)}")
+        // Members cannot write until this announce is readable from storage —
+        // verify retention exactly like a fresh epoch announce.
+        retainAnnounce(messageStreamId, keysStreamId, ann)
         return newKey.rev
     }
 
