@@ -4523,16 +4523,28 @@ class ChannelManager(
                             // thread is single — a concurrent -4 drain here
                             // pushed the P0 history call into the seconds.
                             delay(8_000)
-                            if (!stillCurrent(generation)) return@launch
-                            try {
-                                epochKeys.ensureChannelKeys(
-                                    channel.messageStreamId, channel.keysStreamId,
-                                    channel.storageDays ?: 180,
-                                    allowMint = System.currentTimeMillis() - channel.createdAt < 3_600_000,
-                                    memberCount = channel.members.size,
-                                    gated = channel.type == "gated")
-                            } catch (e: Exception) {
-                                Log.w(TAG, "Background epoch reconcile failed", e)
+                            // Reading works without this pass, but it is what
+                            // answers retained requests, re-announces and
+                            // picks up new epochs/revs — a silent give-up
+                            // leaves all of that undone until the next open.
+                            // Same capped backoff as the cold path.
+                            var attempt = 0
+                            while (attempt < 5) {
+                                if (!stillCurrent(generation)) return@launch
+                                try {
+                                    epochKeys.ensureChannelKeys(
+                                        channel.messageStreamId, channel.keysStreamId,
+                                        channel.storageDays ?: 180,
+                                        allowMint = System.currentTimeMillis() - channel.createdAt < 3_600_000,
+                                        memberCount = channel.members.size,
+                                        gated = channel.type == "gated")
+                                    if (attempt > 0) Log.i(TAG, "Background epoch reconcile recovered on retry $attempt")
+                                    return@launch
+                                } catch (e: Exception) {
+                                    Log.w(TAG, "Background epoch reconcile failed (attempt ${attempt + 1}/5)", e)
+                                }
+                                attempt += 1
+                                delay(minOf(15_000L * attempt, 60_000L))
                             }
                         }
                     } else {
