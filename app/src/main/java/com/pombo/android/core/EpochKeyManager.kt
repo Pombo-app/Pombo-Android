@@ -1275,7 +1275,11 @@ class EpochKeyManager(
             }
             if (spk != null) {
                 request!!.put("spk", spk)
-                s.pendingRequests[requestId] = PendingId(missing.min(), System.currentTimeMillis())
+                // Pub-only requests (epochs complete, publish key missing)
+                // have no missing epoch — same floor as fromEpoch above.
+                s.pendingRequests[requestId] = PendingId(
+                    if (missing.isNotEmpty()) missing.min() else 1,
+                    System.currentTimeMillis())
                 while (s.pendingRequests.size > PENDING_REQUESTS_MAX) {
                     s.pendingRequests.keys.firstOrNull()?.let { s.pendingRequests.remove(it) }
                 }

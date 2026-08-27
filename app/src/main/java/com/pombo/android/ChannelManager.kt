@@ -4532,7 +4532,7 @@ class ChannelManager(
                                     memberCount = channel.members.size,
                                     gated = channel.type == "gated")
                             } catch (e: Exception) {
-                                Log.d(TAG, "Background epoch reconcile failed: ${e.message}")
+                                Log.w(TAG, "Background epoch reconcile failed", e)
                             }
                         }
                     } else {
@@ -5667,13 +5667,20 @@ class ChannelManager(
                     // recovery below never runs in that state, so the missing
                     // publish key gets its own one-shot attempt. The wrap
                     // arrives asynchronously: this send may still fail, but
-                    // the request is now in flight for the retry.
-                    epochKeys.ensureChannelKeys(
-                        channel.messageStreamId, keysId,
-                        channel.storageDays ?: 180,
-                        allowMint = System.currentTimeMillis() - channel.createdAt < 3_600_000,
-                        memberCount = channel.members.size,
-                        gated = channel.type == "gated")
+                    // the request is now in flight for the retry. A recovery
+                    // failure must not replace the honest no-key error below.
+                    try {
+                        epochKeys.ensureChannelKeys(
+                            channel.messageStreamId, keysId,
+                            channel.storageDays ?: 180,
+                            allowMint = System.currentTimeMillis() - channel.createdAt < 3_600_000,
+                            memberCount = channel.members.size,
+                            gated = channel.type == "gated")
+                    } catch (e: kotlinx.coroutines.CancellationException) {
+                        throw e
+                    } catch (e: Exception) {
+                        Log.w(TAG, "publish-key recovery failed", e)
+                    }
                     pub = epochKeys.publishKeyFor(channel.messageStreamId)
                 }
                 if (pub == null) throw IllegalStateException(
