@@ -6029,7 +6029,16 @@ class ChannelManager(
     private fun channelByStream(streamId: String): Channel? {
         val match: (Channel) -> Boolean = {
             it.messageStreamId == streamId || it.ephemeralStreamId == streamId ||
-                it.adminStreamId == streamId || (it.keysStreamId.isNotEmpty() && it.keysStreamId == streamId)
+                it.adminStreamId == streamId ||
+                // Records persisted before the keys stream existed carry an
+                // empty keysStreamId — the rest of the code lives with that by
+                // deriving it. Matching only the stored value made the -4
+                // lookup miss, and a miss is not neutral: the resend then goes
+                // without raw/recoverSigner and attributes the announce to the
+                // clone, so the admin's own KEY_ANNOUNCE is rejected as
+                // non-admin and its wraps are discarded.
+                (it.type == "gated" &&
+                    StreamConstants.deriveKeysId(it.messageStreamId) == streamId)
         }
         // Preview channels live only in _current, never in _channels — the
         // gated paths (epoch ingest, clone transport, gate checks) must still
