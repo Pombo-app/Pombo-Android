@@ -2801,7 +2801,7 @@ private fun PolygonRpcCard(vm: AppViewModel) {
                 }
                 Spacer(Modifier.height(8.dp))
                 Text(
-                    "Any Polygon JSON-RPC endpoint. It joins the list when you leave the field.",
+                    "Any Polygon JSON-RPC endpoint.",
                     color = Color.White.copy(alpha = 0.25f), fontSize = 11.sp
                 )
             }
