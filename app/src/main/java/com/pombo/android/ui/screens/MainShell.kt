@@ -2660,10 +2660,10 @@ private fun GraphApiCard(vm: AppViewModel) {
 /** Web #rpc-endpoint-list: which endpoints the app talks to, and their health. */
 @Composable
 private fun PolygonRpcCard(vm: AppViewModel) {
-    val draft by vm.rpcDraft.collectAsState()
-    val applied by vm.rpcSelection.collectAsState()
+    val selection by vm.rpcSelection.collectAsState()
     val probes by vm.rpcProbes.collectAsState()
     val testing by vm.rpcTesting.collectAsState()
+    val notice by vm.rpcNotice.collectAsState()
     var open by remember { mutableStateOf(false) }
     var adding by remember { mutableStateOf(false) }
 
@@ -2672,14 +2672,12 @@ private fun PolygonRpcCard(vm: AppViewModel) {
     // left alone until Test all: opening Settings must not hand the user's
     // address to a provider they did not choose.
     LaunchedEffect(Unit) {
-        vm.resetRpcDraft()
+        vm.clearRpcProbes()
         vm.testRpc()
     }
 
     SettingsSection {
-        val problem = vm.rpcDraftProblem()
-        val dirty = draft != applied
-        val selected = draft.urls
+        val selected = selection.urls
         val tested = selected.filter { probes.containsKey(it) }
         val working = tested.filter { probes[it]?.let { p -> p.alive && p.onPolygon } == true }
 
@@ -2692,9 +2690,8 @@ private fun PolygonRpcCard(vm: AppViewModel) {
                 Spacer(Modifier.height(6.dp))
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     val (dot, label, labelColor) = when {
+                        notice != null -> Triple(Color(0xFFEF4444), notice!!, Color(0xFFF87171))
                         testing -> Triple(Color(0xFFFACC15), "Testing...", Color(0xFFFACC15))
-                        problem != null -> Triple(Color(0xFFEF4444), problem, Color(0xFFF87171))
-                        dirty -> Triple(Color(0xFFFACC15), "Not applied yet", Color(0xFFFACC15))
                         tested.isEmpty() ->
                             Triple(Color.White.copy(alpha = 0.20f), "Not tested", Color.White.copy(alpha = 0.40f))
                         working.isEmpty() -> Triple(Color(0xFFEF4444), "Not connected", Color(0xFFF87171))
@@ -2702,8 +2699,8 @@ private fun PolygonRpcCard(vm: AppViewModel) {
                     }
                     Box(Modifier.size(8.dp).background(dot, CircleShape))
                     Spacer(Modifier.width(6.dp))
-                    Text(label, color = labelColor, fontSize = 12.sp, modifier = Modifier.weight(1f, false))
-                    if (!testing && problem == null && selected.isNotEmpty()) {
+                    Text(label, color = labelColor, fontSize = 12.sp)
+                    if (notice == null && !testing && selected.isNotEmpty()) {
                         Spacer(Modifier.width(8.dp))
                         Text(
                             "${working.size}/${selected.size}",
@@ -2713,15 +2710,18 @@ private fun PolygonRpcCard(vm: AppViewModel) {
                 }
             }
             Spacer(Modifier.width(8.dp))
-            Box(
-                Modifier
-                    .background(Color.White.copy(alpha = 0.05f), RoundedCornerShape(8.dp))
-                    .clickableNoRipple { if (!testing) vm.testRpc(all = true) }
-                    .padding(horizontal = 12.dp, vertical = 6.dp)
-            ) {
-                Text("Test all", color = Color.White.copy(alpha = 0.60f), fontSize = 12.sp)
+            // The endpoint actually in front, which is the first one ticked: a
+            // row that is off is not talked to, so naming it here would mislead.
+            selection.rows.firstOrNull { it.on }?.let { first ->
+                Text(
+                    if (first.key == com.pombo.android.core.RpcEndpoints.CUSTOM_KEY)
+                        selection.customUrl.removePrefix("https://")
+                    else selection.labelFor(first.key),
+                    color = Color.White.copy(alpha = 0.50f), fontSize = 12.sp,
+                    maxLines = 1, overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis
+                )
             }
-            Spacer(Modifier.width(4.dp))
+            Spacer(Modifier.width(6.dp))
             Icon(
                 if (open) Icons.Filled.KeyboardArrowUp else Icons.Filled.KeyboardArrowDown,
                 contentDescription = null,
@@ -2739,16 +2739,16 @@ private fun PolygonRpcCard(vm: AppViewModel) {
         )
         Spacer(Modifier.height(10.dp))
 
-        draft.rows.forEachIndexed { index, row ->
-            val url = draft.urlFor(row.key)
+        selection.rows.forEachIndexed { index, row ->
+            val url = selection.urlFor(row.key)
             RpcEndpointRow(
-                name = draft.labelFor(row.key),
+                name = selection.labelFor(row.key),
                 host = (url ?: "").removePrefix("https://"),
                 checked = row.on,
                 probe = url?.let { probes[it] },
                 testing = testing,
                 canMoveUp = index > 0,
-                canMoveDown = index < draft.rows.lastIndex,
+                canMoveDown = index < selection.rows.lastIndex,
                 onCheck = { vm.setRpcRow(row.key, it) },
                 onMove = { vm.moveRpcRow(row.key, it) },
                 onRemove = if (row.key == com.pombo.android.core.RpcEndpoints.CUSTOM_KEY) {
@@ -2757,7 +2757,9 @@ private fun PolygonRpcCard(vm: AppViewModel) {
             )
         }
 
-        // Add endpoint, the same shape as adding a storage node.
+        // Add endpoint, the same shape as adding a storage node. There is
+        // nothing to press anywhere else on this card, so the field saves when
+        // it is left, like the Graph API key above it.
         Spacer(Modifier.height(6.dp))
         if (!adding) {
             Row(
@@ -2780,86 +2782,44 @@ private fun PolygonRpcCard(vm: AppViewModel) {
                     .border(1.dp, Color.White.copy(alpha = 0.05f), RoundedCornerShape(12.dp))
                     .padding(12.dp)
             ) {
-                androidx.compose.foundation.text.BasicTextField(
+                CompactSettingsField(
                     value = urlDraft,
                     onValueChange = { urlDraft = it; error = null },
-                    singleLine = true,
-                    textStyle = androidx.compose.ui.text.TextStyle(
-                        fontSize = 12.sp, color = PomboColors.Text,
-                        fontFamily = androidx.compose.ui.text.font.FontFamily.Monospace
-                    ),
-                    cursorBrush = androidx.compose.ui.graphics.SolidColor(PomboColors.Accent),
-                    modifier = Modifier.fillMaxWidth()
-                        .background(Color.White.copy(alpha = 0.05f), RoundedCornerShape(8.dp))
-                        .border(1.dp, Color.White.copy(alpha = 0.10f), RoundedCornerShape(8.dp))
-                        .padding(horizontal = 12.dp, vertical = 8.dp),
-                    decorationBox = { inner ->
-                        if (urlDraft.isEmpty()) Text(
-                            "https://your-rpc-endpoint.com",
-                            color = Color.White.copy(alpha = 0.20f), fontSize = 12.sp,
-                            fontFamily = androidx.compose.ui.text.font.FontFamily.Monospace
-                        )
-                        inner()
+                    placeholder = "https://your-rpc-endpoint.com"
+                ) {
+                    val entered = urlDraft.trim()
+                    when {
+                        // Left empty: nothing was being added, so it goes away.
+                        entered.isEmpty() -> adding = false
+                        vm.addRpcCustomUrl(entered) -> adding = false
+                        else -> error = "Enter an https:// URL"
                     }
-                )
+                }
                 error?.let {
                     Spacer(Modifier.height(6.dp))
                     Text(it, color = Color(0xFFF87171), fontSize = 11.sp)
                 }
                 Spacer(Modifier.height(8.dp))
                 Text(
-                    "Any Polygon JSON-RPC endpoint. It joins the list and is used alongside whatever else is checked.",
+                    "Any Polygon JSON-RPC endpoint. It joins the list when you leave the field.",
                     color = Color.White.copy(alpha = 0.25f), fontSize = 11.sp
                 )
-                Spacer(Modifier.height(10.dp))
-                Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End) {
-                    Text(
-                        "Cancel", color = Color.White.copy(alpha = 0.60f), fontSize = 12.sp,
-                        modifier = Modifier.clickableNoRipple { adding = false }.padding(8.dp)
-                    )
-                    Spacer(Modifier.width(4.dp))
-                    Box(
-                        Modifier
-                            .background(PomboColors.Accent, RoundedCornerShape(8.dp))
-                            .clickableNoRipple {
-                                if (!urlDraft.trim().startsWith("https://")) {
-                                    error = "Enter an https:// URL"
-                                } else {
-                                    vm.addRpcCustomUrl(urlDraft)
-                                    adding = false
-                                }
-                            }
-                            .padding(horizontal = 12.dp, vertical = 6.dp)
-                    ) {
-                        Text("Add", color = Color.Black, fontSize = 12.sp)
-                    }
-                }
             }
         }
 
-        if (dirty) {
-            Spacer(Modifier.height(12.dp))
-            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End) {
-                Box(
-                    Modifier
-                        .background(
-                            if (problem == null) PomboColors.Accent else Color.White.copy(alpha = 0.05f),
-                            RoundedCornerShape(8.dp)
-                        )
-                        .clickableNoRipple { if (problem == null) vm.applyRpcSelection() }
-                        .padding(horizontal = 14.dp, vertical = 7.dp)
-                ) {
-                    Text(
-                        "Apply",
-                        color = if (problem == null) Color.Black else Color.White.copy(alpha = 0.30f),
-                        fontSize = 12.sp
-                    )
-                }
+        Spacer(Modifier.height(14.dp))
+        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End) {
+            Box(
+                Modifier
+                    .background(Color.White.copy(alpha = 0.05f), RoundedCornerShape(8.dp))
+                    .clickableNoRipple { if (!testing) vm.testRpc(all = true) }
+                    .padding(horizontal = 12.dp, vertical = 6.dp)
+            ) {
+                Text("Test all", color = Color.White.copy(alpha = 0.60f), fontSize = 12.sp)
             }
         }
     }
 }
-
 @Composable
 private fun RpcEndpointRow(
     name: String,
