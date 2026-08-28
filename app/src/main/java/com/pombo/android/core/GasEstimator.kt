@@ -1,6 +1,8 @@
 package com.pombo.android.core
 
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.async
+import kotlinx.coroutines.awaitAll
 import kotlinx.coroutines.withContext
 import org.json.JSONArray
 import org.json.JSONObject
@@ -24,7 +26,7 @@ object GasEstimator {
      * falls back to the Auto preset, so an estimate asked before the account
      * loads still works.
      */
-    @Volatile var rpcUrls: List<String> = RpcPresets.estimatorUrls("auto", null)
+    @Volatile var rpcUrls: List<String> = RpcEndpoints.normalize(emptyList(), "").urls
         set(value) {
             if (value.isEmpty()) return
             field = value
@@ -242,38 +244,61 @@ object GasEstimator {
 
     private const val TAG = "GasEstimator"
 
+    /** What one endpoint answered, or did not, to a single probe. */
+    data class Probe(val alive: Boolean, val chainId: Int? = null, val ms: Int? = null) {
+        val onPolygon: Boolean get() = chainId == null || chainId == 137
+    }
+
     /**
-     * Web testRpcConnection: eth_blockNumber against each URL (max 3), 5s
-     * timeout each. Returns how many answered with a result.
+     * eth_chainId against every URL at once, 5s timeout each. Concurrent
+     * because seven endpoints in series is seven timeouts one after another.
+     *
+     * The chain is read rather than assumed, so a custom URL pointing at some
+     * other network says so instead of looking healthy until a transaction
+     * fails. This speaks plain JSON-RPC from Kotlin, so it measures whether the
+     * endpoint is alive and nothing about whether the WebView may call it.
      */
-    suspend fun testEndpoints(urls: List<String>): Int = withContext(Dispatchers.IO) {
-        var working = 0
+    suspend fun probeEndpoints(urls: List<String>): Map<String, Probe> = withContext(Dispatchers.IO) {
         val body = JSONObject()
             .put("jsonrpc", "2.0")
-            .put("method", "eth_blockNumber")
+            .put("method", "eth_chainId")
             .put("params", JSONArray())
             .put("id", 1)
             .toString()
             .toByteArray()
-        for (url in urls.take(3)) {
-            try {
-                val conn = (URL(url).openConnection() as HttpURLConnection).apply {
-                    requestMethod = "POST"
-                    doOutput = true
-                    connectTimeout = RPC_TIMEOUT_MS
-                    readTimeout = RPC_TIMEOUT_MS
-                    setRequestProperty("Content-Type", "application/json")
-                }
-                conn.outputStream.use { it.write(body) }
-                val ok = conn.responseCode == 200 &&
-                    JSONObject(conn.inputStream.bufferedReader().use { it.readText() })
-                        .optString("result").isNotEmpty()
-                conn.disconnect()
-                if (ok) working++
-            } catch (e: Exception) {
-            }
+
+        kotlinx.coroutines.coroutineScope {
+            urls.distinct().map { url ->
+                async { url to probeOne(url, body) }
+            }.awaitAll().toMap()
         }
-        working
+    }
+
+    private fun probeOne(url: String, body: ByteArray): Probe {
+        val started = System.currentTimeMillis()
+        return try {
+            val conn = (URL(url).openConnection() as HttpURLConnection).apply {
+                requestMethod = "POST"
+                doOutput = true
+                connectTimeout = RPC_TIMEOUT_MS
+                readTimeout = RPC_TIMEOUT_MS
+                setRequestProperty("Content-Type", "application/json")
+            }
+            conn.outputStream.use { it.write(body) }
+            val result = if (conn.responseCode == 200) {
+                JSONObject(conn.inputStream.bufferedReader().use { it.readText() })
+                    .optString("result")
+            } else ""
+            conn.disconnect()
+            if (result.isEmpty()) Probe(alive = false)
+            else Probe(
+                alive = true,
+                chainId = result.removePrefix("0x").toIntOrNull(16),
+                ms = (System.currentTimeMillis() - started).toInt()
+            )
+        } catch (e: Exception) {
+            Probe(alive = false)
+        }
     }
 
     fun formatBalanceDATA(wei: BigInteger?): String {

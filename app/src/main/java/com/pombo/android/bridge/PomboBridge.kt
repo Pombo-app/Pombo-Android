@@ -95,6 +95,9 @@ class PomboBridge(
      * during startup.
      */
     private val pageReadyFlow = kotlinx.coroutines.flow.MutableStateFlow(false)
+
+    /** Whether the JS world is up, for callers that must not wait for it. */
+    val pageReady: Boolean get() = pageReadyFlow.value
     private val clientReadyFlow = kotlinx.coroutines.flow.MutableStateFlow(false)
 
     /**

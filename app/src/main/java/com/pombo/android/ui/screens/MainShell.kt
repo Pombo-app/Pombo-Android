@@ -47,6 +47,7 @@ import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Lock
 import androidx.compose.material.icons.filled.MailOutline
 import androidx.compose.material.icons.filled.KeyboardArrowDown
+import androidx.compose.material.icons.filled.KeyboardArrowUp
 import androidx.compose.material.icons.filled.Pause
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.ui.draw.alpha
@@ -2608,7 +2609,7 @@ private fun ApiPanel(vm: AppViewModel) {
             Text("Using custom key", color = Color(0xFF4ADE80), fontSize = 12.sp)
         }
 
-        // ---- Polygon RPC endpoint (web #rpc-preset-select) ----
+        // ---- Polygon RPC endpoints (web #rpc-endpoint-list) ----
         Spacer(Modifier.height(20.dp))
         Box(Modifier.fillMaxWidth().height(1.dp).background(Color.White.copy(alpha = 0.05f)))
         Spacer(Modifier.height(16.dp))
@@ -2618,100 +2619,174 @@ private fun ApiPanel(vm: AppViewModel) {
         )
         Spacer(Modifier.height(8.dp))
 
-        val rpcPreset by vm.rpcPreset.collectAsState()
-        val rpcCustomSaved by vm.rpcCustomUrl.collectAsState()
-        var rpcMenu by remember { mutableStateOf(false) }
-        var customDraft by remember(rpcCustomSaved) { mutableStateOf(rpcCustomSaved) }
+        val rpcDraft by vm.rpcDraft.collectAsState()
+        val rpcProbes by vm.rpcProbes.collectAsState()
+        val rpcTesting by vm.rpcTesting.collectAsState()
+        val rpcApplied by vm.rpcSelection.collectAsState()
 
-        Box {
+        // Probe as soon as the panel is shown: an endpoint that stopped
+        // answering has to be readable without anyone pressing anything.
+        LaunchedEffect(Unit) {
+            vm.resetRpcDraft()
+            vm.testRpc()
+        }
+
+        Text(
+            "Checked endpoints are the ones used, in this order. The first is preferred.",
+            color = Color.White.copy(alpha = 0.30f), fontSize = 12.sp
+        )
+        Spacer(Modifier.height(10.dp))
+
+        rpcDraft.rows.forEachIndexed { index, row ->
+            val url = rpcDraft.urlFor(row.key)
+            val probe = url?.let { rpcProbes[it] }
             Row(
                 Modifier.fillMaxWidth()
+                    .padding(bottom = 6.dp)
                     .background(Color.White.copy(alpha = 0.05f), RoundedCornerShape(12.dp))
-                    .border(1.dp, Color.White.copy(alpha = 0.10f), RoundedCornerShape(12.dp))
-                    .clickableNoRipple { rpcMenu = true }
-                    .padding(horizontal = 14.dp, vertical = 12.dp),
+                    .border(
+                        1.dp,
+                        Color.White.copy(alpha = if (row.on) 0.20f else 0.05f),
+                        RoundedCornerShape(12.dp)
+                    )
+                    .padding(start = 8.dp, end = 4.dp, top = 6.dp, bottom = 6.dp),
                 verticalAlignment = Alignment.CenterVertically
             ) {
-                Text(
-                    com.pombo.android.core.RpcPresets.byKey(rpcPreset).label,
-                    color = PomboColors.Text, fontSize = 14.sp, modifier = Modifier.weight(1f)
+                androidx.compose.material3.Checkbox(
+                    checked = row.on,
+                    onCheckedChange = { vm.setRpcRow(row.key, it) },
+                    colors = androidx.compose.material3.CheckboxDefaults.colors(
+                        checkedColor = PomboColors.Accent,
+                        uncheckedColor = Color.White.copy(alpha = 0.30f),
+                        checkmarkColor = Color.Black
+                    ),
+                    modifier = Modifier.size(28.dp)
                 )
-                Icon(
-                    Icons.Filled.KeyboardArrowDown, contentDescription = null,
-                    tint = Color.White.copy(alpha = 0.40f), modifier = Modifier.size(18.dp)
-                )
-            }
-            androidx.compose.material3.DropdownMenu(
-                expanded = rpcMenu,
-                onDismissRequest = { rpcMenu = false },
-                modifier = Modifier.background(Color(0xFF16161B))
-            ) {
-                com.pombo.android.core.RpcPresets.ALL.forEach { preset ->
-                    androidx.compose.material3.DropdownMenuItem(
-                        text = {
-                            Text(
-                                preset.label, fontSize = 13.sp,
-                                color = if (preset.key == rpcPreset) PomboColors.Accent else PomboColors.Text
-                            )
-                        },
-                        onClick = {
-                            rpcMenu = false
-                            vm.setRpcPreference(preset.key, customDraft)
-                        }
+                Spacer(Modifier.width(6.dp))
+                Column(Modifier.weight(1f)) {
+                    Text(
+                        rpcDraft.labelFor(row.key),
+                        color = if (row.on) PomboColors.Text else Color.White.copy(alpha = 0.50f),
+                        fontSize = 14.sp
                     )
+                    if (row.key == com.pombo.android.core.RpcEndpoints.CUSTOM_KEY) {
+                        var draft by remember(rpcDraft.customUrl) {
+                            mutableStateOf(rpcDraft.customUrl)
+                        }
+                        CompactSettingsField(
+                            value = draft,
+                            onValueChange = { draft = it },
+                            placeholder = "https://your-rpc-endpoint.com"
+                        ) {
+                            vm.setRpcCustomUrl(draft)
+                        }
+                    } else {
+                        Text(
+                            (url ?: "").removePrefix("https://"),
+                            color = Color.White.copy(alpha = 0.30f), fontSize = 11.sp
+                        )
+                    }
+                }
+                Spacer(Modifier.width(6.dp))
+                RpcProbeLabel(probe, rpcTesting)
+                Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                    RpcMoveArrow(Icons.Filled.KeyboardArrowUp, index > 0) { vm.moveRpcRow(row.key, -1) }
+                    RpcMoveArrow(
+                        Icons.Filled.KeyboardArrowDown,
+                        index < rpcDraft.rows.lastIndex
+                    ) { vm.moveRpcRow(row.key, 1) }
                 }
             }
         }
 
-        if (rpcPreset == "custom") {
-            Spacer(Modifier.height(10.dp))
-            // Applies on focus loss like the key field — setRpcPreference
-            // toasts and reconnects.
-            CompactSettingsField(
-                value = customDraft,
-                onValueChange = { customDraft = it },
-                placeholder = "https://your-rpc-endpoint.com"
-            ) {
-                val url = customDraft.trim()
-                if (url.startsWith("https://") && url != rpcCustomSaved) {
-                    vm.setRpcPreference("custom", url)
-                }
-            }
-            Spacer(Modifier.height(4.dp))
-            Text(
-                "Enter a valid Polygon RPC endpoint URL",
-                color = Color.White.copy(alpha = 0.30f), fontSize = 12.sp
-            )
-        }
-
-        // Status dot + Test Connection (web #rpc-status / #test-rpc-btn).
-        Spacer(Modifier.height(12.dp))
-        val rpcTest by vm.rpcTest.collectAsState()
+        // Status + Test / Apply (web #rpc-status, #test-rpc-btn, #apply-rpc-btn).
+        Spacer(Modifier.height(6.dp))
+        val problem = vm.rpcDraftProblem()
+        val dirty = rpcDraft != rpcApplied
         Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
-            val (dotColor, statusText, textColor) = when (val t = rpcTest) {
-                is AppViewModel.RpcTest.Idle ->
-                    Triple(Color.White.copy(alpha = 0.20f), "Not tested", Color.White.copy(alpha = 0.40f))
-                is AppViewModel.RpcTest.Testing ->
+            val selected = rpcDraft.urls
+            val failing = selected.count { rpcProbes[it]?.let { p -> !p.alive || !p.onPolygon } ?: false }
+            val (dotColor, statusText, textColor) = when {
+                rpcTesting ->
                     Triple(Color(0xFFFACC15), "Testing...", Color(0xFFFACC15))
-                is AppViewModel.RpcTest.Done -> when {
-                    t.working == 0 -> Triple(Color(0xFFEF4444), "All endpoints failed", Color(0xFFF87171))
-                    t.working < t.total -> Triple(Color(0xFFFACC15), "${t.working}/${t.total} working", Color(0xFFFACC15))
-                    else -> Triple(Color(0xFF22C55E), "Connected", Color(0xFF4ADE80))
-                }
+                problem != null ->
+                    Triple(Color(0xFFEF4444), problem, Color(0xFFF87171))
+                dirty ->
+                    Triple(Color(0xFFFACC15), "Not applied yet", Color(0xFFFACC15))
+                rpcProbes.isEmpty() ->
+                    Triple(Color.White.copy(alpha = 0.20f), "Not tested", Color.White.copy(alpha = 0.40f))
+                failing == 0 ->
+                    Triple(Color(0xFF22C55E), "Connected", Color(0xFF4ADE80))
+                failing < selected.size ->
+                    Triple(Color(0xFFFACC15), "$failing of ${selected.size} not answering", Color(0xFFFACC15))
+                else ->
+                    Triple(Color(0xFFEF4444), "No selected endpoint answered", Color(0xFFF87171))
             }
             Box(Modifier.size(8.dp).background(dotColor, CircleShape))
             Spacer(Modifier.width(6.dp))
             Text(statusText, color = textColor, fontSize = 12.sp, modifier = Modifier.weight(1f))
+            if (dirty) {
+                Box(
+                    Modifier
+                        .background(
+                            if (problem == null) PomboColors.Accent else Color.White.copy(alpha = 0.05f),
+                            RoundedCornerShape(8.dp)
+                        )
+                        .clickableNoRipple { if (problem == null) vm.applyRpcSelection() }
+                        .padding(horizontal = 12.dp, vertical = 6.dp)
+                ) {
+                    Text(
+                        "Apply",
+                        color = if (problem == null) Color.Black else Color.White.copy(alpha = 0.30f),
+                        fontSize = 12.sp
+                    )
+                }
+                Spacer(Modifier.width(8.dp))
+            }
             Box(
                 Modifier
                     .background(Color.White.copy(alpha = 0.05f), RoundedCornerShape(8.dp))
-                    .clickableNoRipple { if (rpcTest !is AppViewModel.RpcTest.Testing) vm.testRpc() }
+                    .clickableNoRipple { if (!rpcTesting) vm.testRpc() }
                     .padding(horizontal = 12.dp, vertical = 6.dp)
             ) {
-                Text("Test Connection", color = Color.White.copy(alpha = 0.60f), fontSize = 12.sp)
+                Text("Test all", color = Color.White.copy(alpha = 0.60f), fontSize = 12.sp)
             }
         }
     }
+}
+
+/**
+ * One endpoint's verdict. "Blocked in app" is its own state because being
+ * alive and answering the WebView's origin are different properties, and only
+ * the second one decides whether the bridge can use it.
+ */
+@Composable
+private fun RpcProbeLabel(probe: AppViewModel.RpcProbe?, testing: Boolean) {
+    val (text, color) = when {
+        probe == null && testing -> "testing" to Color(0xFFFACC15)
+        probe == null -> "not tested" to Color.White.copy(alpha = 0.25f)
+        !probe.alive -> "no answer" to Color(0xFFF87171)
+        !probe.onPolygon -> "not Polygon" to Color(0xFFFACC15)
+        probe.webView == AppViewModel.WebViewProbe.BLOCKED ->
+            "blocked in app" to Color(0xFFFACC15)
+        else -> "${probe.ms ?: 0} ms" to Color(0xFF4ADE80)
+    }
+    Text(text, color = color, fontSize = 11.sp)
+}
+
+@Composable
+private fun RpcMoveArrow(
+    icon: androidx.compose.ui.graphics.vector.ImageVector,
+    enabled: Boolean,
+    onClick: () -> Unit
+) {
+    Icon(
+        icon, contentDescription = null,
+        tint = Color.White.copy(alpha = if (enabled) 0.35f else 0.08f),
+        modifier = Modifier
+            .size(18.dp)
+            .then(if (enabled) Modifier.clickableNoRipple(onClick) else Modifier)
+    )
 }
 
 /**
