@@ -2583,149 +2583,263 @@ private fun CompactSettingsField(
 
 @Composable
 private fun ApiPanel(vm: AppViewModel) {
-    // Channel discovery goes through The Graph; without a key of your own it
-    // uses the shared one bundled with the app.
+    // Both cards read as a summary until opened; the list of endpoints is the
+    // kind of thing you set once and then only want reassurance about.
+    GraphApiCard(vm)
+    Spacer(Modifier.height(12.dp))
+    PolygonRpcCard(vm)
+}
+
+/** Channel discovery goes through The Graph; without a key of your own it
+ *  uses the shared one bundled with the app. */
+@Composable
+private fun GraphApiCard(vm: AppViewModel) {
     val graphKey by vm.graphApiKey.collectAsState()
+    val health by vm.graphHealth.collectAsState()
+    var open by remember { mutableStateOf(false) }
     var keyDraft by remember(graphKey) { mutableStateOf(graphKey) }
+
+    LaunchedEffect(Unit) { vm.refreshGraphHealth() }
+
     SettingsSection {
-        Text("The Graph API Key", color = PomboColors.TextDim, fontSize = 12.sp)
-        Spacer(Modifier.height(6.dp))
-        // Commits when the field loses focus (tap away / IME done), like the
-        // web's `change` event — setGraphApiKey shows the toast.
-        CompactSettingsField(
-            value = keyDraft,
-            onValueChange = { keyDraft = it },
-            placeholder = "Optional - uses default if empty"
+        Row(
+            Modifier.fillMaxWidth().clickableNoRipple { open = !open },
+            verticalAlignment = Alignment.CenterVertically
         ) {
-            if (keyDraft.trim() != graphKey) vm.setGraphApiKey(keyDraft)
-        }
-        Spacer(Modifier.height(6.dp))
-        Text("Get yours at thegraph.com/studio", color = Color.White.copy(alpha = 0.30f), fontSize = 12.sp)
-        Spacer(Modifier.height(4.dp))
-        // Web #graph-api-status: yellow while on the shared default key.
-        if (graphKey.isEmpty()) {
-            Text("Using default key (rate limited)", color = Color(0xFFFACC15), fontSize = 12.sp)
-        } else {
-            Text("Using custom key", color = Color(0xFF4ADE80), fontSize = 12.sp)
-        }
-
-        // ---- Polygon RPC endpoints (web #rpc-endpoint-list) ----
-        Spacer(Modifier.height(20.dp))
-        Box(Modifier.fillMaxWidth().height(1.dp).background(Color.White.copy(alpha = 0.05f)))
-        Spacer(Modifier.height(16.dp))
-        Text(
-            "POLYGON RPC ENDPOINT", color = Color.White.copy(alpha = 0.80f),
-            fontSize = 11.sp, fontWeight = FontWeight.Medium, letterSpacing = 0.08.em
-        )
-        Spacer(Modifier.height(8.dp))
-
-        val rpcDraft by vm.rpcDraft.collectAsState()
-        val rpcProbes by vm.rpcProbes.collectAsState()
-        val rpcTesting by vm.rpcTesting.collectAsState()
-        val rpcApplied by vm.rpcSelection.collectAsState()
-
-        // Probe as soon as the panel is shown: an endpoint that stopped
-        // answering has to be readable without anyone pressing anything.
-        LaunchedEffect(Unit) {
-            vm.resetRpcDraft()
-            vm.testRpc()
-        }
-
-        Text(
-            "Checked endpoints are the ones used, in this order. The first is preferred.",
-            color = Color.White.copy(alpha = 0.30f), fontSize = 12.sp
-        )
-        Spacer(Modifier.height(10.dp))
-
-        rpcDraft.rows.forEachIndexed { index, row ->
-            val url = rpcDraft.urlFor(row.key)
-            val probe = url?.let { rpcProbes[it] }
-            Row(
-                Modifier.fillMaxWidth()
-                    .padding(bottom = 6.dp)
-                    .background(Color.White.copy(alpha = 0.05f), RoundedCornerShape(12.dp))
-                    .border(
-                        1.dp,
-                        Color.White.copy(alpha = if (row.on) 0.20f else 0.05f),
-                        RoundedCornerShape(12.dp)
-                    )
-                    .padding(start = 8.dp, end = 4.dp, top = 6.dp, bottom = 6.dp),
-                verticalAlignment = Alignment.CenterVertically
-            ) {
-                androidx.compose.material3.Checkbox(
-                    checked = row.on,
-                    onCheckedChange = { vm.setRpcRow(row.key, it) },
-                    colors = androidx.compose.material3.CheckboxDefaults.colors(
-                        checkedColor = PomboColors.Accent,
-                        uncheckedColor = Color.White.copy(alpha = 0.30f),
-                        checkmarkColor = Color.Black
-                    ),
-                    modifier = Modifier.size(28.dp)
+            Column(Modifier.weight(1f)) {
+                Text(
+                    "THE GRAPH API", color = Color.White.copy(alpha = 0.80f),
+                    fontSize = 11.sp, fontWeight = FontWeight.Medium, letterSpacing = 0.08.em
                 )
-                Spacer(Modifier.width(6.dp))
-                Column(Modifier.weight(1f)) {
+                Spacer(Modifier.height(6.dp))
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    val (dot, label, labelColor) = when (health) {
+                        null -> Triple(Color.White.copy(alpha = 0.20f), "Not checked", Color.White.copy(alpha = 0.40f))
+                        true -> Triple(Color(0xFF22C55E), "OK", Color(0xFF4ADE80))
+                        else -> Triple(Color(0xFFEF4444), "Not responding", Color(0xFFF87171))
+                    }
+                    Box(Modifier.size(8.dp).background(dot, CircleShape))
+                    Spacer(Modifier.width(6.dp))
+                    Text(label, color = labelColor, fontSize = 12.sp)
+                    Spacer(Modifier.width(8.dp))
                     Text(
-                        rpcDraft.labelFor(row.key),
-                        color = if (row.on) PomboColors.Text else Color.White.copy(alpha = 0.50f),
-                        fontSize = 14.sp
+                        if (graphKey.isEmpty()) "Using default key (rate limited)" else "Using your own key",
+                        color = Color.White.copy(alpha = 0.30f), fontSize = 12.sp
                     )
-                    if (row.key == com.pombo.android.core.RpcEndpoints.CUSTOM_KEY) {
-                        var draft by remember(rpcDraft.customUrl) {
-                            mutableStateOf(rpcDraft.customUrl)
-                        }
-                        CompactSettingsField(
-                            value = draft,
-                            onValueChange = { draft = it },
-                            placeholder = "https://your-rpc-endpoint.com"
-                        ) {
-                            vm.setRpcCustomUrl(draft)
-                        }
-                    } else {
+                }
+            }
+            Icon(
+                if (open) Icons.Filled.KeyboardArrowUp else Icons.Filled.KeyboardArrowDown,
+                contentDescription = null,
+                tint = Color.White.copy(alpha = 0.30f), modifier = Modifier.size(18.dp)
+            )
+        }
+
+        if (open) {
+            Spacer(Modifier.height(12.dp))
+            Text("Your API key", color = Color.White.copy(alpha = 0.30f), fontSize = 11.sp)
+            Spacer(Modifier.height(6.dp))
+            // Commits when the field loses focus (tap away / IME done), like the
+            // web's `change` event — setGraphApiKey shows the toast.
+            CompactSettingsField(
+                value = keyDraft,
+                onValueChange = { keyDraft = it },
+                placeholder = "Optional - uses default if empty"
+            ) {
+                if (keyDraft.trim() != graphKey) vm.setGraphApiKey(keyDraft)
+            }
+            Spacer(Modifier.height(6.dp))
+            Text(
+                "Get yours at thegraph.com/studio",
+                color = Color.White.copy(alpha = 0.30f), fontSize = 12.sp
+            )
+        }
+    }
+}
+
+/** Web #rpc-endpoint-list: which endpoints the app talks to, and their health. */
+@Composable
+private fun PolygonRpcCard(vm: AppViewModel) {
+    val draft by vm.rpcDraft.collectAsState()
+    val applied by vm.rpcSelection.collectAsState()
+    val probes by vm.rpcProbes.collectAsState()
+    val testing by vm.rpcTesting.collectAsState()
+    var open by remember { mutableStateOf(false) }
+    var adding by remember { mutableStateOf(false) }
+
+    // Probe the endpoints already in use when the panel appears, so one that
+    // stopped answering shows up without anyone asking. The ones not picked are
+    // left alone until Test all: opening Settings must not hand the user's
+    // address to a provider they did not choose.
+    LaunchedEffect(Unit) {
+        vm.resetRpcDraft()
+        vm.testRpc()
+    }
+
+    SettingsSection {
+        val problem = vm.rpcDraftProblem()
+        val dirty = draft != applied
+        val selected = draft.urls
+        val tested = selected.filter { probes.containsKey(it) }
+        val working = tested.filter { probes[it]?.let { p -> p.alive && p.onPolygon } == true }
+
+        Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+            Column(Modifier.weight(1f).clickableNoRipple { open = !open }) {
+                Text(
+                    "POLYGON RPC", color = Color.White.copy(alpha = 0.80f),
+                    fontSize = 11.sp, fontWeight = FontWeight.Medium, letterSpacing = 0.08.em
+                )
+                Spacer(Modifier.height(6.dp))
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    val (dot, label, labelColor) = when {
+                        testing -> Triple(Color(0xFFFACC15), "Testing...", Color(0xFFFACC15))
+                        problem != null -> Triple(Color(0xFFEF4444), problem, Color(0xFFF87171))
+                        dirty -> Triple(Color(0xFFFACC15), "Not applied yet", Color(0xFFFACC15))
+                        tested.isEmpty() ->
+                            Triple(Color.White.copy(alpha = 0.20f), "Not tested", Color.White.copy(alpha = 0.40f))
+                        working.isEmpty() -> Triple(Color(0xFFEF4444), "Not connected", Color(0xFFF87171))
+                        else -> Triple(Color(0xFF22C55E), "Connected", Color(0xFF4ADE80))
+                    }
+                    Box(Modifier.size(8.dp).background(dot, CircleShape))
+                    Spacer(Modifier.width(6.dp))
+                    Text(label, color = labelColor, fontSize = 12.sp, modifier = Modifier.weight(1f, false))
+                    if (!testing && problem == null && selected.isNotEmpty()) {
+                        Spacer(Modifier.width(8.dp))
                         Text(
-                            (url ?: "").removePrefix("https://"),
-                            color = Color.White.copy(alpha = 0.30f), fontSize = 11.sp
+                            "${working.size}/${selected.size}",
+                            color = Color.White.copy(alpha = 0.30f), fontSize = 12.sp
                         )
                     }
                 }
+            }
+            Spacer(Modifier.width(8.dp))
+            Box(
+                Modifier
+                    .background(Color.White.copy(alpha = 0.05f), RoundedCornerShape(8.dp))
+                    .clickableNoRipple { if (!testing) vm.testRpc(all = true) }
+                    .padding(horizontal = 12.dp, vertical = 6.dp)
+            ) {
+                Text("Test all", color = Color.White.copy(alpha = 0.60f), fontSize = 12.sp)
+            }
+            Spacer(Modifier.width(4.dp))
+            Icon(
+                if (open) Icons.Filled.KeyboardArrowUp else Icons.Filled.KeyboardArrowDown,
+                contentDescription = null,
+                tint = Color.White.copy(alpha = 0.30f),
+                modifier = Modifier.size(18.dp).clickableNoRipple { open = !open }
+            )
+        }
+
+        if (!open) return@SettingsSection
+
+        Spacer(Modifier.height(12.dp))
+        Text(
+            "Checked endpoints are the ones used, in this order. The first is preferred.",
+            color = Color.White.copy(alpha = 0.25f), fontSize = 12.sp
+        )
+        Spacer(Modifier.height(10.dp))
+
+        draft.rows.forEachIndexed { index, row ->
+            val url = draft.urlFor(row.key)
+            RpcEndpointRow(
+                name = draft.labelFor(row.key),
+                host = (url ?: "").removePrefix("https://"),
+                checked = row.on,
+                probe = url?.let { probes[it] },
+                testing = testing,
+                canMoveUp = index > 0,
+                canMoveDown = index < draft.rows.lastIndex,
+                onCheck = { vm.setRpcRow(row.key, it) },
+                onMove = { vm.moveRpcRow(row.key, it) },
+                onRemove = if (row.key == com.pombo.android.core.RpcEndpoints.CUSTOM_KEY) {
+                    { vm.removeRpcCustomUrl() }
+                } else null
+            )
+        }
+
+        // Add endpoint, the same shape as adding a storage node.
+        Spacer(Modifier.height(6.dp))
+        if (!adding) {
+            Row(
+                Modifier.clickableNoRipple { adding = true }.padding(vertical = 4.dp),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Icon(
+                    Icons.Filled.Add, contentDescription = null,
+                    tint = Color.White.copy(alpha = 0.60f), modifier = Modifier.size(13.dp)
+                )
                 Spacer(Modifier.width(6.dp))
-                RpcProbeLabel(probe, rpcTesting)
-                Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                    RpcMoveArrow(Icons.Filled.KeyboardArrowUp, index > 0) { vm.moveRpcRow(row.key, -1) }
-                    RpcMoveArrow(
-                        Icons.Filled.KeyboardArrowDown,
-                        index < rpcDraft.rows.lastIndex
-                    ) { vm.moveRpcRow(row.key, 1) }
+                Text("Add custom endpoint", color = Color.White.copy(alpha = 0.60f), fontSize = 12.sp)
+            }
+        } else {
+            var urlDraft by remember { mutableStateOf("") }
+            var error by remember { mutableStateOf<String?>(null) }
+            Column(
+                Modifier.fillMaxWidth()
+                    .background(Color.White.copy(alpha = 0.03f), RoundedCornerShape(12.dp))
+                    .border(1.dp, Color.White.copy(alpha = 0.05f), RoundedCornerShape(12.dp))
+                    .padding(12.dp)
+            ) {
+                androidx.compose.foundation.text.BasicTextField(
+                    value = urlDraft,
+                    onValueChange = { urlDraft = it; error = null },
+                    singleLine = true,
+                    textStyle = androidx.compose.ui.text.TextStyle(
+                        fontSize = 12.sp, color = PomboColors.Text,
+                        fontFamily = androidx.compose.ui.text.font.FontFamily.Monospace
+                    ),
+                    cursorBrush = androidx.compose.ui.graphics.SolidColor(PomboColors.Accent),
+                    modifier = Modifier.fillMaxWidth()
+                        .background(Color.White.copy(alpha = 0.05f), RoundedCornerShape(8.dp))
+                        .border(1.dp, Color.White.copy(alpha = 0.10f), RoundedCornerShape(8.dp))
+                        .padding(horizontal = 12.dp, vertical = 8.dp),
+                    decorationBox = { inner ->
+                        if (urlDraft.isEmpty()) Text(
+                            "https://your-rpc-endpoint.com",
+                            color = Color.White.copy(alpha = 0.20f), fontSize = 12.sp,
+                            fontFamily = androidx.compose.ui.text.font.FontFamily.Monospace
+                        )
+                        inner()
+                    }
+                )
+                error?.let {
+                    Spacer(Modifier.height(6.dp))
+                    Text(it, color = Color(0xFFF87171), fontSize = 11.sp)
+                }
+                Spacer(Modifier.height(8.dp))
+                Text(
+                    "Any Polygon JSON-RPC endpoint. It joins the list and is used alongside whatever else is checked.",
+                    color = Color.White.copy(alpha = 0.25f), fontSize = 11.sp
+                )
+                Spacer(Modifier.height(10.dp))
+                Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End) {
+                    Text(
+                        "Cancel", color = Color.White.copy(alpha = 0.60f), fontSize = 12.sp,
+                        modifier = Modifier.clickableNoRipple { adding = false }.padding(8.dp)
+                    )
+                    Spacer(Modifier.width(4.dp))
+                    Box(
+                        Modifier
+                            .background(PomboColors.Accent, RoundedCornerShape(8.dp))
+                            .clickableNoRipple {
+                                if (!urlDraft.trim().startsWith("https://")) {
+                                    error = "Enter an https:// URL"
+                                } else {
+                                    vm.addRpcCustomUrl(urlDraft)
+                                    adding = false
+                                }
+                            }
+                            .padding(horizontal = 12.dp, vertical = 6.dp)
+                    ) {
+                        Text("Add", color = Color.Black, fontSize = 12.sp)
+                    }
                 }
             }
         }
 
-        // Status + Test / Apply (web #rpc-status, #test-rpc-btn, #apply-rpc-btn).
-        Spacer(Modifier.height(6.dp))
-        val problem = vm.rpcDraftProblem()
-        val dirty = rpcDraft != rpcApplied
-        Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
-            val selected = rpcDraft.urls
-            val failing = selected.count { rpcProbes[it]?.let { p -> !p.alive || !p.onPolygon } ?: false }
-            val (dotColor, statusText, textColor) = when {
-                rpcTesting ->
-                    Triple(Color(0xFFFACC15), "Testing...", Color(0xFFFACC15))
-                problem != null ->
-                    Triple(Color(0xFFEF4444), problem, Color(0xFFF87171))
-                dirty ->
-                    Triple(Color(0xFFFACC15), "Not applied yet", Color(0xFFFACC15))
-                rpcProbes.isEmpty() ->
-                    Triple(Color.White.copy(alpha = 0.20f), "Not tested", Color.White.copy(alpha = 0.40f))
-                failing == 0 ->
-                    Triple(Color(0xFF22C55E), "Connected", Color(0xFF4ADE80))
-                failing < selected.size ->
-                    Triple(Color(0xFFFACC15), "$failing of ${selected.size} not answering", Color(0xFFFACC15))
-                else ->
-                    Triple(Color(0xFFEF4444), "No selected endpoint answered", Color(0xFFF87171))
-            }
-            Box(Modifier.size(8.dp).background(dotColor, CircleShape))
-            Spacer(Modifier.width(6.dp))
-            Text(statusText, color = textColor, fontSize = 12.sp, modifier = Modifier.weight(1f))
-            if (dirty) {
+        if (dirty) {
+            Spacer(Modifier.height(12.dp))
+            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End) {
                 Box(
                     Modifier
                         .background(
@@ -2733,7 +2847,7 @@ private fun ApiPanel(vm: AppViewModel) {
                             RoundedCornerShape(8.dp)
                         )
                         .clickableNoRipple { if (problem == null) vm.applyRpcSelection() }
-                        .padding(horizontal = 12.dp, vertical = 6.dp)
+                        .padding(horizontal = 14.dp, vertical = 7.dp)
                 ) {
                     Text(
                         "Apply",
@@ -2741,16 +2855,71 @@ private fun ApiPanel(vm: AppViewModel) {
                         fontSize = 12.sp
                     )
                 }
-                Spacer(Modifier.width(8.dp))
             }
-            Box(
-                Modifier
-                    .background(Color.White.copy(alpha = 0.05f), RoundedCornerShape(8.dp))
-                    .clickableNoRipple { if (!rpcTesting) vm.testRpc() }
-                    .padding(horizontal = 12.dp, vertical = 6.dp)
-            ) {
-                Text("Test all", color = Color.White.copy(alpha = 0.60f), fontSize = 12.sp)
-            }
+        }
+    }
+}
+
+@Composable
+private fun RpcEndpointRow(
+    name: String,
+    host: String,
+    checked: Boolean,
+    probe: AppViewModel.RpcProbe?,
+    testing: Boolean,
+    canMoveUp: Boolean,
+    canMoveDown: Boolean,
+    onCheck: (Boolean) -> Unit,
+    onMove: (Int) -> Unit,
+    onRemove: (() -> Unit)?
+) {
+    Row(
+        Modifier.fillMaxWidth()
+            .padding(bottom = 6.dp)
+            .background(Color.White.copy(alpha = 0.03f), RoundedCornerShape(8.dp))
+            .border(
+                1.dp,
+                Color.White.copy(alpha = if (checked) 0.15f else 0.05f),
+                RoundedCornerShape(8.dp)
+            )
+            .padding(start = 4.dp, end = 2.dp, top = 2.dp, bottom = 2.dp),
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        androidx.compose.material3.Checkbox(
+            checked = checked,
+            onCheckedChange = onCheck,
+            colors = androidx.compose.material3.CheckboxDefaults.colors(
+                checkedColor = PomboColors.Accent,
+                uncheckedColor = Color.White.copy(alpha = 0.30f),
+                checkmarkColor = Color.Black
+            ),
+            modifier = Modifier.size(26.dp)
+        )
+        Spacer(Modifier.width(8.dp))
+        Text(
+            name,
+            color = if (checked) PomboColors.Text else Color.White.copy(alpha = 0.50f),
+            fontSize = 13.sp
+        )
+        Spacer(Modifier.width(6.dp))
+        Text(
+            host, color = Color.White.copy(alpha = 0.25f), fontSize = 10.sp,
+            maxLines = 1, overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis,
+            modifier = Modifier.weight(1f)
+        )
+        Spacer(Modifier.width(6.dp))
+        RpcProbeLabel(probe, testing)
+        if (onRemove != null) {
+            Spacer(Modifier.width(4.dp))
+            Icon(
+                Icons.Outlined.Delete, contentDescription = "Remove endpoint",
+                tint = Color.White.copy(alpha = 0.35f),
+                modifier = Modifier.size(15.dp).clickableNoRipple(onRemove)
+            )
+        }
+        Column(horizontalAlignment = Alignment.CenterHorizontally) {
+            RpcMoveArrow(Icons.Filled.KeyboardArrowUp, canMoveUp) { onMove(-1) }
+            RpcMoveArrow(Icons.Filled.KeyboardArrowDown, canMoveDown) { onMove(1) }
         }
     }
 }
@@ -2765,13 +2934,18 @@ private fun RpcProbeLabel(probe: AppViewModel.RpcProbe?, testing: Boolean) {
     val (text, color) = when {
         probe == null && testing -> "testing" to Color(0xFFFACC15)
         probe == null -> "not tested" to Color.White.copy(alpha = 0.25f)
-        !probe.alive -> "no answer" to Color(0xFFF87171)
+        probe.reach == com.pombo.android.core.GasEstimator.Reach.DEAD ->
+            "no answer" to Color(0xFFF87171)
+        probe.reach == com.pombo.android.core.GasEstimator.Reach.LIMITED ->
+            "rate limited" to Color(0xFFFACC15)
+        probe.reach == com.pombo.android.core.GasEstimator.Reach.REFUSED ->
+            "refused" to Color(0xFFFACC15)
         !probe.onPolygon -> "not Polygon" to Color(0xFFFACC15)
         probe.webView == AppViewModel.WebViewProbe.BLOCKED ->
             "blocked in app" to Color(0xFFFACC15)
         else -> "${probe.ms ?: 0} ms" to Color(0xFF4ADE80)
     }
-    Text(text, color = color, fontSize = 11.sp)
+    Text(text, color = color, fontSize = 10.sp, maxLines = 1)
 }
 
 @Composable
@@ -2784,11 +2958,10 @@ private fun RpcMoveArrow(
         icon, contentDescription = null,
         tint = Color.White.copy(alpha = if (enabled) 0.35f else 0.08f),
         modifier = Modifier
-            .size(18.dp)
+            .size(16.dp)
             .then(if (enabled) Modifier.clickableNoRipple(onClick) else Modifier)
     )
 }
-
 /**
  * Security — the web's #settings-panel-security: reveal the private key, and
  * delete the account. Both are two-step and both end in a hold-to-confirm,

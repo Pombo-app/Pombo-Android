@@ -244,8 +244,15 @@ object GasEstimator {
 
     private const val TAG = "GasEstimator"
 
-    /** What one endpoint answered, or did not, to a single probe. */
-    data class Probe(val alive: Boolean, val chainId: Int? = null, val ms: Int? = null) {
+    /**
+     * What one endpoint answered, or did not, to a single probe. [Reached] means
+     * it replied but turned the call down, which is a different fault from being
+     * gone: reading the two as one is what let a dead endpoint hide for months.
+     */
+    enum class Reach { DEAD, LIMITED, REFUSED, ANSWERED }
+
+    data class Probe(val reach: Reach, val chainId: Int? = null, val ms: Int? = null) {
+        val alive: Boolean get() = reach == Reach.ANSWERED
         val onPolygon: Boolean get() = chainId == null || chainId == 137
     }
 
@@ -285,19 +292,29 @@ object GasEstimator {
                 setRequestProperty("Content-Type", "application/json")
             }
             conn.outputStream.use { it.write(body) }
-            val result = if (conn.responseCode == 200) {
-                JSONObject(conn.inputStream.bufferedReader().use { it.readText() })
-                    .optString("result")
-            } else ""
+            val code = conn.responseCode
+            val text = if (code == 200) conn.inputStream.bufferedReader().use { it.readText() } else ""
             conn.disconnect()
-            if (result.isEmpty()) Probe(alive = false)
+
+            if (code == 429) return Probe(Reach.LIMITED)
+            if (text.isEmpty()) return Probe(Reach.DEAD)
+
+            val root = JSONObject(text)
+            root.optJSONObject("error")?.let { error ->
+                // -32001/-32005 are what the public gateways send once a plan or
+                // a rate window runs out.
+                val rpcCode = error.optInt("code")
+                return Probe(if (rpcCode == -32001 || rpcCode == -32005) Reach.LIMITED else Reach.REFUSED)
+            }
+            val result = root.optString("result")
+            if (result.isEmpty()) Probe(Reach.REFUSED)
             else Probe(
-                alive = true,
+                Reach.ANSWERED,
                 chainId = result.removePrefix("0x").toIntOrNull(16),
                 ms = (System.currentTimeMillis() - started).toInt()
             )
         } catch (e: Exception) {
-            Probe(alive = false)
+            Probe(Reach.DEAD)
         }
     }
 

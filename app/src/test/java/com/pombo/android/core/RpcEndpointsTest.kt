@@ -32,12 +32,24 @@ class RpcEndpointsTest {
     }
 
     @Test
-    fun normalize_offersEveryRowPlusCustom() {
+    fun normalize_offersEveryEndpointAndNoCustomRowUntilOneExists() {
         val selection = RpcEndpoints.normalize(emptyList(), "")
-        assertEquals(
-            RpcEndpoints.ALL.map { it.key } + RpcEndpoints.CUSTOM_KEY,
-            selection.rows.map { it.key }
+        assertEquals(RpcEndpoints.ALL.map { it.key }, selection.rows.map { it.key })
+    }
+
+    @Test
+    fun normalize_carriesTheCustomRowOnlyWhileAUrlStandsBehindIt() {
+        val withUrl = RpcEndpoints.normalize(
+            listOf(RpcEndpoints.Row("drpc", true), RpcEndpoints.Row(RpcEndpoints.CUSTOM_KEY, true)),
+            "https://my-own-node.example"
         )
+        assertTrue(withUrl.rows.any { it.key == RpcEndpoints.CUSTOM_KEY })
+
+        val without = RpcEndpoints.normalize(
+            listOf(RpcEndpoints.Row("drpc", true), RpcEndpoints.Row(RpcEndpoints.CUSTOM_KEY, true)),
+            "   "
+        )
+        assertFalse(without.rows.any { it.key == RpcEndpoints.CUSTOM_KEY })
     }
 
     @Test
@@ -76,6 +88,9 @@ class RpcEndpointsTest {
             RpcEndpoints.DEFAULT_ENABLED,
             keysOn(RpcEndpoints.normalize(onlyEmptyCustom, "   "))
         )
+        assertFalse(RpcEndpoints.normalize(onlyEmptyCustom, "   ").rows.any {
+            it.key == RpcEndpoints.CUSTOM_KEY
+        })
     }
 
     @Test

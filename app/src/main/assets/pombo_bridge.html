@@ -1987,10 +1987,11 @@ const api = {
                 } finally {
                     clearTimeout(timer);
                 }
-                const data = await res.json();
-                out[url] = (data && data.result)
-                    ? { ok: true, chainId: parseInt(data.result, 16), ms: Date.now() - started }
-                    : { ok: false };
+                // Any reply at all proves the origin was accepted, which is the
+                // only thing this probe measures; whether the endpoint then
+                // served the call is Kotlin's side of the answer.
+                await res.text();
+                out[url] = { ok: true, ms: Date.now() - started };
             } catch (e) {
                 out[url] = { ok: false };
             }

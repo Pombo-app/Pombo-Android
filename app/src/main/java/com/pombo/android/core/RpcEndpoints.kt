@@ -54,7 +54,7 @@ object RpcEndpoints {
             if (key == CUSTOM_KEY) customUrl.ifBlank { null } else byKey(key)?.url
 
         fun labelFor(key: String): String =
-            if (key == CUSTOM_KEY) "Custom URL" else byKey(key)?.label ?: key
+            if (key == CUSTOM_KEY) "Custom" else byKey(key)?.label ?: key
 
         fun withRow(key: String, on: Boolean) =
             copy(rows = rows.map { if (it.key == key) it.copy(on = on) else it })
@@ -97,12 +97,17 @@ object RpcEndpoints {
             rows += row
         }
         ALL.filter { it.key !in placed }.forEach { rows += Row(it.key, false) }
-        if (CUSTOM_KEY !in placed) rows += Row(CUSTOM_KEY, false)
 
+        // The custom endpoint is a row only once one exists: an empty row that
+        // can never be ticked is furniture, not a choice.
         val trimmed = customUrl.trim()
-        val usable = rows.any { it.on && (it.key != CUSTOM_KEY || trimmed.isNotBlank()) }
+        val ordered = if (trimmed.isBlank()) rows.filter { it.key != CUSTOM_KEY }
+        else if (CUSTOM_KEY in placed) rows
+        else rows + Row(CUSTOM_KEY, true)
+
         return Selection(
-            rows = if (usable) rows else rows.map { it.copy(on = it.key in DEFAULT_ENABLED) },
+            rows = if (ordered.any { it.on }) ordered
+            else ordered.map { it.copy(on = it.key in DEFAULT_ENABLED) },
             customUrl = trimmed
         )
     }
