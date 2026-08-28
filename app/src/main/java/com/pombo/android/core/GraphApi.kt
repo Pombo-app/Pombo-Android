@@ -29,6 +29,12 @@ object GraphApi {
     /** Set from the user's settings; null falls back to the shared key. */
     @Volatile var userApiKey: String? = null
 
+    /**
+     * Whether the last real query worked, for Settings to report without making
+     * a call of its own. Null until the app has asked for anything.
+     */
+    @Volatile var lastQueryOk: Boolean? = null
+
     private val apiKey: String
         get() = userApiKey?.trim()?.ifEmpty { null } ?: DEFAULT_API_KEY
 
@@ -79,7 +85,7 @@ object GraphApi {
             } catch (e: Exception) {
                 null
             }
-        } ?: return null
+        }.also { lastQueryOk = it != null } ?: return null
         cache[cacheKey] = Entry(data, System.currentTimeMillis())
         return data
     }

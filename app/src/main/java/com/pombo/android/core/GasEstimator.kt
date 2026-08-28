@@ -1,6 +1,8 @@
 package com.pombo.android.core
 
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.async
+import kotlinx.coroutines.awaitAll
 import kotlinx.coroutines.withContext
 import org.json.JSONArray
 import org.json.JSONObject
@@ -24,7 +26,7 @@ object GasEstimator {
      * falls back to the Auto preset, so an estimate asked before the account
      * loads still works.
      */
-    @Volatile var rpcUrls: List<String> = RpcPresets.estimatorUrls("auto", null)
+    @Volatile var rpcUrls: List<String> = RpcEndpoints.normalize(emptyList(), "").urls
         set(value) {
             if (value.isEmpty()) return
             field = value
@@ -243,37 +245,77 @@ object GasEstimator {
     private const val TAG = "GasEstimator"
 
     /**
-     * Web testRpcConnection: eth_blockNumber against each URL (max 3), 5s
-     * timeout each. Returns how many answered with a result.
+     * What one endpoint answered, or did not, to a single probe. [Reached] means
+     * it replied but turned the call down, which is a different fault from being
+     * gone: reading the two as one is what let a dead endpoint hide for months.
      */
-    suspend fun testEndpoints(urls: List<String>): Int = withContext(Dispatchers.IO) {
-        var working = 0
+    enum class Reach { DEAD, LIMITED, REFUSED, ANSWERED }
+
+    data class Probe(val reach: Reach, val chainId: Int? = null, val ms: Int? = null) {
+        val alive: Boolean get() = reach == Reach.ANSWERED
+        val onPolygon: Boolean get() = chainId == null || chainId == 137
+    }
+
+    /**
+     * eth_chainId against every URL at once, 5s timeout each. Concurrent
+     * because seven endpoints in series is seven timeouts one after another.
+     *
+     * The chain is read rather than assumed, so a custom URL pointing at some
+     * other network says so instead of looking healthy until a transaction
+     * fails. This speaks plain JSON-RPC from Kotlin, so it measures whether the
+     * endpoint is alive and nothing about whether the WebView may call it.
+     */
+    suspend fun probeEndpoints(urls: List<String>): Map<String, Probe> = withContext(Dispatchers.IO) {
         val body = JSONObject()
             .put("jsonrpc", "2.0")
-            .put("method", "eth_blockNumber")
+            .put("method", "eth_chainId")
             .put("params", JSONArray())
             .put("id", 1)
             .toString()
             .toByteArray()
-        for (url in urls.take(3)) {
-            try {
-                val conn = (URL(url).openConnection() as HttpURLConnection).apply {
-                    requestMethod = "POST"
-                    doOutput = true
-                    connectTimeout = RPC_TIMEOUT_MS
-                    readTimeout = RPC_TIMEOUT_MS
-                    setRequestProperty("Content-Type", "application/json")
-                }
-                conn.outputStream.use { it.write(body) }
-                val ok = conn.responseCode == 200 &&
-                    JSONObject(conn.inputStream.bufferedReader().use { it.readText() })
-                        .optString("result").isNotEmpty()
-                conn.disconnect()
-                if (ok) working++
-            } catch (e: Exception) {
-            }
+
+        kotlinx.coroutines.coroutineScope {
+            urls.distinct().map { url ->
+                async { url to probeOne(url, body) }
+            }.awaitAll().toMap()
         }
-        working
+    }
+
+    private fun probeOne(url: String, body: ByteArray): Probe {
+        val started = System.currentTimeMillis()
+        return try {
+            val conn = (URL(url).openConnection() as HttpURLConnection).apply {
+                requestMethod = "POST"
+                doOutput = true
+                connectTimeout = RPC_TIMEOUT_MS
+                readTimeout = RPC_TIMEOUT_MS
+                setRequestProperty("Content-Type", "application/json")
+            }
+            conn.outputStream.use { it.write(body) }
+            val code = conn.responseCode
+            val text = if (code == 200) conn.inputStream.bufferedReader().use { it.readText() } else ""
+            conn.disconnect()
+
+            if (code == 429) return Probe(Reach.LIMITED)
+            if (text.isEmpty()) return Probe(Reach.DEAD)
+
+            val root = JSONObject(text)
+            root.optJSONObject("error")?.let { error ->
+                // -32001/-32005 are what the public gateways send once a plan or
+                // a rate window runs out.
+                val rpcCode = error.optInt("code")
+                return Probe(if (rpcCode == -32001 || rpcCode == -32005) Reach.LIMITED else Reach.REFUSED)
+            }
+            val result = root.optString("result")
+            if (result.isEmpty()) Probe(Reach.REFUSED)
+            else Probe(
+                Reach.ANSWERED,
+                chainId = result.removePrefix("0x").toIntOrNull(16),
+                ms = (System.currentTimeMillis() - started).toInt()
+            )
+        } catch (e: Exception) {
+            Probe(Reach.DEAD)
+        }
     }
 
     fun formatBalanceDATA(wei: BigInteger?): String {

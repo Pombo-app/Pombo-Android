@@ -1,6 +1,7 @@
 package com.pombo.android.data
 
 import android.content.Context
+import com.pombo.android.core.RpcEndpoints
 
 /**
  * User-configurable settings that mirror the web's API panel
@@ -165,17 +166,26 @@ class SettingsStore(context: Context) {
         set(value) = prefs.edit().putString(scoped(KEY_SYNC_MODE), value.name).apply()
 
     /**
-     * Polygon RPC preference (web rpcPreference in localStorage): preset key
-     * from RpcPresets plus the custom URL when preset == "custom". Device-wide,
+     * Polygon RPC selection (web rpcPreference in localStorage): the ordered
+     * rows plus the custom URL, in the same JSON shape as the web. Device-wide,
      * not per-account — the web stores it the same way.
+     *
+     * A build that stored the older single-preset setting is read through
+     * [RpcEndpoints.fromLegacy] and rewritten on the first save.
      */
-    var rpcPreset: String
-        get() = prefs.getString(KEY_RPC_PRESET, "drpc") ?: "drpc"
-        set(value) = prefs.edit().putString(KEY_RPC_PRESET, value).apply()
-
-    var rpcCustomUrl: String?
-        get() = prefs.getString(KEY_RPC_CUSTOM, null)?.trim()?.ifEmpty { null }
-        set(value) = prefs.edit().putString(KEY_RPC_CUSTOM, value?.trim()?.ifEmpty { null }).apply()
+    var rpcSelection: RpcEndpoints.Selection
+        get() {
+            prefs.getString(KEY_RPC_SELECTION, null)?.let { return RpcEndpoints.fromJson(it) }
+            return RpcEndpoints.fromLegacy(
+                prefs.getString(KEY_RPC_PRESET, null),
+                prefs.getString(KEY_RPC_CUSTOM, null)
+            )
+        }
+        set(value) = prefs.edit()
+            .putString(KEY_RPC_SELECTION, RpcEndpoints.toJson(value))
+            .remove(KEY_RPC_PRESET)
+            .remove(KEY_RPC_CUSTOM)
+            .apply()
 
     /** Per-slice mutation timestamps that drive the latest-wins merge. */
     fun sliceTsJson(): org.json.JSONObject = try {
@@ -204,6 +214,8 @@ class SettingsStore(context: Context) {
         const val KEY_DM_PUSH = "dm_push_enabled"
         const val KEY_INVITE_NOTIFS = "invite_notifications_enabled"
         const val KEY_MUTED_DM = "muted_dm_peers"
+        const val KEY_RPC_SELECTION = "rpc_selection"
+        // Read once to migrate an install that predates the selection, then dropped.
         const val KEY_RPC_PRESET = "rpc_preset"
         const val KEY_RPC_CUSTOM = "rpc_custom_url"
         const val KEY_SYNC_MODE = "sync_mode"

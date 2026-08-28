@@ -11,6 +11,7 @@ import com.pombo.android.data.Contact
 import com.pombo.android.data.ContactsStore
 import com.pombo.android.identity.WalletStore
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.async
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.sync.withPermit
 import kotlinx.coroutines.withContext
@@ -31,9 +32,7 @@ class AppViewModel(app: Application) : AndroidViewModel(app), PomboBridge.Listen
     private val settingsStore = com.pombo.android.data.SettingsStore(app)
     private val bridge = PomboBridge(
         app, this, store.privateKey ?: "",
-        initialRpcUrls = com.pombo.android.core.RpcPresets.bridgeUrls(
-            settingsStore.rpcPreset, settingsStore.rpcCustomUrl
-        )
+        initialRpcUrls = settingsStore.rpcSelection.urls
     )
 
     private val imageStore = com.pombo.android.core.ChannelImageStore(app)
@@ -1340,6 +1339,18 @@ class AppViewModel(app: Application) : AndroidViewModel(app), PomboBridge.Listen
     val graphApiKey: StateFlow<String> = _graphApiKey.asStateFlow()
 
     /**
+     * Whether The Graph answered the last query the app actually made. Read
+     * when the panel opens rather than measured, so looking at Settings costs
+     * nothing on a key that is already rate limited.
+     */
+    private val _graphHealth = MutableStateFlow<Boolean?>(null)
+    val graphHealth: StateFlow<Boolean?> = _graphHealth.asStateFlow()
+
+    fun refreshGraphHealth() {
+        _graphHealth.value = com.pombo.android.core.GraphApi.lastQueryOk
+    }
+
+    /**
      * Points the per-account stores at an identity and reloads what belongs to
      * it. Guests get a memory-only scope: the web's `initAsGuest` starts from
      * an empty cache and never persists, so a guest must not inherit — or
@@ -1402,9 +1413,7 @@ class AppViewModel(app: Application) : AndroidViewModel(app), PomboBridge.Listen
         syncStore.scopeAddress = store.address
         // The estimator lives outside the bridge, so the saved RPC choice has
         // to reach it here too, not only when the setting changes.
-        com.pombo.android.core.GasEstimator.rpcUrls = com.pombo.android.core.RpcPresets.estimatorUrls(
-            settingsStore.rpcPreset, settingsStore.rpcCustomUrl
-        )
+        com.pombo.android.core.GasEstimator.rpcUrls = settingsStore.rpcSelection.urls
         // Epoch keys and unread counts were missing here, so a cold start with
         // a stored account left them UNSCOPED for the whole session: every
         // account on the device read and wrote the same bucket.
@@ -2123,55 +2132,201 @@ class AppViewModel(app: Application) : AndroidViewModel(app), PomboBridge.Listen
     private val _dataBalanceWei = MutableStateFlow<java.math.BigInteger?>(null)
     val dataBalanceWei: StateFlow<java.math.BigInteger?> = _dataBalanceWei.asStateFlow()
 
-    // ==================== RPC preference (web rpc-preset-select) ====================
+    // ==================== RPC selection (web #rpc-endpoint-list) ====================
 
-    private val _rpcPreset = MutableStateFlow(settingsStore.rpcPreset)
-    val rpcPreset: StateFlow<String> = _rpcPreset.asStateFlow()
-    private val _rpcCustomUrl = MutableStateFlow(settingsStore.rpcCustomUrl ?: "")
-    val rpcCustomUrl: StateFlow<String> = _rpcCustomUrl.asStateFlow()
+    /** What the app is using right now, which is also what the panel edits. */
+    private val _rpcSelection = MutableStateFlow(settingsStore.rpcSelection)
+    val rpcSelection: StateFlow<com.pombo.android.core.RpcEndpoints.Selection> =
+        _rpcSelection.asStateFlow()
 
-    sealed interface RpcTest {
-        data object Idle : RpcTest
-        data object Testing : RpcTest
-        data class Done(val working: Int, val total: Int) : RpcTest
-    }
+    /** Why an edit was turned down, shown where the status line already is. */
+    private val _rpcNotice = MutableStateFlow<String?>(null)
+    val rpcNotice: StateFlow<String?> = _rpcNotice.asStateFlow()
 
-    private val _rpcTest = MutableStateFlow<RpcTest>(RpcTest.Idle)
-    val rpcTest: StateFlow<RpcTest> = _rpcTest.asStateFlow()
+    private var rpcNoticeJob: kotlinx.coroutines.Job? = null
+    private var rpcReconnectJob: kotlinx.coroutines.Job? = null
 
     /**
-     * Web saveRpcPreference: persist, then reconnect the Streamr client with
-     * the new endpoints. Picking "custom" without a URL only switches the UI —
-     * nothing to connect to yet; Apply with the URL does the save.
+     * What one endpoint answered. [alive] comes from Kotlin, which ignores CORS
+     * entirely, and [webView] from the bridge page, which is the only place the
+     * https://pombo.local origin exists. An endpoint that is alive and refused
+     * by the WebView is a different fault from one that is simply gone, and the
+     * two are indistinguishable from inside the WebView alone: both throw the
+     * same failed fetch.
      */
-    fun setRpcPreference(preset: String, customUrl: String?) {
-        val custom = customUrl?.trim()?.ifEmpty { null }
-        _rpcPreset.value = preset
-        _rpcTest.value = RpcTest.Idle
-        if (preset == "custom" && custom == null) return
-        settingsStore.rpcPreset = preset
-        settingsStore.rpcCustomUrl = if (preset == "custom") custom else settingsStore.rpcCustomUrl
-        _rpcCustomUrl.value = settingsStore.rpcCustomUrl ?: ""
-        bridge.rpcUrls = com.pombo.android.core.RpcPresets.bridgeUrls(preset, custom)
-        // The estimator talks plain JSON-RPC outside the bridge, so it needs
-        // telling too; it used to carry its own list and ignore this choice.
-        com.pombo.android.core.GasEstimator.rpcUrls =
-            com.pombo.android.core.RpcPresets.estimatorUrls(preset, custom)
-        toast("Reconnecting with new RPC...", com.pombo.android.ui.ToastKind.INFO)
-        _status.value = NetStatus.CONNECTING
-        bridge.reconnect()
+    data class RpcProbe(
+        val reach: com.pombo.android.core.GasEstimator.Reach,
+        val chainId: Int? = null,
+        val ms: Int? = null,
+        val webView: WebViewProbe = WebViewProbe.UNKNOWN
+    ) {
+        val alive: Boolean get() = reach == com.pombo.android.core.GasEstimator.Reach.ANSWERED
+        val onPolygon: Boolean get() = chainId == null || chainId == 137
     }
 
-    /** Web testRpcConnection — tests the first 3 endpoints of the selection. */
-    fun testRpc() = viewModelScope.launch {
-        val urls = com.pombo.android.core.RpcPresets.urlsFor(
-            _rpcPreset.value,
-            _rpcCustomUrl.value.ifEmpty { null }
-        ).take(3)
-        if (urls.isEmpty()) return@launch
-        _rpcTest.value = RpcTest.Testing
-        val working = com.pombo.android.core.GasEstimator.testEndpoints(urls)
-        _rpcTest.value = RpcTest.Done(working, urls.size)
+    enum class WebViewProbe { UNKNOWN, OK, BLOCKED }
+
+    private val _rpcProbes = MutableStateFlow<Map<String, RpcProbe>>(emptyMap())
+    val rpcProbes: StateFlow<Map<String, RpcProbe>> = _rpcProbes.asStateFlow()
+
+    private val _rpcTesting = MutableStateFlow(false)
+    val rpcTesting: StateFlow<Boolean> = _rpcTesting.asStateFlow()
+
+    /**
+     * Turn one endpoint on or off. The edit lands immediately, so what would
+     * have been refused at Apply is refused here instead: an unusable selection
+     * has no later moment to be caught.
+     */
+    fun setRpcRow(key: String, on: Boolean) {
+        val next = _rpcSelection.value.withRow(key, on)
+        if (next.urls.isEmpty()) {
+            noticeRpc("Keep at least one endpoint")
+            return
+        }
+        val customProven = next.customUrl.isNotBlank() &&
+            _rpcProbes.value[next.customUrl]?.webView == WebViewProbe.OK
+        if (!next.reachesWebView(customProven)) {
+            noticeRpc("Keep one this app can reach")
+            return
+        }
+        _rpcSelection.value = next
+        commitRpcSelection()
+        // Ticking one is choosing it, so measuring it is not traffic the user
+        // did not ask for; and leaving it unmeasured would make the count under
+        // the title read as a fault.
+        if (on) next.urlFor(key)?.let { probeRpcUrls(listOf(it)) }
+    }
+
+    fun moveRpcRow(key: String, delta: Int) {
+        _rpcSelection.value = _rpcSelection.value.moved(key, delta)
+        commitRpcSelection()
+    }
+
+    private fun noticeRpc(text: String) {
+        _rpcNotice.value = text
+        rpcNoticeJob?.cancel()
+        rpcNoticeJob = viewModelScope.launch {
+            delay(2500)
+            _rpcNotice.value = null
+        }
+    }
+
+    /**
+     * Add a custom endpoint, which arrives ticked: adding one is choosing it.
+     * Returns false when the URL is not one, so the field can say so and stay.
+     */
+    fun addRpcCustomUrl(url: String): Boolean {
+        val trimmed = url.trim()
+        if (!trimmed.startsWith("https://") || trimmed.contains(' ')) return false
+        val key = com.pombo.android.core.RpcEndpoints.CUSTOM_KEY
+        val rows = _rpcSelection.value.rows.filter { it.key != key } +
+            com.pombo.android.core.RpcEndpoints.Row(key, true)
+        _rpcSelection.value = _rpcSelection.value.copy(rows = rows, customUrl = trimmed)
+        commitRpcSelection()
+        probeRpcUrls(listOf(trimmed))
+        return true
+    }
+
+    fun removeRpcCustomUrl() {
+        val key = com.pombo.android.core.RpcEndpoints.CUSTOM_KEY
+        val next = _rpcSelection.value.copy(
+            rows = _rpcSelection.value.rows.filter { it.key != key },
+            customUrl = ""
+        )
+        if (next.urls.isEmpty()) {
+            noticeRpc("Keep at least one endpoint")
+            return
+        }
+        _rpcSelection.value = next
+        commitRpcSelection()
+    }
+
+    /** Forget the last probe run, so a panel that reopens measures afresh. */
+    fun clearRpcProbes() {
+        _rpcProbes.value = emptyMap()
+        _rpcNotice.value = null
+    }
+
+    /**
+     * Save and put the selection to work. The setting itself lands at once, but
+     * the reconnect it needs is held back a beat: ticking three boxes is three
+     * taps and must not be three reloads of the bridge.
+     */
+    private fun commitRpcSelection() {
+        val selection = _rpcSelection.value
+        settingsStore.rpcSelection = selection
+        bridge.rpcUrls = selection.urls
+        // The estimator talks plain JSON-RPC outside the bridge, so it needs
+        // telling too; it used to carry its own list and ignore this choice.
+        com.pombo.android.core.GasEstimator.rpcUrls = selection.urls
+
+        rpcReconnectJob?.cancel()
+        rpcReconnectJob = viewModelScope.launch {
+            delay(1200)
+            toast("Reconnecting with new RPC...", com.pombo.android.ui.ToastKind.INFO)
+            _status.value = NetStatus.CONNECTING
+            bridge.reconnect()
+        }
+    }
+
+    /**
+     * Probe endpoints down both paths at once, so a fault says which fault it
+     * is. The Ankr endpoint sat dead in the list for months because nothing
+     * here ever said so.
+     *
+     * By default only the ticked ones, which are the endpoints the app already
+     * talks to: opening Settings must not hand the user's address to a provider
+     * they did not choose. [all] is the explicit ask that covers the rest.
+     */
+    fun testRpc(all: Boolean = false) {
+        val selection = _rpcSelection.value
+        probeRpcUrls(
+            selection.rows
+                .filter { all || it.on }
+                .mapNotNull { selection.urlFor(it.key) }
+                .distinct()
+        )
+    }
+
+    private fun probeRpcUrls(urls: List<String>) = viewModelScope.launch {
+        if (_rpcTesting.value || urls.isEmpty()) return@launch
+        _rpcTesting.value = true
+
+        val native = async { com.pombo.android.core.GasEstimator.probeEndpoints(urls) }
+        val webView = async { probeFromWebView(urls) }
+        val alive = native.await()
+        val reachable = webView.await()
+
+        _rpcProbes.value = _rpcProbes.value + urls.associateWith { url ->
+            val probe = alive[url]
+            RpcProbe(
+                reach = probe?.reach ?: com.pombo.android.core.GasEstimator.Reach.DEAD,
+                chainId = probe?.chainId,
+                ms = probe?.ms,
+                webView = reachable[url] ?: WebViewProbe.UNKNOWN
+            )
+        }
+        _rpcTesting.value = false
+    }
+
+    /**
+     * The same probe run inside the bridge page. Returns nothing at all when
+     * the page is not up: unknown is honest, whereas assuming either answer
+     * would either hide a block or invent one.
+     */
+    private suspend fun probeFromWebView(urls: List<String>): Map<String, WebViewProbe> {
+        if (!bridge.pageReady) return emptyMap()
+        return try {
+            val args = org.json.JSONObject().put("urls", org.json.JSONArray(urls))
+            val results = bridge.call("rpcProbe", args, timeoutMs = 20_000)
+                .optJSONObject("results") ?: return emptyMap()
+            urls.associateWith { url ->
+                if (results.optJSONObject(url)?.optBoolean("ok") == true) WebViewProbe.OK
+                else WebViewProbe.BLOCKED
+            }
+        } catch (e: Exception) {
+            emptyMap()
+        }
     }
 
     /** True when the last balance fetch came back empty — drives "Unavailable". */

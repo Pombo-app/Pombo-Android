@@ -1960,6 +1960,43 @@ const api = {
         result.wrapped = wrapped;
         result.approved = approved;
         return result;
+    },
+
+    // Settings -> Polygon RPC. Runs here rather than in Kotlin because this is
+    // the only place with the https://pombo.local origin: a probe from Kotlin
+    // would approve an endpoint the Streamr client cannot use, CORS being
+    // invisible to HttpURLConnection. A refusal and a dead host both surface as
+    // the same failed fetch, so Kotlin probes in parallel to tell them apart.
+    async rpcProbe(a) {
+        const urls = Array.isArray(a.urls) ? a.urls : [];
+        const timeoutMs = a.timeoutMs || 5000;
+        const out = {};
+        await Promise.all(urls.map(async function (url) {
+            const started = Date.now();
+            try {
+                const controller = new AbortController();
+                const timer = setTimeout(function () { controller.abort(); }, timeoutMs);
+                let res;
+                try {
+                    res = await fetch(url, {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({ jsonrpc: '2.0', method: 'eth_chainId', params: [], id: 1 }),
+                        signal: controller.signal
+                    });
+                } finally {
+                    clearTimeout(timer);
+                }
+                // Any reply at all proves the origin was accepted, which is the
+                // only thing this probe measures; whether the endpoint then
+                // served the call is Kotlin's side of the answer.
+                await res.text();
+                out[url] = { ok: true, ms: Date.now() - started };
+            } catch (e) {
+                out[url] = { ok: false };
+            }
+        }));
+        return { results: out };
     }
 };
 
