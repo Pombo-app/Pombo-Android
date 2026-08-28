@@ -1400,6 +1400,13 @@ class AppViewModel(app: Application) : AndroidViewModel(app), PomboBridge.Listen
         pushRegistry.scopeAddress = store.address
         settingsStore.scopeAddress = store.address
         syncStore.scopeAddress = store.address
+        // Epoch keys and unread counts were missing here, so a cold start with
+        // a stored account left them UNSCOPED for the whole session: every
+        // account on the device read and wrote the same bucket.
+        // applyStorageScope sets them, but only runs on wallet switch, guest
+        // session and adopt.
+        epochKeyStore.scopeAddress = store.address
+        unreadStore.scopeAddress = store.address
         // Declared above this block, so its initializer read the unscoped key;
         // re-read now that the account scope is set.
         _dmPushEnabled.value = settingsStore.dmPushEnabled
