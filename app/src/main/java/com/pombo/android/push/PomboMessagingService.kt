@@ -100,7 +100,10 @@ class PomboMessagingService : FirebaseMessagingService() {
                     val nickname = com.pombo.android.data.ContactsStore(applicationContext)
                         .apply { scopeAddress = myAddress }
                         .load().firstOrNull { it.address.equals(sender, ignoreCase = true) }?.nickname
+                    // cachedName/cachedAvatar read memory only, and nothing else fills
+                    // it in this process. Already on IO, and only on the notify branch.
                     val ens = com.pombo.android.core.EnsStore(applicationContext)
+                        .apply { warmUp() }
                     val roomName = com.pombo.android.data.ChannelStore(applicationContext)
                         .apply { scopeAddress = myAddress }
                         .load().firstOrNull {
