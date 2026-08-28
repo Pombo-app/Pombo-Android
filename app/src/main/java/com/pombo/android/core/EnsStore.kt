@@ -44,6 +44,8 @@ class EnsStore(context: Context) {
             val root = JSONObject(file.readText())
             val loadedNames = HashMap<String, String>()
             val loadedAvatars = HashMap<String, String>()
+            val clearedNames = ArrayList<String>()
+            val clearedAvatars = ArrayList<String>()
             root.keys().forEach { addr ->
                 val o = root.optJSONObject(addr) ?: return@forEach
                 val at = o.optLong("at")
@@ -57,13 +59,20 @@ class EnsStore(context: Context) {
                 val name = if (o.isNull("name")) null else o.optString("name").ifEmpty { null }
                 val avatar = if (o.isNull("avatar")) null else o.optString("avatar").ifEmpty { null }
                 val avatarAt = o.optLong("avatarAt", if (avatar != null) at else 0L)
-                names[addr] = Entry(name, at)
-                avatars[addr] = Entry(avatar, avatarAt)
-                name?.let { loadedNames[addr] = it }
-                avatar?.let { loadedAvatars[addr] = it }
+                // Merge, never assign: callers can resolve while this file is
+                // being read, and such an entry carries a newer timestamp than
+                // anything on disk. Each side is compared on its own clock.
+                if (at > (names[addr]?.at ?: Long.MIN_VALUE)) {
+                    names[addr] = Entry(name, at)
+                    if (name != null) loadedNames[addr] = name else clearedNames += addr
+                }
+                if (avatarAt > (avatars[addr]?.at ?: Long.MIN_VALUE)) {
+                    avatars[addr] = Entry(avatar, avatarAt)
+                    if (avatar != null) loadedAvatars[addr] = avatar else clearedAvatars += addr
+                }
             }
-            if (loadedNames.isNotEmpty()) _resolved.value = loadedNames
-            if (loadedAvatars.isNotEmpty()) _avatarUrls.value = loadedAvatars
+            _resolved.value = _resolved.value + loadedNames - clearedNames
+            _avatarUrls.value = _avatarUrls.value + loadedAvatars - clearedAvatars
         } catch (e: Exception) { /* corrupt cache — start empty */ }
     }
 
