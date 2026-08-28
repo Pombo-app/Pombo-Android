@@ -47,8 +47,7 @@ let BRIDGE_RPCS = [];
 try { BRIDGE_RPCS = JSON.parse('__BRIDGE_RPCS__'); } catch (e) { /* not injected */ }
 const DEFAULT_RPCS = [
     'https://polygon.drpc.org',
-    'https://polygon-bor-rpc.publicnode.com',
-    'https://rpc.ankr.com/polygon'
+    'https://polygon-bor-rpc.publicnode.com'
 ];
 const RPCS = (Array.isArray(BRIDGE_RPCS) && BRIDGE_RPCS.length ? BRIDGE_RPCS : DEFAULT_RPCS)
     .map(function (url) { return { url: url }; });

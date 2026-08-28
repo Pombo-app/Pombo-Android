@@ -14,7 +14,6 @@ object RpcPresets {
             "auto", "Auto (try all endpoints)", listOf(
                 "https://polygon.drpc.org",
                 "https://polygon-bor-rpc.publicnode.com",
-                "https://rpc.ankr.com/polygon",
                 "https://polygon.meowrpc.com",
                 "https://polygon.gateway.tenderly.co",
                 "https://polygon.llamarpc.com",
@@ -22,7 +21,6 @@ object RpcPresets {
             )
         ),
         Preset("publicnode", "PublicNode", listOf("https://polygon-bor-rpc.publicnode.com")),
-        Preset("ankr", "Ankr", listOf("https://rpc.ankr.com/polygon")),
         Preset("meowrpc", "Meow RPC", listOf("https://polygon.meowrpc.com")),
         Preset("tenderly", "Tenderly", listOf("https://polygon.gateway.tenderly.co")),
         Preset("llamarpc", "Llama RPC", listOf("https://polygon.llamarpc.com")),
@@ -43,8 +41,7 @@ object RpcPresets {
      */
     private val WEBVIEW_SAFE = listOf(
         "https://polygon.drpc.org",
-        "https://polygon-bor-rpc.publicnode.com",
-        "https://rpc.ankr.com/polygon"
+        "https://polygon-bor-rpc.publicnode.com"
     )
 
     /**

@@ -22,7 +22,6 @@ object GasEstimator {
     private val RPC_URLS = listOf(
         "https://polygon.drpc.org",
         "https://polygon-bor-rpc.publicnode.com",
-        "https://rpc.ankr.com/polygon",
         "https://polygon.meowrpc.com",
         "https://polygon.gateway.tenderly.co",
         "https://polygon.llamarpc.com",
