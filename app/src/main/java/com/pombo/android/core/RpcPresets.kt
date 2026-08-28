@@ -51,4 +51,13 @@ object RpcPresets {
      */
     fun bridgeUrls(preset: String, customUrl: String?): List<String> =
         (urlsFor(preset, customUrl) + WEBVIEW_SAFE).distinct()
+
+    /**
+     * What the gas estimator gets: the choice first, then every endpoint we
+     * know. It speaks plain JSON-RPC from Kotlin, so the CORS restriction of
+     * [WEBVIEW_SAFE] does not apply and the whole list is usable as fallback.
+     * A single custom URL must not leave an estimate with nowhere to go.
+     */
+    fun estimatorUrls(preset: String, customUrl: String?): List<String> =
+        (urlsFor(preset, customUrl) + byKey("auto").urls).distinct()
 }

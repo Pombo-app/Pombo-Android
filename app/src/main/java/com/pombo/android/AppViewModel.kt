@@ -1400,6 +1400,11 @@ class AppViewModel(app: Application) : AndroidViewModel(app), PomboBridge.Listen
         pushRegistry.scopeAddress = store.address
         settingsStore.scopeAddress = store.address
         syncStore.scopeAddress = store.address
+        // The estimator lives outside the bridge, so the saved RPC choice has
+        // to reach it here too, not only when the setting changes.
+        com.pombo.android.core.GasEstimator.rpcUrls = com.pombo.android.core.RpcPresets.estimatorUrls(
+            settingsStore.rpcPreset, settingsStore.rpcCustomUrl
+        )
         // Epoch keys and unread counts were missing here, so a cold start with
         // a stored account left them UNSCOPED for the whole session: every
         // account on the device read and wrote the same bucket.
@@ -2148,6 +2153,10 @@ class AppViewModel(app: Application) : AndroidViewModel(app), PomboBridge.Listen
         settingsStore.rpcCustomUrl = if (preset == "custom") custom else settingsStore.rpcCustomUrl
         _rpcCustomUrl.value = settingsStore.rpcCustomUrl ?: ""
         bridge.rpcUrls = com.pombo.android.core.RpcPresets.bridgeUrls(preset, custom)
+        // The estimator talks plain JSON-RPC outside the bridge, so it needs
+        // telling too; it used to carry its own list and ignore this choice.
+        com.pombo.android.core.GasEstimator.rpcUrls =
+            com.pombo.android.core.RpcPresets.estimatorUrls(preset, custom)
         toast("Reconnecting with new RPC...", com.pombo.android.ui.ToastKind.INFO)
         _status.value = NetStatus.CONNECTING
         bridge.reconnect()
