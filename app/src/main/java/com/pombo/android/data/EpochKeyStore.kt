@@ -33,10 +33,12 @@ class EpochKeyStore(context: Context) {
 
     fun load(messageStreamId: String): JSONObject? {
         if (memoryOnly) return null
-        val raw = prefs.getString(key(messageStreamId), null)
-            // One-time migration from the pre-scoping global key.
-            ?: prefs.getString(messageStreamId, null)
-            ?: return null
+        // No fallback to the unscoped key. It was meant as a one-time
+        // migration, but nothing ever migrated or deleted the old entry, so it
+        // handed any account whatever a previous one had left there. Entries
+        // written while the scope was unset stay on disk and unreachable; the
+        // protocol re-requests what it needs.
+        val raw = prefs.getString(key(messageStreamId), null) ?: return null
         return try { JSONObject(raw) } catch (e: Exception) { null }
     }
 

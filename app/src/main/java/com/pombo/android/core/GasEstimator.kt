@@ -18,16 +18,20 @@ import java.net.URL
  */
 object GasEstimator {
 
-    /** CONFIG.network.rpcEndpoints — tried in order, sticky on the last success. */
-    private val RPC_URLS = listOf(
-        "https://polygon.drpc.org",
-        "https://polygon-bor-rpc.publicnode.com",
-        "https://rpc.ankr.com/polygon",
-        "https://polygon.meowrpc.com",
-        "https://polygon.gateway.tenderly.co",
-        "https://polygon.llamarpc.com",
-        "https://1rpc.io/matic"
-    )
+    /**
+     * The endpoints from Settings, tried in order and sticky on the last
+     * success. Set from the same place that feeds the bridge; until then it
+     * falls back to the Auto preset, so an estimate asked before the account
+     * loads still works.
+     */
+    @Volatile var rpcUrls: List<String> = RpcPresets.estimatorUrls("auto", null)
+        set(value) {
+            if (value.isEmpty()) return
+            field = value
+            currentRpcIndex = 0
+        }
+
+    private val RPC_URLS: List<String> get() = rpcUrls
 
     @Volatile private var currentRpcIndex = 0
 

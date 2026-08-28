@@ -14,7 +14,6 @@ object RpcPresets {
             "auto", "Auto (try all endpoints)", listOf(
                 "https://polygon.drpc.org",
                 "https://polygon-bor-rpc.publicnode.com",
-                "https://rpc.ankr.com/polygon",
                 "https://polygon.meowrpc.com",
                 "https://polygon.gateway.tenderly.co",
                 "https://polygon.llamarpc.com",
@@ -22,7 +21,6 @@ object RpcPresets {
             )
         ),
         Preset("publicnode", "PublicNode", listOf("https://polygon-bor-rpc.publicnode.com")),
-        Preset("ankr", "Ankr", listOf("https://rpc.ankr.com/polygon")),
         Preset("meowrpc", "Meow RPC", listOf("https://polygon.meowrpc.com")),
         Preset("tenderly", "Tenderly", listOf("https://polygon.gateway.tenderly.co")),
         Preset("llamarpc", "Llama RPC", listOf("https://polygon.llamarpc.com")),
@@ -43,8 +41,7 @@ object RpcPresets {
      */
     private val WEBVIEW_SAFE = listOf(
         "https://polygon.drpc.org",
-        "https://polygon-bor-rpc.publicnode.com",
-        "https://rpc.ankr.com/polygon"
+        "https://polygon-bor-rpc.publicnode.com"
     )
 
     /**
@@ -54,4 +51,13 @@ object RpcPresets {
      */
     fun bridgeUrls(preset: String, customUrl: String?): List<String> =
         (urlsFor(preset, customUrl) + WEBVIEW_SAFE).distinct()
+
+    /**
+     * What the gas estimator gets: the choice first, then every endpoint we
+     * know. It speaks plain JSON-RPC from Kotlin, so the CORS restriction of
+     * [WEBVIEW_SAFE] does not apply and the whole list is usable as fallback.
+     * A single custom URL must not leave an estimate with nowhere to go.
+     */
+    fun estimatorUrls(preset: String, customUrl: String?): List<String> =
+        (urlsFor(preset, customUrl) + byKey("auto").urls).distinct()
 }

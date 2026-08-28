@@ -210,8 +210,17 @@ class ChannelManager(
                 val gate = channel.gateAddress
                 if (gate == null) false // fail-closed: unknown gate wraps nothing
                 else try {
-                    bridge.call("gateCheckAccess", JSONObject()
-                        .put("gate", gate).put("user", requester)).optBoolean("access", false)
+                    val res = bridge.call("gateCheckAccess", JSONObject()
+                        .put("gate", gate).put("user", requester))
+                    // The bridge reports WHY it says no. Reading only `access`
+                    // turned every RPC outage into "refused by gate", which
+                    // reads as policy and sent us hunting for bans that were
+                    // really a dead endpoint. The answer stays fail-closed.
+                    if (res.optBoolean("failed", false)) {
+                        Log.w(TAG, "gate unreadable for $requester on ${messageStreamId.takeLast(20)} " +
+                            "— refusing this request, NOT a ban")
+                        false
+                    } else res.optBoolean("access", false)
                 } catch (e: Exception) {
                     Log.w(TAG, "gateCheckAccess failed (fail-closed): ${e.message}")
                     false
@@ -6029,7 +6038,16 @@ class ChannelManager(
     private fun channelByStream(streamId: String): Channel? {
         val match: (Channel) -> Boolean = {
             it.messageStreamId == streamId || it.ephemeralStreamId == streamId ||
-                it.adminStreamId == streamId || (it.keysStreamId.isNotEmpty() && it.keysStreamId == streamId)
+                it.adminStreamId == streamId ||
+                // Records persisted before the keys stream existed carry an
+                // empty keysStreamId — the rest of the code lives with that by
+                // deriving it. Matching only the stored value made the -4
+                // lookup miss, and a miss is not neutral: the resend then goes
+                // without raw/recoverSigner and attributes the announce to the
+                // clone, so the admin's own KEY_ANNOUNCE is rejected as
+                // non-admin and its wraps are discarded.
+                (it.type == "gated" &&
+                    StreamConstants.deriveKeysId(it.messageStreamId) == streamId)
         }
         // Preview channels live only in _current, never in _channels — the
         // gated paths (epoch ingest, clone transport, gate checks) must still

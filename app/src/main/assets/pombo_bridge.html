@@ -47,8 +47,7 @@ let BRIDGE_RPCS = [];
 try { BRIDGE_RPCS = JSON.parse('__BRIDGE_RPCS__'); } catch (e) { /* not injected */ }
 const DEFAULT_RPCS = [
     'https://polygon.drpc.org',
-    'https://polygon-bor-rpc.publicnode.com',
-    'https://rpc.ankr.com/polygon'
+    'https://polygon-bor-rpc.publicnode.com'
 ];
 const RPCS = (Array.isArray(BRIDGE_RPCS) && BRIDGE_RPCS.length ? BRIDGE_RPCS : DEFAULT_RPCS)
     .map(function (url) { return { url: url }; });
@@ -1712,14 +1711,21 @@ const api = {
     },
 
     async _gateWithProvider(op) {
-        try {
-            return await op(api._gateProvider());
-        } catch (firstError) {
-            api._gateRpcIndex++;
-            api._gateProviderInst = null;
-            console.warn('gate: RPC failed, rotating endpoint: ' + (firstError && firstError.message || firstError));
-            return op(api._gateProvider());
+        // Walk the WHOLE list, once. Trying a single alternative left a
+        // member refused by a gate they hold access to whenever two endpoints
+        // in a row were down, and the settings can inject seven of them.
+        let lastError = null;
+        for (let attempt = 0; attempt < RPCS.length; attempt++) {
+            try {
+                return await op(api._gateProvider());
+            } catch (e) {
+                lastError = e;
+                api._gateRpcIndex++;
+                api._gateProviderInst = null;
+                console.warn('gate: RPC failed, rotating endpoint: ' + (e && e.message || e));
+            }
         }
+        throw lastError;
     },
 
     _gateRead(gateAddress) {
