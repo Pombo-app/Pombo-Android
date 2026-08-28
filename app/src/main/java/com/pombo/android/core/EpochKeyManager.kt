@@ -1036,7 +1036,11 @@ class EpochKeyManager(
         // wrap from us; the requester's retry finds a healthier responder.
         if (requester == null || !checkGateAccess(messageStreamId, requester)) {
             if (requester != null) {
-                Log.i(TAG, "KEY_REQUEST from $requester refused by gate on ${messageStreamId.takeLast(20)}")
+                // "refused by gate" only, and the caller logs separately when
+                // the gate was unreadable: the two look identical here and
+                // reading this line as policy costs hours.
+                Log.i(TAG, "KEY_REQUEST from $requester not answered on ${messageStreamId.takeLast(20)} " +
+                    "(gate said no, or was unreadable)")
             }
             return
         }

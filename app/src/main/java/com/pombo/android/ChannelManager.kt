@@ -210,8 +210,17 @@ class ChannelManager(
                 val gate = channel.gateAddress
                 if (gate == null) false // fail-closed: unknown gate wraps nothing
                 else try {
-                    bridge.call("gateCheckAccess", JSONObject()
-                        .put("gate", gate).put("user", requester)).optBoolean("access", false)
+                    val res = bridge.call("gateCheckAccess", JSONObject()
+                        .put("gate", gate).put("user", requester))
+                    // The bridge reports WHY it says no. Reading only `access`
+                    // turned every RPC outage into "refused by gate", which
+                    // reads as policy and sent us hunting for bans that were
+                    // really a dead endpoint. The answer stays fail-closed.
+                    if (res.optBoolean("failed", false)) {
+                        Log.w(TAG, "gate unreadable for $requester on ${messageStreamId.takeLast(20)} " +
+                            "— refusing this request, NOT a ban")
+                        false
+                    } else res.optBoolean("access", false)
                 } catch (e: Exception) {
                     Log.w(TAG, "gateCheckAccess failed (fail-closed): ${e.message}")
                     false
