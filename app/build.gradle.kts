@@ -109,6 +109,15 @@ android {
     }
 }
 
+// Unit tests read the bridge page from src/main/assets, which Gradle does not
+// see as an input on its own: without this an edited asset leaves the test task
+// up to date and the tests never run against it.
+tasks.withType<Test>().configureEach {
+    inputs.dir("src/main/assets")
+        .withPropertyName("bridgeAssets")
+        .withPathSensitivity(PathSensitivity.RELATIVE)
+}
+
 dependencies {
     // FCM: receives the relay wake signals as data-only messages.
     implementation(platform("com.google.firebase:firebase-bom:33.7.0"))
