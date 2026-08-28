@@ -197,20 +197,8 @@ class PomboBridge(
     // The key never enters the page (docs/private_key_in_webview.md, Phase C):
     // the page gets the account address + compressed public key and delegates
     // every signature to the Native oracle endpoints below.
-    private fun pageHtml() = bridgeHtml
-        .replace(
-            "__BRIDGE_ADDR__",
-            if (privateKey.isEmpty()) ""
-            else com.pombo.android.core.EthereumSigner.checksumAddress(
-                com.pombo.android.core.EthereumSigner.address(privateKey)
-            )
-        )
-        .replace(
-            "__BRIDGE_PUB__",
-            if (privateKey.isEmpty()) ""
-            else com.pombo.android.core.EthereumSigner.compressedPublicKey(privateKey)
-        )
-        .replace("__BRIDGE_RPCS__", org.json.JSONArray(rpcUrls).toString())
+    private fun pageHtml() =
+        com.pombo.android.core.BridgePage.render(bridgeHtml, privateKey, rpcUrls)
 
     /** Reborn JS world (new Streamr client) — used when switching identity
      *  or when the network changes. Fails all pending calls. */
@@ -406,17 +394,11 @@ class PomboBridge(
          * round-trip per publish. Empty string = no identity / bad input.
          */
         @JavascriptInterface
-        fun signMessagePayload(payloadB64: String): String {
-            val pk = privateKey
-            if (pk.isEmpty()) return ""
-            return try {
-                com.pombo.android.core.EthereumSigner.toHex(
-                    com.pombo.android.core.EthereumSigner.signMessage(
-                        Base64.decode(payloadB64, Base64.NO_WRAP), pk
-                    )
-                )
-            } catch (e: Exception) { "" }
-        }
+        fun signMessagePayload(payloadB64: String): String = try {
+            com.pombo.android.core.SigningOracle.signMessage(
+                Base64.decode(payloadB64, Base64.NO_WRAP), privateKey
+            )
+        } catch (e: Exception) { "" }
 
         /**
          * Polygon transaction signature. This is a JS→Kotlin entry the
@@ -425,20 +407,13 @@ class PomboBridge(
          * arrive inside a ChainGuard approval window. Empty string = refused.
          */
         @JavascriptInterface
-        fun signTransactionPayload(unsignedHex: String): String {
-            val pk = privateKey
-            if (pk.isEmpty()) return ""
-            return try {
-                val bytes = com.pombo.android.core.SealedSenderCrypto.hexToBytes(unsignedHex)
-                if (!com.pombo.android.core.Rlp.isTransactionEnvelope(bytes)) return ""
-                if (!com.pombo.android.ui.ChainGuard.isApproved()) return ""
-                com.pombo.android.core.EthereumSigner.toHex(
-                    com.pombo.android.core.EthereumSigner.signDigest(
-                        com.pombo.android.core.SealedSenderCrypto.keccak256(bytes), pk
-                    )
-                )
-            } catch (e: Exception) { "" }
-        }
+        fun signTransactionPayload(unsignedHex: String): String = try {
+            com.pombo.android.core.SigningOracle.signTransaction(
+                com.pombo.android.core.SealedSenderCrypto.hexToBytes(unsignedHex),
+                privateKey,
+                com.pombo.android.ui.ChainGuard.isApproved()
+            )
+        } catch (e: Exception) { "" }
 
         @JavascriptInterface
         fun status(s: String) { main.post { listener.onBridgeStatus(s) } }
