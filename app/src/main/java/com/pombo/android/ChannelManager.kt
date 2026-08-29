@@ -736,9 +736,10 @@ class ChannelManager(
      */
     suspend fun requestChannelKeysNow() {
         val channel = _current.value ?: return
-        if (!isEpochChannel(channel) || channel.keysStreamId.isEmpty()) return
+        if (!isEpochChannel(channel)) return
+        val keysId = channel.keysStreamId.ifEmpty { StreamConstants.deriveKeysId(channel.messageStreamId) }
         runCatching {
-            epochKeys.retryRequestIfWaiting(channel.messageStreamId, channel.keysStreamId)
+            epochKeys.retryRequestIfWaiting(channel.messageStreamId, keysId)
         }
     }
 
