@@ -5341,16 +5341,21 @@ private fun ChannelStoragePanel(vm: AppViewModel, channel: Channel, canModerate:
     // either never reaches half the people who need it.
     if (info?.retentionInSync == false) {
         Spacer(Modifier.height(8.dp))
+        // Same box as the web's #channel-storage-retention-mixed: mt-2,
+        // p-2.5, rounded-lg, amber/5 on amber/10.
         Row(
             Modifier.fillMaxWidth()
-                .background(Color(0xFFF59E0B).copy(alpha = 0.05f), RoundedCornerShape(10.dp))
-                .border(1.dp, Color(0xFFF59E0B).copy(alpha = 0.10f), RoundedCornerShape(10.dp))
+                .background(Color(0xFFF59E0B).copy(alpha = 0.05f), RoundedCornerShape(8.dp))
+                .border(1.dp, Color(0xFFF59E0B).copy(alpha = 0.10f), RoundedCornerShape(8.dp))
                 .padding(10.dp),
             verticalAlignment = Alignment.Top
         ) {
             Icon(
                 Icons.Outlined.WarningAmber, contentDescription = null,
-                tint = Color(0xFFFBBF24).copy(alpha = 0.80f), modifier = Modifier.size(16.dp)
+                tint = Color(0xFFFBBF24).copy(alpha = 0.80f),
+                // The web nudges the icon down half a step (mt-0.5) so it sits
+                // on the first line rather than above it.
+                modifier = Modifier.padding(top = 2.dp).size(16.dp)
             )
             Spacer(Modifier.width(8.dp))
             Text(
