@@ -1890,48 +1890,193 @@ class ChannelManager(
      * streams separately so a half-applied assignment shows as "partial" instead
      * of looking healthy (web: getChannelStorageInfo).
      */
-    data class StorageNode(val address: String, val onMessage: Boolean, val onAdmin: Boolean) {
-        val partial: Boolean get() = !(onMessage && onAdmin)
+    data class StorageNode(
+        val address: String,
+        val onMessage: Boolean,
+        val onAdmin: Boolean,
+        val onKeys: Boolean = false,
+        /** False on channels with no -4, where onKeys can never be true. */
+        val hasKeys: Boolean = false,
+        /**
+         * False when a stream lookup failed. Absence then proves nothing, and
+         * calling it partial sends the admin to spend gas on a repair that
+         * may not be needed.
+         */
+        val allStreamsRead: Boolean = true
+    ) {
+        val partial: Boolean get() =
+            allStreamsRead && !(onMessage && onAdmin && (!hasKeys || onKeys))
     }
 
     data class StorageInfo(
         val enabled: Boolean,
         val nodes: List<StorageNode>,
-        /** Message-stream TTL; the admin stream tracks it but is not surfaced. */
-        val storageDays: Int?
+        /** The message stream's, which is the one figure the panel shows. */
+        val storageDays: Int?,
+        val adminStorageDays: Int? = null,
+        val keysStorageDays: Int? = null,
+        /** False when the stored streams hold different retentions. */
+        val retentionInSync: Boolean = true,
+        val hasKeysStream: Boolean = false
     )
 
-    private suspend fun streamStorage(streamId: String): Pair<List<String>, Int?> = try {
-        val res = bridge.call("getStreamStorageInfo", JSONObject().put("streamId", streamId), 30_000)
-        val arr = res.optJSONArray("nodes") ?: JSONArray()
-        val nodes = (0 until arr.length()).map { arr.optString(it) }.filter { it.isNotEmpty() }
-        nodes to (if (res.isNull("storageDays")) null else res.optInt("storageDays").takeIf { it > 0 })
-    } catch (e: Exception) { emptyList<String>() to null }
+    /**
+     * What the chain currently says about one stored stream.
+     *
+     * `read` is false when the lookup failed. Every decision that would SKIP
+     * a write has to treat that as nothing known and write anyway: a wrong
+     * skip leaves the stream diverged with the UI reporting success, while a
+     * redundant write only costs gas.
+     */
+    data class StoredStream(
+        val id: String,
+        val kind: String,
+        val read: Boolean,
+        val nodes: List<String>,
+        val storageDays: Int?
+    ) {
+        fun carries(address: String) = nodes.any { it.equals(address, ignoreCase = true) }
+    }
 
-    suspend fun channelStorageInfo(): StorageInfo {
-        val channel = _current.value ?: return StorageInfo(false, emptyList(), null)
-        val (msgNodes, days) = streamStorage(channel.messageStreamId)
-        val adminNodes = if (channel.adminStreamId.isNotEmpty()) {
-            streamStorage(channel.adminStreamId).first
-        } else emptyList()
-
-        val byAddr = linkedMapOf<String, StorageNode>()
-        msgNodes.forEach { byAddr[it.lowercase()] = StorageNode(it, onMessage = true, onAdmin = false) }
-        adminNodes.forEach { n ->
-            val k = n.lowercase()
-            val existing = byAddr[k]
-            byAddr[k] = existing?.copy(onAdmin = true) ?: StorageNode(n, onMessage = false, onAdmin = true)
+    private suspend fun readStoredStreams(channel: Channel): List<StoredStream> {
+        val kinds = listOf("message", "admin", "keys")
+        return storedStreams(channel).mapIndexed { i, id ->
+            val res = streamStorage(id)
+            StoredStream(id, kinds.getOrElse(i) { "extra" }, res != null,
+                res?.first ?: emptyList(), res?.second)
         }
-        val nodes = byAddr.values.toList()
-        return StorageInfo(nodes.isNotEmpty(), nodes, days)
     }
 
     /**
-     * Assigns a storage node to both -1 and -3. Sequential, not parallel: two
+     * Apply an operation to only the stored streams that still need it, then
+     * read back to confirm.
+     *
+     * Every storage operation is one on-chain transaction per stream, so a
+     * channel already half-configured should cost what is missing, not the
+     * whole set again, and the count the user approves has to be the real one.
+     *
+     * @return per-stream outcome ("unchanged" | "applied" | "failed"), how
+     *         many transactions were sent, and whether the read-back agrees
+     *         (null when nothing was sent).
+     */
+    private suspend fun applyToStoredStreams(
+        channel: Channel,
+        needs: (StoredStream) -> Boolean,
+        apply: suspend (String) -> Unit
+    ): StorageWriteResult {
+        val before = readStoredStreams(channel)
+        val results = LinkedHashMap<String, String>()
+        var sent = 0
+
+        // Sequential to avoid nonce conflicts (REPLACEMENT_UNDERPRICED).
+        for (stream in before) {
+            if (!needs(stream)) { results[stream.kind] = "unchanged"; continue }
+            sent += 1
+            results[stream.kind] = try {
+                apply(stream.id); "applied"
+            } catch (e: Exception) {
+                Log.w(TAG, "storage write failed on ${stream.kind} ${stream.id.takeLast(20)}: ${e.message}")
+                "failed"
+            }
+        }
+
+        if (sent == 0) return StorageWriteResult(results, 0, null)
+
+        val after = readStoredStreams(channel)
+        val verified = writesConverged(after, needs)
+        if (!verified) Log.w(TAG, "storage write did not converge; streams still out of sync")
+        return StorageWriteResult(results, sent, verified)
+    }
+
+    data class StorageWriteResult(
+        val results: Map<String, String>,
+        val sent: Int,
+        val verified: Boolean?
+    ) {
+        val failed: Boolean get() = results.values.any { it == "failed" }
+        val ok: Boolean get() = !failed && verified != false
+    }
+
+    /** Null when the lookup failed, which is not the same as "no nodes". */
+    private suspend fun streamStorage(streamId: String): Pair<List<String>, Int?>? = try {
+        val res = bridge.call("getStreamStorageInfo", JSONObject().put("streamId", streamId), 30_000)
+        // The bridge answers a failed lookup with the same empty shape a
+        // stream with no storage returns, so `ok` is the only thing that
+        // tells them apart.
+        if (!res.optBoolean("ok", false)) {
+            Log.w(TAG, "storage lookup did not answer for " + streamId.takeLast(20))
+            null
+        } else {
+            val arr = res.optJSONArray("nodes") ?: JSONArray()
+            val nodes = (0 until arr.length()).map { arr.optString(it) }.filter { it.isNotEmpty() }
+            nodes to (if (res.isNull("storageDays")) null else res.optInt("storageDays").takeIf { it > 0 })
+        }
+    } catch (e: Exception) {
+        Log.w(TAG, "storage lookup failed for " + streamId.takeLast(20) + ": " + e.message)
+        null
+    }
+
+    /**
+     * Every stored stream of the channel: -1, -3, and -4 on gated. The
+     * ephemeral -2 never has storage by design, and the DM inbox is an
+     * account-level stream rather than part of any one conversation.
+     */
+    suspend fun channelStorageInfo(): StorageInfo {
+        val channel = _current.value ?: return StorageInfo(false, emptyList(), null)
+        val keysStreamId = if (channel.type == "gated") {
+            channel.keysStreamId.ifEmpty { StreamConstants.deriveKeysId(channel.messageStreamId) }
+        } else ""
+
+        val msg = streamStorage(channel.messageStreamId)
+        val admin = if (channel.adminStreamId.isNotEmpty()) streamStorage(channel.adminStreamId) else null
+        val keys = if (keysStreamId.isNotEmpty()) streamStorage(keysStreamId) else null
+
+        val (msgNodes, days) = msg ?: (emptyList<String>() to null)
+        val (adminNodes, adminDays) = admin ?: (emptyList<String>() to null)
+        val (keysNodes, keysDays) = keys ?: (emptyList<String>() to null)
+
+        val hasKeys = keysStreamId.isNotEmpty()
+        // Every stream we are comparing has to have actually answered before
+        // a node's absence from one of them means anything.
+        val allStreamsRead = msg != null &&
+            (channel.adminStreamId.isEmpty() || admin != null) &&
+            (!hasKeys || keys != null)
+        val byAddr = linkedMapOf<String, StorageNode>()
+        fun mark(addresses: List<String>, set: (StorageNode) -> StorageNode) {
+            addresses.forEach { n ->
+                val k = n.lowercase()
+                byAddr[k] = set(byAddr[k] ?: StorageNode(
+                    n, onMessage = false, onAdmin = false,
+                    hasKeys = hasKeys, allStreamsRead = allStreamsRead))
+            }
+        }
+        mark(msgNodes) { it.copy(onMessage = true) }
+        mark(adminNodes) { it.copy(onAdmin = true) }
+        mark(keysNodes) { it.copy(onKeys = true) }
+
+        val nodes = byAddr.values.toList()
+        // A lookup that times out reads as "not known", which is silence the
+        // panel cannot distinguish from agreement — so say what came back.
+        Log.i(TAG, "Storage info: retention=[message=$days admin=$adminDays keys=$keysDays] " +
+            "inSync=${retentionInSync(days, adminDays, keysDays)} hasKeys=$hasKeys " +
+            "allRead=$allStreamsRead nodes=${nodes.size}")
+        return StorageInfo(
+            enabled = nodes.isNotEmpty(),
+            nodes = nodes,
+            storageDays = days,
+            adminStorageDays = adminDays,
+            keysStorageDays = keysDays,
+            retentionInSync = retentionInSync(days, adminDays, keysDays),
+            hasKeysStream = hasKeys
+        )
+    }
+
+    /**
+     * Assigns a storage node to every stored stream. Sequential, not parallel: two
      * on-chain writes from one account race on the nonce and the second gets
      * REPLACEMENT_UNDERPRICED.
      */
-    suspend fun addStorageNode(address: String, storageDays: Int? = null) {
+    suspend fun addStorageNode(address: String, storageDays: Int? = null): StorageWriteResult {
         val channel = _current.value ?: throw IllegalStateException("No channel open")
         if (!amOwner(channel)) throw IllegalStateException("Only the channel admin can change storage")
         val addr = address.trim()
@@ -1942,44 +2087,112 @@ class ChannelManager(
                 storageDays?.let { put("storageDays", it) }
             }
         }
-        bridge.call("addToStorageNode", args(channel.messageStreamId), 180_000)
-        if (channel.adminStreamId.isNotEmpty()) {
-            bridge.call("addToStorageNode", args(channel.adminStreamId), 180_000)
-        }
+        val out = applyToStoredStreams(
+            channel,
+            needs = { needsNodeAdd(it, addr) },
+            apply = { bridge.call("addToStorageNode", args(it), 180_000) }
+        )
         markStorage(channel, enabled = true)
+        return out
     }
 
-    suspend fun removeStorageNode(address: String) {
+    suspend fun removeStorageNode(address: String): StorageWriteResult {
         val channel = _current.value ?: throw IllegalStateException("No channel open")
         if (!amOwner(channel)) throw IllegalStateException("Only the channel admin can change storage")
         val addr = address.trim()
-        bridge.call("removeFromStorageNode",
-            JSONObject().put("streamId", channel.messageStreamId).put("nodeAddress", addr), 180_000)
-        if (channel.adminStreamId.isNotEmpty()) {
-            bridge.call("removeFromStorageNode",
-                JSONObject().put("streamId", channel.adminStreamId).put("nodeAddress", addr), 180_000)
-        }
+        val out = applyToStoredStreams(
+            channel,
+            needs = { needsNodeRemove(it, addr) },
+            apply = {
+                bridge.call("removeFromStorageNode",
+                    JSONObject().put("streamId", it).put("nodeAddress", addr), 180_000)
+            }
+        )
         markStorage(channel, enabled = channelStorageInfo().enabled)
+        return out
     }
 
-    /** Retention applies to both streams, same sequencing rationale as above. */
-    suspend fun setStorageDays(days: Int) {
+    /**
+     * Set the retention of every stored stream that is not already at [days].
+     *
+     * Only the streams that differ are written, so re-saving the same figure
+     * to heal a divergence costs one transaction per diverged stream instead
+     * of one per stream.
+     */
+    suspend fun setStorageDays(days: Int): StorageWriteResult {
         val channel = _current.value ?: throw IllegalStateException("No channel open")
         if (!amOwner(channel)) throw IllegalStateException("Only the channel admin can change storage")
         require(days >= 1) { "Retention must be a positive number of days" }
-        bridge.call("setStorageDays",
-            JSONObject().put("streamId", channel.messageStreamId).put("storageDays", days), 180_000)
-        if (channel.adminStreamId.isNotEmpty()) {
-            bridge.call("setStorageDays",
-                JSONObject().put("streamId", channel.adminStreamId).put("storageDays", days), 180_000)
+
+        val out = applyToStoredStreams(
+            channel,
+            needs = { needsRetentionWrite(it, days) },
+            apply = {
+                bridge.call("setStorageDays",
+                    JSONObject().put("streamId", it).put("storageDays", days), 180_000)
+            }
+        )
+
+        // Keep the local copies in sync, per stream: each is a separate
+        // transaction and the Graph lags them by enough to answer a reopen
+        // with the old retention. A stream already at `days` counts as in
+        // sync too, which is the whole point of not writing to it.
+        fun settled(kind: String) = out.results[kind] == "applied" || out.results[kind] == "unchanged"
+        val updated = channel.copy(
+            storageDays = if (settled("message")) days else channel.storageDays,
+            adminStorageDays = if (settled("admin")) days else channel.adminStorageDays,
+            keysStorageDays = if (settled("keys")) days else channel.keysStorageDays
+        )
+        if (updated != channel) {
+            _channels.value = _channels.value.map {
+                if (it.messageStreamId == updated.messageStreamId) updated else it
+            }
+            store.save(_channels.value)
+            if (_current.value?.messageStreamId == updated.messageStreamId) _current.value = updated
         }
-        // Keep the local copy in sync — the TTL republish check on owner open
-        // (docs/TTL_REPUBLISH_PLAN.md) compares artifact age against this.
-        // Web channels.js setChannelStorageDays does the same.
-        val updated = channel.copy(storageDays = days)
+        return out
+    }
+
+    /**
+     * Refresh the cached retention of the stored streams other than -1, whose
+     * value [Channel.storageDays] already holds. The chain is the system of
+     * record and the record is a warm-start cache of it: each stream is
+     * configured by its own transaction and any of them can fail alone.
+     *
+     * Resolved on open and cached because the key-responder sweep that reads
+     * the -4 value runs every 45s, far too often to look up. Owner-only:
+     * every consumer of these values is admin-side.
+     *
+     * Never throws, and returns the record to decide with.
+     */
+    private suspend fun refreshStreamRetentions(channel: Channel): Channel {
+        val adminDays = if (channel.adminStreamId.isNotEmpty()) {
+            com.pombo.android.core.GraphApi.streamRetention(channel.adminStreamId)
+        } else null
+        val keysId = if (channel.type == "gated") {
+            channel.keysStreamId.ifEmpty { StreamConstants.deriveKeysId(channel.messageStreamId) }
+        } else ""
+        val keysDays = if (keysId.isNotEmpty()) {
+            com.pombo.android.core.GraphApi.streamRetention(keysId)
+        } else null
+
+        val current = _channels.value.firstOrNull { it.messageStreamId == channel.messageStreamId }
+            ?: channel
+        val updated = current.copy(
+            adminStorageDays = adminDays ?: current.adminStorageDays,
+            keysStorageDays = keysDays ?: current.keysStorageDays
+        )
+        // One line per open: the sweep that consumes these is headless and
+        // silent, so a wrong value is invisible until the announces are gone.
+        Log.d(TAG, "Stream retentions read=[admin=$adminDays keys=$keysDays] " +
+            "using=[message=${updated.storageDays} admin=${adminRetentionDays(updated)} " +
+            "keys=${keysRetentionDays(updated)}]")
+        if (updated == current) return current
+
         _channels.value = _channels.value.map { if (it.messageStreamId == updated.messageStreamId) updated else it }
         store.save(_channels.value)
         if (_current.value?.messageStreamId == updated.messageStreamId) _current.value = updated
+        return updated
     }
 
     private fun markStorage(channel: Channel, enabled: Boolean) {
@@ -2181,12 +2394,19 @@ class ChannelManager(
         val storageNode = if (storageProvider == "custom" && !customStorageAddress.isNullOrBlank())
             customStorageAddress else STORAGE_NODE
         var storageOk = true
-        try { addStorageRetry(messageStreamId, storageNode, storageDays) } catch (e: Exception) {
+        // Only what actually landed: a stream whose retention transaction
+        // never went through keeps the storage node default, and the record
+        // must not claim otherwise. Both the TTL republish and the key
+        // re-announce time themselves off these.
+        var msgDays: Int? = null
+        var admDays: Int? = null
+        var keyDays: Int? = null
+        try { msgDays = addStorageRetry(messageStreamId, storageNode, storageDays) } catch (e: Exception) {
             storageOk = false
             Log.w(TAG, "Storage on -1 failed; continuing without history: ${e.message}")
         }
         onProgress()
-        try { addStorageRetry(adminStreamId, storageNode, storageDays) } catch (e: Exception) {
+        try { admDays = addStorageRetry(adminStreamId, storageNode, storageDays) } catch (e: Exception) {
             Log.w(TAG, "Storage on -3 failed; continuing without admin history: ${e.message}")
         }
         onProgress()
@@ -2195,10 +2415,19 @@ class ChannelManager(
         // (The web shipped without this once — the announce was never retained
         // and joiners could not even ask for the key.)
         if (type == "gated") {
-            try { addStorageRetry(keysStreamId, storageNode, storageDays) } catch (e: Exception) {
+            try { keyDays = addStorageRetry(keysStreamId, storageNode, storageDays) } catch (e: Exception) {
                 Log.w(TAG, "Storage on -4 failed; key exchange limited to live members: ${e.message}")
             }
             onProgress()
+        }
+        val missingRetention = listOfNotNull(
+            if (storageOk && msgDays == null) "-1" else null,
+            if (admDays == null) "-3" else null,
+            if (type == "gated" && keyDays == null) "-4" else null
+        )
+        if (missingRetention.isNotEmpty()) {
+            Log.w(TAG, "Retention not applied on ${missingRetention.joinToString(", ")} — " +
+                "those streams keep the storage node default until it is set again")
         }
 
         // Password challenge on -3/P2 (payload encrypted with the password)
@@ -2232,7 +2461,9 @@ class ChannelManager(
             else emptyList(),
             storageEnabled = storageOk,
             storageProvider = storageProvider,
-            storageDays = storageDays,
+            storageDays = msgDays,
+            adminStorageDays = admDays,
+            keysStorageDays = keyDays,
             exposure = effectiveExposure,
             description = if (visible) description else "",
             language = if (visible) language else "",
@@ -2299,12 +2530,21 @@ class ChannelManager(
             .put("streamId", streamId).put("assignments", assignments), 120_000)
     }
 
+    /**
+     * Assigns the node and asks for the retention. Returns the retention that
+     * ACTUALLY landed, null when it did not: the bridge attaches the node and
+     * sets the TTL in one call, and the TTL is a separate transaction that
+     * fails on its own.
+     */
     private suspend fun addStorageRetry(
         streamId: String, nodeAddress: String = STORAGE_NODE, storageDays: Int = 180
-    ) = retry(7) {
-        bridge.call("addToStorageNode", JSONObject()
-            .put("streamId", streamId).put("nodeAddress", nodeAddress)
-            .put("storageDays", storageDays), 120_000)
+    ): Int? {
+        val res = retry(7) {
+            bridge.call("addToStorageNode", JSONObject()
+                .put("streamId", streamId).put("nodeAddress", nodeAddress)
+                .put("storageDays", storageDays), 120_000)
+        }
+        return if (res.optBoolean("retentionApplied", false)) storageDays else null
     }
 
     private suspend fun <T> retry(times: Int, block: suspend () -> T): T {
@@ -2840,7 +3080,8 @@ class ChannelManager(
         // retained → nothing republished (and a missing challenge must
         // republish regardless, the legacy redundancy semantics).
         if (channel.adminStreamId.isEmpty()) return
-        val storageDays = channel.storageDays?.takeIf { it > 0 } ?: DEFAULT_RETENTION_DAYS
+        // The purge applies the -3's own retention, not the -1's.
+        val storageDays = adminRetentionDays(refreshStreamRetentions(channel))
         fun ageDays(ts: Long) = (System.currentTimeMillis() - ts) / 86_400_000L
 
         // ADMIN_STATE (-3/P0): republish the current snapshot with rev+1 via
@@ -3250,7 +3491,7 @@ class ChannelManager(
                 epochKeys.ensureChannelKeys(
                     entry.messageStreamId,
                     entry.keysStreamId.ifEmpty { StreamConstants.deriveKeysId(entry.messageStreamId) },
-                    channel.storageDays ?: 180,
+                    keysRetentionDays(channel),
                     allowMint = false,
                     memberCount = channel.members.size,
                     gated = channel.type == "gated")
@@ -4804,7 +5045,7 @@ class ChannelManager(
                                 try {
                                     epochKeys.ensureChannelKeys(
                                         channel.messageStreamId, channel.keysStreamId,
-                                        channel.storageDays ?: 180,
+                                        keysRetentionDays(channel),
                                         allowMint = System.currentTimeMillis() - channel.createdAt < 3_600_000,
                                         memberCount = channel.members.size,
                                         gated = channel.type == "gated")
@@ -4822,7 +5063,7 @@ class ChannelManager(
                         try {
                             epochKeys.ensureChannelKeys(
                                 channel.messageStreamId, channel.keysStreamId,
-                                channel.storageDays ?: 180,
+                                keysRetentionDays(channel),
                                     allowMint = System.currentTimeMillis() - channel.createdAt < 3_600_000,
                                     memberCount = channel.members.size,
                                     gated = channel.type == "gated")
@@ -4843,7 +5084,7 @@ class ChannelManager(
                                     try {
                                         epochKeys.ensureChannelKeys(
                                             channel.messageStreamId, channel.keysStreamId,
-                                            channel.storageDays ?: 180,
+                                            keysRetentionDays(channel),
                                             allowMint = System.currentTimeMillis() - channel.createdAt < 3_600_000,
                                             memberCount = channel.members.size,
                                             gated = channel.type == "gated")
@@ -5955,7 +6196,7 @@ class ChannelManager(
                     try {
                         epochKeys.ensureChannelKeys(
                             channel.messageStreamId, keysId,
-                            channel.storageDays ?: 180,
+                            keysRetentionDays(channel),
                             allowMint = System.currentTimeMillis() - channel.createdAt < 3_600_000,
                             memberCount = channel.members.size,
                             gated = channel.type == "gated")
@@ -5980,7 +6221,7 @@ class ChannelManager(
                 // Cold open may not have run the bootstrap/request yet — one recovery attempt
                 epochKeys.ensureChannelKeys(
                     channel.messageStreamId, keysId,
-                    channel.storageDays ?: 180,
+                    keysRetentionDays(channel),
                                     allowMint = System.currentTimeMillis() - channel.createdAt < 3_600_000,
                                     memberCount = channel.members.size,
                                     gated = channel.type == "gated")
@@ -7864,6 +8105,94 @@ class ChannelManager(
             if (storageDays == null || storageDays <= 0) return false
             val ttlMs = storageDays * 86_400_000L
             return now - artifactTs > (TTL_REPUBLISH_AGE_FRACTION * ttlMs).toLong()
+        }
+
+        /**
+         * First usable retention among [candidates], most trusted first,
+         * falling back to [DEFAULT_RETENTION_DAYS]. Web: streamRetention.js
+         * pickRetention.
+         */
+        fun pickRetention(vararg candidates: Int?): Int =
+            candidates.firstOrNull { it != null && it > 0 } ?: DEFAULT_RETENTION_DAYS
+
+        /**
+         * Retention to decide about the -3 artifacts. The purge applies each
+         * stream's own value, and [Channel.storageDays] is the -1's.
+         */
+        fun adminRetentionDays(channel: Channel): Int =
+            pickRetention(channel.adminStorageDays, channel.storageDays)
+
+        /**
+         * Retention to decide about the -4 announces, without a lookup: the
+         * key-responder sweep evaluates freshness every 45s and must never
+         * turn that into a network call. The -3 value ranks above the default
+         * because every path that sets a channel's retention sets all of
+         * them: it is wrong only when one of those transactions failed alone.
+         * Web: streamRetention.js keysRetentionDays.
+         */
+        fun keysRetentionDays(channel: Channel): Int =
+            pickRetention(channel.keysStorageDays, channel.adminStorageDays, channel.storageDays)
+
+        /**
+         * Do a channel's stored streams agree on their retention? Values that
+         * are not a usable retention are skipped rather than counted as a
+         * mismatch: they are streams the channel does not have, or lookups
+         * that failed, and an unknown value contradicts nothing.
+         */
+        /**
+         * The channel's stored streams: -1, -3, and -4 on gated. Never the
+         * ephemeral -2, which has no storage by design, and never the DM
+         * inbox, which is an account-level stream.
+         */
+        /**
+         * Does this stream still need the retention set to [days]?
+         *
+         * A stream that could not be read counts as needing it: skipping on
+         * an unknown leaves it diverged with the UI reporting success, while
+         * a redundant write only costs gas.
+         */
+        /**
+         * Did the writes land? Every stream has to answer AND no longer need
+         * the write. A stream that stopped answering is not converged either:
+         * claiming success on silence is the failure this read-back exists
+         * to catch.
+         */
+        /**
+         * May the admin save [days]?
+         *
+         * A value equal to the figure on screen is normally a no-op, but it
+         * is exactly what heals a channel whose streams disagree: the panel
+         * shows the message stream, and the other streams can differ from it.
+         * Blocking it there makes the warning's own advice unfollowable.
+         */
+        fun canSaveRetention(days: Int, shown: Int?, retentionInSync: Boolean): Boolean =
+            days >= 1 && (days != shown || !retentionInSync)
+
+        fun writesConverged(after: List<StoredStream>, needs: (StoredStream) -> Boolean): Boolean =
+            after.all { it.read && !needs(it) }
+
+        fun needsRetentionWrite(stream: StoredStream, days: Int): Boolean =
+            !stream.read || stream.storageDays != days
+
+        /** Does this stream still need [address] assigned to it? */
+        fun needsNodeAdd(stream: StoredStream, address: String): Boolean =
+            !stream.read || !stream.carries(address)
+
+        /** Does this stream still carry [address], so it needs removing? */
+        fun needsNodeRemove(stream: StoredStream, address: String): Boolean =
+            !stream.read || stream.carries(address)
+
+        fun storedStreams(channel: Channel): List<String> = buildList {
+            add(channel.messageStreamId)
+            if (channel.adminStreamId.isNotEmpty()) add(channel.adminStreamId)
+            if (channel.type == "gated") {
+                add(channel.keysStreamId.ifEmpty { StreamConstants.deriveKeysId(channel.messageStreamId) })
+            }
+        }
+
+        fun retentionInSync(vararg values: Int?): Boolean {
+            val known = values.filterNotNull().filter { it > 0 }
+            return known.all { it == known.firstOrNull() }
         }
     }
 }

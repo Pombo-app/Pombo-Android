@@ -5310,7 +5310,8 @@ private fun ChannelStoragePanel(vm: AppViewModel, channel: Channel, canModerate:
             Text("days", color = Color.White.copy(alpha = 0.50f), fontSize = 14.sp)
             Spacer(Modifier.width(10.dp))
             val days = daysText.toIntOrNull() ?: 0
-            val valid = days >= 1 && days != info?.storageDays
+            val valid = com.pombo.android.ChannelManager.canSaveRetention(
+                days, info?.storageDays, info?.retentionInSync != false)
             Box(
                 Modifier
                     .background(
@@ -5334,6 +5335,38 @@ private fun ChannelStoragePanel(vm: AppViewModel, channel: Channel, canModerate:
                 ?: if (info?.enabled == true) "Not set" else "-",
             color = Color.White.copy(alpha = 0.70f), fontSize = 14.sp
         )
+    }
+
+    // Outside both retention states on purpose: the editor is hidden for a
+    // reader and the figure is hidden for an admin, so a warning inside
+    // either never reaches half the people who need it.
+    if (info?.retentionInSync == false) {
+        Spacer(Modifier.height(8.dp))
+        // Same box as the web's #channel-storage-retention-mixed: mt-2,
+        // p-2.5, rounded-lg, amber/5 on amber/10.
+        Row(
+            Modifier.fillMaxWidth()
+                .background(Color(0xFFF59E0B).copy(alpha = 0.05f), RoundedCornerShape(8.dp))
+                .border(1.dp, Color(0xFFF59E0B).copy(alpha = 0.10f), RoundedCornerShape(8.dp))
+                .padding(10.dp),
+            verticalAlignment = Alignment.Top
+        ) {
+            Icon(
+                Icons.Outlined.WarningAmber, contentDescription = null,
+                tint = Color(0xFFFBBF24).copy(alpha = 0.80f),
+                // The web nudges the icon down half a step (mt-0.5) so it sits
+                // on the first line rather than above it.
+                modifier = Modifier.padding(top = 2.dp).size(16.dp)
+            )
+            Spacer(Modifier.width(8.dp))
+            Text(
+                if (canModerate)
+                    "Retention is not the same on all of this channel’s streams. Save it again to apply one value to all of them."
+                else
+                    "Retention is not the same on all of this channel’s streams.",
+                color = Color(0xFFFBBF24).copy(alpha = 0.80f), fontSize = 12.sp, lineHeight = 17.sp
+            )
+        }
     }
 
     Spacer(Modifier.height(14.dp))
