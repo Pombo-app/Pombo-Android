@@ -1594,14 +1594,30 @@ const api = {
         return { ok: true };
     },
 
+    // Retention is a SECOND transaction and fails on its own. It gets its own
+    // retries here, because the native caller retries this whole call and a
+    // swallowed failure never reaches it. When it never lands the caller is
+    // told so instead of being handed back the value it asked for.
     async addToStorageNode(a) {
         if (!client) throw new Error('client not connected');
         const stream = await client.getStream(a.streamId);
         await stream.addToStorageNode(a.nodeAddress);
-        if (a.storageDays && typeof stream.setStorageDayCount === 'function') {
-            try { await stream.setStorageDayCount(a.storageDays); } catch (e) { /* TTL is best-effort */ }
+        if (!a.storageDays || typeof stream.setStorageDayCount !== 'function') {
+            return { ok: true, retentionApplied: false, storageDays: null };
         }
-        return { ok: true };
+        let lastError = null;
+        for (let attempt = 0; attempt < 3; attempt++) {
+            try {
+                await stream.setStorageDayCount(a.storageDays);
+                return { ok: true, retentionApplied: true, storageDays: a.storageDays };
+            } catch (e) {
+                lastError = e;
+                await new Promise(function (r) { setTimeout(r, 1000 * (attempt + 1)); });
+            }
+        }
+        console.warn('retention NOT applied on ' + a.streamId + ' — the stream keeps the node default: '
+            + (lastError && lastError.message || lastError));
+        return { ok: true, retentionApplied: false, storageDays: null };
     },
 
     // Mirror of streamr.js checkPermissions (same hasPermission calls)

@@ -52,8 +52,15 @@ data class Channel(
     val storageEnabled: Boolean = false,
     /** Which storage node holds the history: 'streamr' (Pombo cluster) or 'custom'. */
     val storageProvider: String = "streamr",
-    /** Retention in days, as accepted by the storage node. Null when unknown. */
+    /**
+     * Retention in days per stored stream, as read off-chain. Each stream is
+     * configured by its own transaction and any of them can fail alone, so a
+     * single figure cannot speak for all three. [storageDays] is the message
+     * stream (-1); null anywhere means not known, never "the default".
+     */
     val storageDays: Int? = null,
+    val adminStorageDays: Int? = null,
+    val keysStorageDays: Int? = null,
     val exposure: String = "hidden",  // 'visible' | 'hidden'
     val description: String = "",
     val language: String = "",
@@ -95,6 +102,8 @@ data class Channel(
         .put("storageEnabled", storageEnabled)
         .put("storageProvider", storageProvider)
         .put("storageDays", storageDays ?: JSONObject.NULL)
+        .put("adminStorageDays", adminStorageDays ?: JSONObject.NULL)
+        .put("keysStorageDays", keysStorageDays ?: JSONObject.NULL)
         .put("exposure", exposure)
         .put("description", description)
         .put("language", language)
@@ -141,6 +150,8 @@ data class Channel(
                 storageEnabled = o.optBoolean("storageEnabled", false),
                 storageProvider = o.optString("storageProvider", "streamr").ifEmpty { "streamr" },
                 storageDays = if (o.isNull("storageDays")) null else o.optInt("storageDays"),
+                adminStorageDays = if (o.isNull("adminStorageDays")) null else o.optInt("adminStorageDays"),
+                keysStorageDays = if (o.isNull("keysStorageDays")) null else o.optInt("keysStorageDays"),
                 exposure = o.optString("exposure", "hidden"),
                 description = o.optString("description", ""),
                 language = o.optString("language", ""),

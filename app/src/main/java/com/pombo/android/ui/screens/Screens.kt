@@ -5336,6 +5336,33 @@ private fun ChannelStoragePanel(vm: AppViewModel, channel: Channel, canModerate:
         )
     }
 
+    // Outside both retention states on purpose: the editor is hidden for a
+    // reader and the figure is hidden for an admin, so a warning inside
+    // either never reaches half the people who need it.
+    if (info?.retentionInSync == false) {
+        Spacer(Modifier.height(8.dp))
+        Row(
+            Modifier.fillMaxWidth()
+                .background(Color(0xFFF59E0B).copy(alpha = 0.05f), RoundedCornerShape(10.dp))
+                .border(1.dp, Color(0xFFF59E0B).copy(alpha = 0.10f), RoundedCornerShape(10.dp))
+                .padding(10.dp),
+            verticalAlignment = Alignment.Top
+        ) {
+            Icon(
+                Icons.Outlined.WarningAmber, contentDescription = null,
+                tint = Color(0xFFFBBF24).copy(alpha = 0.80f), modifier = Modifier.size(16.dp)
+            )
+            Spacer(Modifier.width(8.dp))
+            Text(
+                if (canModerate)
+                    "Retention is not the same on all of this channel’s streams. Save it again to apply one value to all of them."
+                else
+                    "Retention is not the same on all of this channel’s streams.",
+                color = Color(0xFFFBBF24).copy(alpha = 0.80f), fontSize = 12.sp, lineHeight = 17.sp
+            )
+        }
+    }
+
     Spacer(Modifier.height(14.dp))
     SectionLabel("Storage Provider")
     val nodes = info?.nodes ?: emptyList()

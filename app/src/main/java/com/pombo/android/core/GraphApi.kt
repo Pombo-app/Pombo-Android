@@ -204,6 +204,30 @@ object GraphApi {
         return meta.optString("pk").ifEmpty { null }
     }
 
+    /**
+     * A stream's retention in days, from its on-chain metadata (web:
+     * streamRetention.js readStreamRetention). Lives in the OUTER metadata
+     * object, beside `description`, not in the Pombo payload inside it.
+     *
+     * Null when the stream carries no retention and when the lookup fails:
+     * an unknown value must leave the caller on its fallbacks instead of
+     * passing for a real one.
+     */
+    suspend fun streamRetention(streamId: String): Int? {
+        if (streamId.isEmpty()) return null
+        val gql = """
+            query GetStreamRetention {
+                stream(id: "$streamId") { id metadata }
+            }
+        """.trimIndent()
+        val stream = query("stream_retention:$streamId", gql)?.optJSONObject("stream") ?: return null
+        return try {
+            JSONObject(stream.optString("metadata")).optInt("storageDays").takeIf { it > 0 }
+        } catch (e: Exception) {
+            null
+        }
+    }
+
     /** Drops cached queries so a permission change is visible immediately. */
     fun clearCache() = cache.clear()
 
