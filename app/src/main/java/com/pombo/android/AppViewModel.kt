@@ -252,10 +252,25 @@ class AppViewModel(app: Application) : AndroidViewModel(app), PomboBridge.Listen
         }
     }
 
-    /** Owner-only channel rename/description — one on-chain transaction. */
+    /**
+     * Owner-only channel rename/description. Only a visible channel writes the
+     * stream metadata, so the confirmation and its gas wording are asked for
+     * on the same condition the manager writes on — a hidden channel saves
+     * locally and must not be held behind a prompt it can only fail.
+     */
     fun updateChannelMetadata(name: String?, description: String?) = viewModelScope.launch {
-        chainAction("Update channel", "Saves the channel name and description on-chain (1 transaction).") {
-        runWithToast("Saving on-chain…", "Channel updated", "Failed to update channel") { manager.updateChannelMetadata(name, description) }
+        val onChain = manager.current.value?.let { manager.hasPublicMetadata(it) } ?: false
+        val save: suspend () -> Unit = {
+            runWithToast(
+                if (onChain) "Saving on-chain…" else "Saving…",
+                "Channel updated",
+                "Failed to update channel"
+            ) { manager.updateChannelMetadata(name, description) }
+        }
+        if (onChain) {
+            chainAction("Update channel", "Saves the channel name and description on-chain (1 transaction).", save)
+        } else {
+            save()
         }
     }
 
