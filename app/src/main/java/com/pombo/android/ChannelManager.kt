@@ -7,6 +7,7 @@ import com.pombo.android.core.PomboCrypto
 import com.pombo.android.core.Protocol
 import com.pombo.android.core.StreamConstants
 import com.pombo.android.core.channels.PresenceTracker
+import com.pombo.android.core.channels.optStringOrNull
 import com.pombo.android.data.Channel
 import com.pombo.android.data.ChannelStore
 import kotlinx.coroutines.CoroutineScope
@@ -7909,13 +7910,6 @@ class ChannelManager(
         if (users.isEmpty()) perMsg.remove(emoji) else perMsg[emoji] = users
         if (perMsg.isEmpty()) map.remove(messageId) else map[messageId] = perMsg
         _reactions.value = map
-    }
-
-    /** Android optString returns the string "null" for JSON null — guard against that. */
-    private fun JSONObject.optStringOrNull(key: String): String? {
-        if (isNull(key)) return null
-        val v = optString(key, "")
-        return v.ifEmpty { null }
     }
 
     /**
