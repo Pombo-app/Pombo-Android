@@ -1,6 +1,7 @@
 package com.pombo.android.core
 
 import java.io.File
+import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
@@ -55,6 +56,29 @@ class BridgeStorageRetentionTest {
             "setStorageDayCount is no longer retried inside the bridge, and the " +
                 "native retry cannot reach it through the catch",
             Regex("for\\s*\\([\\s\\S]{0,120}setStorageDayCount").containsMatchIn(fn)
+        )
+    }
+
+    @Test
+    fun `a failed storage lookup is distinguishable from an empty one`() {
+        val fn = body("getStreamStorageInfo")
+        assertTrue(
+            "a lookup that threw is answered with the same empty shape a stream " +
+                "with no storage returns, and nothing can tell them apart",
+            Regex("ok:\\s*false").containsMatchIn(fn)
+        )
+        assertTrue(
+            "the success path no longer says ok: true",
+            Regex("ok:\\s*true").containsMatchIn(fn)
+        )
+    }
+
+    @Test
+    fun `there is one storage info handler, not two`() {
+        assertEquals(
+            "the duplicate storage info handler is back",
+            0,
+            Regex("async getStorageInfo\\(").findAll(asset).count()
         )
     }
 

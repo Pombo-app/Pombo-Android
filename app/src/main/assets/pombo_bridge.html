@@ -1023,12 +1023,17 @@ const api = {
                 } catch (e) { /* TTL not set on this node */ }
             }
             return {
+                ok: true,
                 enabled: nodes.length > 0,
                 nodes: nodes.map(function (n) { return String(n); }),
                 storageDays: storageDays
             };
         } catch (e) {
-            return { enabled: false, nodes: [], storageDays: null };
+            // `ok: false` is not "no nodes": a caller that would skip a write,
+            // or call a node missing, has to see nothing known instead of an
+            // empty answer it cannot tell apart from the real thing.
+            console.warn('storage info lookup failed for ' + a.streamId + ': ' + (e && e.message || e));
+            return { ok: false, enabled: false, nodes: [], storageDays: null };
         }
     },
 
@@ -1409,7 +1414,7 @@ const api = {
         }
         if (messageStream) {
             try {
-                const info = await api.getStorageInfo({ streamId: messageStreamId });
+                const info = await api.getStreamStorageInfo({ streamId: messageStreamId });
                 report.storage.enabled = info.enabled;
                 report.storage.storageDays = info.storageDays;
                 report.storage.nodes = info.nodes;
@@ -1496,25 +1501,6 @@ const api = {
 
     // ===== storage node management (web getStreamStorageInfo & friends) =====
 
-    async getStorageInfo(a) {
-        if (!client) throw new Error('client not connected');
-        const stream = await client.getStream(a.streamId);
-        const res = stream.getStorageNodes();
-        let nodes = [];
-        if (Array.isArray(res)) nodes = res;
-        else if (res && typeof res.then === 'function') nodes = await res;
-        else if (res && typeof res[Symbol.asyncIterator] === 'function') { for await (const n of res) nodes.push(n); }
-        else if (res && typeof res[Symbol.iterator] === 'function') nodes = [...res];
-        nodes = nodes.map(function (n) { return String(n); });
-        let storageDays = null;
-        if (nodes.length) {
-            try {
-                const dcount = await stream.getStorageDayCount();
-                if (dcount != null) storageDays = typeof dcount === 'bigint' ? Number(dcount) : dcount;
-            } catch (e) { /* TTL not set on this node */ }
-        }
-        return { enabled: nodes.length > 0, nodes: nodes, storageDays: storageDays };
-    },
 
     async removeStorageNode(a) {
         if (!client) throw new Error('client not connected');

@@ -2000,9 +2000,17 @@ class ChannelManager(
     /** Null when the lookup failed, which is not the same as "no nodes". */
     private suspend fun streamStorage(streamId: String): Pair<List<String>, Int?>? = try {
         val res = bridge.call("getStreamStorageInfo", JSONObject().put("streamId", streamId), 30_000)
-        val arr = res.optJSONArray("nodes") ?: JSONArray()
-        val nodes = (0 until arr.length()).map { arr.optString(it) }.filter { it.isNotEmpty() }
-        nodes to (if (res.isNull("storageDays")) null else res.optInt("storageDays").takeIf { it > 0 })
+        // The bridge answers a failed lookup with the same empty shape a
+        // stream with no storage returns, so `ok` is the only thing that
+        // tells them apart.
+        if (!res.optBoolean("ok", false)) {
+            Log.w(TAG, "storage lookup did not answer for " + streamId.takeLast(20))
+            null
+        } else {
+            val arr = res.optJSONArray("nodes") ?: JSONArray()
+            val nodes = (0 until arr.length()).map { arr.optString(it) }.filter { it.isNotEmpty() }
+            nodes to (if (res.isNull("storageDays")) null else res.optInt("storageDays").takeIf { it > 0 })
+        }
     } catch (e: Exception) {
         Log.w(TAG, "storage lookup failed for " + streamId.takeLast(20) + ": " + e.message)
         null
