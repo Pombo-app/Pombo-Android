@@ -1963,15 +1963,6 @@ class ChannelManager(
         )
     }
 
-    /** The channel's stored streams: -1, -3, and -4 on gated. Never -2. */
-    private fun storedStreams(channel: Channel): List<String> = buildList {
-        add(channel.messageStreamId)
-        if (channel.adminStreamId.isNotEmpty()) add(channel.adminStreamId)
-        if (channel.type == "gated") {
-            add(channel.keysStreamId.ifEmpty { StreamConstants.deriveKeysId(channel.messageStreamId) })
-        }
-    }
-
     /**
      * Assigns a storage node to every stored stream. Sequential, not parallel: two
      * on-chain writes from one account race on the nonce and the second gets
@@ -8029,6 +8020,19 @@ class ChannelManager(
          * mismatch: they are streams the channel does not have, or lookups
          * that failed, and an unknown value contradicts nothing.
          */
+        /**
+         * The channel's stored streams: -1, -3, and -4 on gated. Never the
+         * ephemeral -2, which has no storage by design, and never the DM
+         * inbox, which is an account-level stream.
+         */
+        fun storedStreams(channel: Channel): List<String> = buildList {
+            add(channel.messageStreamId)
+            if (channel.adminStreamId.isNotEmpty()) add(channel.adminStreamId)
+            if (channel.type == "gated") {
+                add(channel.keysStreamId.ifEmpty { StreamConstants.deriveKeysId(channel.messageStreamId) })
+            }
+        }
+
         fun retentionInSync(vararg values: Int?): Boolean {
             val known = values.filterNotNull().filter { it > 0 }
             return known.all { it == known.firstOrNull() }
