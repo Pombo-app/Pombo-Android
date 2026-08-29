@@ -6,6 +6,7 @@ import com.pombo.android.core.InviteToken
 import com.pombo.android.core.PomboCrypto
 import com.pombo.android.core.Protocol
 import com.pombo.android.core.StreamConstants
+import com.pombo.android.core.channels.PresenceTracker
 import com.pombo.android.data.Channel
 import com.pombo.android.data.ChannelStore
 import kotlinx.coroutines.CoroutineScope
@@ -107,10 +108,10 @@ data class UiMessage(
 class ChannelManager(
     private val bridge: PomboBridge,
     private val store: ChannelStore,
-    private val scope: CoroutineScope,
+    internal val scope: CoroutineScope,
     private val myAddress: () -> String?,
     private val myPrivateKey: () -> String?,
-    private val myUsername: () -> String?,
+    internal val myUsername: () -> String?,
     /** Persistent caches so cold starts paint before the network answers. */
     private val imageStore: com.pombo.android.core.ChannelImageStore,
     private val previewStore: com.pombo.android.core.LatestMessageStore,
@@ -136,6 +137,12 @@ class ChannelManager(
     /** Persist a new block; the caller owns the settings store. */
     private val persistBlockedPeer: (String) -> Unit = {}
 ) {
+
+    /**
+     * Presence and typing (core/channels). Declared first: the public
+     * StateFlows below read its state at construction.
+     */
+    private val presence = PresenceTracker(this)
 
     /**
      * Epoch keys for gated channels (-4, N-A/N-C). Transport is injected:
@@ -571,11 +578,11 @@ class ChannelManager(
         _channelOrder.value = order
     }
 
-    private val _current = MutableStateFlow<Channel?>(null)
+    internal val _current = MutableStateFlow<Channel?>(null)
     val current: StateFlow<Channel?> = _current.asStateFlow()
 
     /** True while the open channel is a non-persisted preview (web: preview mode). */
-    private val _isPreview = MutableStateFlow(false)
+    internal val _isPreview = MutableStateFlow(false)
     val isPreview: StateFlow<Boolean> = _isPreview.asStateFlow()
 
     /**
@@ -616,16 +623,10 @@ class ChannelManager(
     private val _reactions = MutableStateFlow<Map<String, Map<String, Set<String>>>>(emptyMap())
     val reactions: StateFlow<Map<String, Map<String, Set<String>>>> = _reactions.asStateFlow()
 
-    private val _onlineCount = MutableStateFlow(0)
+    private val _onlineCount get() = presence._onlineCount
     val onlineCount: StateFlow<Int> = _onlineCount.asStateFlow()
 
-    /**
-     * False from the moment a channel starts opening until its subscriptions
-     * are live. The header shows "Connecting…" in the online-count slot while
-     * it is false, so that slot is never empty and the title above it does not
-     * jump once presence lands.
-     */
-    private val _presenceReady = MutableStateFlow(false)
+    private val _presenceReady get() = presence._presenceReady
     val presenceReady: StateFlow<Boolean> = _presenceReady.asStateFlow()
 
     // Moderation (ADMIN_STATE on -3/P0). Latest-wins by rev; owner-authored only.
@@ -798,67 +799,25 @@ class ChannelManager(
      */
     data class TypingPeer(val address: String, val nickname: String?)
 
-    /**
-     * Everyone typing right now, oldest signal first. A busy channel can have
-     * several people typing at once, and a single slot meant the last signal
-     * erased whoever was already there.
-     */
-    private val _typingFrom = MutableStateFlow<List<TypingPeer>>(emptyList())
+    private val _typingFrom get() = presence._typingFrom
     val typingFrom: StateFlow<List<TypingPeer>> = _typingFrom.asStateFlow()
 
-    /** address -> when their last signal arrived. */
-    private val typingSeen = LinkedHashMap<String, Long>()
-    private val typingNames = HashMap<String, String?>()
 
-    /** Shared by the DM and channel paths — both also warm the ENS name. */
-    private fun markTyping(address: String, nickname: String?) {
-        ensureEns(address)
-        synchronized(typingSeen) {
-            typingSeen[address] = System.currentTimeMillis()
-            typingNames[address] = nickname
-            publishTyping()
-        }
-        // One sweeper for everyone: each pass drops whoever went quiet and
-        // re-arms only while someone is still typing.
-        typingClearJob?.cancel()
-        typingClearJob = scope.launch {
-            while (true) {
-                delay(1000)
-                val remaining = synchronized(typingSeen) {
-                    val cutoff = System.currentTimeMillis() - TYPING_TTL_MS
-                    typingSeen.entries.removeAll { it.value < cutoff }
-                    publishTyping()
-                    typingSeen.size
-                }
-                if (remaining == 0) break
-            }
-        }
-    }
+    private fun markTyping(address: String, nickname: String?) =
+        presence.markTyping(address, nickname)
 
-    /** Caller holds the [typingSeen] lock. */
-    private fun publishTyping() {
-        _typingFrom.value = typingSeen.keys.map { TypingPeer(it, typingNames[it]) }
-    }
+    private fun clearTyping() = presence.clearTyping()
 
-    private fun clearTyping() {
-        typingClearJob?.cancel()
-        synchronized(typingSeen) {
-            typingSeen.clear()
-            typingNames.clear()
-        }
-        _typingFrom.value = emptyList()
-    }
-
-    // presence: senderId -> lastActive
-    private val online = HashMap<String, Long>()
-    private val onlineNames = HashMap<String, String?>()
+    private val online get() = presence.online
+    private val onlineNames get() = presence.onlineNames
 
     /** Who is online, for the web's online-users list (not just the count). */
     data class OnlineUser(val address: String, val nickname: String?)
-    private val _onlineUsers = MutableStateFlow<List<OnlineUser>>(emptyList())
+    private val _onlineUsers get() = presence._onlineUsers
     val onlineUsers: StateFlow<List<OnlineUser>> = _onlineUsers.asStateFlow()
-    private var presenceJob: Job? = null
-    private var typingClearJob: Job? = null
+    private var presenceJob: Job?
+        get() = presence.presenceJob
+        set(value) { presence.presenceJob = value }
     private var adminPollJob: Job? = null
 
     /** My own DM ephemeral inbox (`me/Pombo-DM-2`), where a peer's encrypted
@@ -6041,27 +6000,7 @@ class ChannelManager(
         }
     }
 
-    // Web InputUI.js sends the typing signal at most every 2s while keys keep
-    // coming. Without this floor every keystroke becomes a full Streamr publish
-    // (plus an ECDH seal on DMs) queued on the single WebView JS thread, which
-    // is enough to make the whole app feel frozen while composing a message.
-    @Volatile private var lastTypingSent = 0L
-
-    fun sendTyping() {
-        val channel = _current.value ?: return
-        val now = System.currentTimeMillis()
-        if (now - lastTypingSent < 2_000) return
-        lastTypingSent = now
-        scope.launch {
-            try {
-                val typing = JSONObject()
-                    .put("type", "typing")
-                    .put("nickname", myUsername() ?: JSONObject.NULL)
-                    .put("timestamp", System.currentTimeMillis())
-                publishForChannel(channel, channel.ephemeralStreamId, StreamConstants.EPH_CONTROL, typing)
-            } catch (e: Exception) { }
-        }
-    }
+    fun sendTyping() = presence.sendTyping()
 
     private suspend fun publishContent(
         streamId: String,
@@ -6107,7 +6046,7 @@ class ChannelManager(
      *   password -> AES with the channel password
      *   public   -> plain
      */
-    private suspend fun publishForChannel(
+    internal suspend fun publishForChannel(
         channel: Channel,
         streamId: String,
         partition: Int,
@@ -6354,33 +6293,7 @@ class ChannelManager(
         return signer
     }
 
-    private fun startPresence(channel: Channel) {
-        presenceJob?.cancel()
-        presenceJob = scope.launch {
-            while (isActive) {
-                try {
-                    val presence = JSONObject()
-                        .put("type", "presence")
-                        .put("nickname", myUsername() ?: JSONObject.NULL)
-                        .put("lastActive", System.currentTimeMillis())
-                    publishForChannel(channel, channel.ephemeralStreamId, StreamConstants.EPH_CONTROL, presence)
-                } catch (e: Exception) { }
-                evictStale()
-                // A preview heartbeats at the web's slower cadence
-                // (config.previewPresenceIntervalMs = 20s) — the browsing user
-                // is not in the conversation, 4× the traffic bought nothing.
-                delay(if (_isPreview.value) PREVIEW_PRESENCE_INTERVAL_MS else PRESENCE_INTERVAL_MS)
-            }
-        }
-    }
-
-    private fun evictStale() {
-        val now = System.currentTimeMillis()
-        synchronized(online) {
-            online.entries.removeAll { now - it.value > ONLINE_TIMEOUT_MS }
-            _onlineCount.value = online.size
-        }
-    }
+    private fun startPresence(channel: Channel) = presence.startPresence(channel)
 
     /** Called by the bridge listener (background thread). */
     fun onIncoming(streamId: String, partition: Int, contentRaw: String, metaRaw: String) {
