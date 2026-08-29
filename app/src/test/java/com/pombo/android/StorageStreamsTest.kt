@@ -184,10 +184,14 @@ class StorageStreamsTest {
         assertFalse(ChannelManager.writesConverged(after) { ChannelManager.needsRetentionWrite(it, 180) })
     }
 
-    /** Silence is not success: an unread stream cannot confirm anything. */
+    /**
+     * Silence is not success. Even a predicate that claims nothing is needed
+     * cannot make an unread stream count as confirmed: the read-back exists
+     * to catch exactly the case where we cannot see what happened.
+     */
     @Test
     fun `not converged when a stream stopped answering`() {
-        val after = listOf(stream(storageDays = 180), stream(read = false))
-        assertFalse(ChannelManager.writesConverged(after) { ChannelManager.needsRetentionWrite(it, 180) })
+        val after = listOf(stream(storageDays = 180), stream(read = false, storageDays = 180))
+        assertFalse(ChannelManager.writesConverged(after) { false })
     }
 }
