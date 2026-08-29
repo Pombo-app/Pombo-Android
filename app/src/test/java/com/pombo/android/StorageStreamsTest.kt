@@ -99,4 +99,74 @@ class StorageStreamsTest {
             hasKeys = true, allStreamsRead = false
         ).partial)
     }
+
+    // ===== which streams a write actually has to touch =====
+    //
+    // Every storage operation is one transaction per stream. A stream that
+    // is already correct must cost nothing, and a stream that could not be
+    // read must be written to anyway: skipping on an unknown leaves it
+    // diverged with the UI reporting success.
+
+    private val NODE = "0xae340e799e8151f6a4999d245e466197aa217667"
+
+    private fun stream(
+        read: Boolean = true,
+        nodes: List<String> = emptyList(),
+        storageDays: Int? = null
+    ) = ChannelManager.StoredStream("s-1", "message", read, nodes, storageDays)
+
+    @Test
+    fun `a stream already at the target retention needs no write`() {
+        assertFalse(ChannelManager.needsRetentionWrite(stream(storageDays = 180), 180))
+    }
+
+    @Test
+    fun `a stream at a different retention needs a write`() {
+        assertTrue(ChannelManager.needsRetentionWrite(stream(storageDays = 3), 180))
+    }
+
+    @Test
+    fun `a retention that could not be read is written anyway`() {
+        assertTrue(ChannelManager.needsRetentionWrite(stream(read = false, storageDays = 180), 180))
+    }
+
+    @Test
+    fun `a stream already carrying the node needs no add`() {
+        assertFalse(ChannelManager.needsNodeAdd(stream(nodes = listOf(NODE)), NODE))
+    }
+
+    @Test
+    fun `a stream missing the node needs an add`() {
+        assertTrue(ChannelManager.needsNodeAdd(stream(nodes = emptyList()), NODE))
+    }
+
+    @Test
+    fun `node matching ignores address case`() {
+        assertFalse(ChannelManager.needsNodeAdd(stream(nodes = listOf(NODE.uppercase())), NODE))
+    }
+
+    @Test
+    fun `a stream that could not be read is added to anyway`() {
+        assertTrue(ChannelManager.needsNodeAdd(stream(read = false, nodes = listOf(NODE)), NODE))
+    }
+
+    @Test
+    fun `a stream without the node needs no removal`() {
+        assertFalse(ChannelManager.needsNodeRemove(stream(nodes = emptyList()), NODE))
+    }
+
+    @Test
+    fun `a stream carrying the node needs removal`() {
+        assertTrue(ChannelManager.needsNodeRemove(stream(nodes = listOf(NODE)), NODE))
+    }
+
+    /**
+     * An unread stream has an empty node list, which looks exactly like one
+     * that never carried it. Skipping there would leave the node assigned
+     * with the UI reporting it removed.
+     */
+    @Test
+    fun `a stream that could not be read is removed from anyway`() {
+        assertTrue(ChannelManager.needsNodeRemove(stream(read = false), NODE))
+    }
 }

@@ -62,12 +62,29 @@ class RetentionWiringTest {
         )
     }
 
-    /** Retention has to reach every stored stream, the -4 included. */
+    /**
+     * Retention has to reach every stored stream that needs it, the -4
+     * included. Which ones need it is decided by needsRetentionWrite, covered
+     * behaviourally in StorageStreamsTest; what cannot be reached from a unit
+     * test is that this path still goes through the shared apply.
+     */
     @Test
-    fun `setStorageDays writes to every stored stream`() {
+    fun `setStorageDays goes through the shared stored-stream apply`() {
         assertTrue(
-            "setStorageDays stopped iterating the channel's stored streams",
-            body("suspend fun setStorageDays(").contains("storedStreams(channel)")
+            "setStorageDays stopped writing through applyToStoredStreams",
+            body("suspend fun setStorageDays(").contains("applyToStoredStreams(")
+        )
+    }
+
+    @Test
+    fun `the storage node writes go through the shared apply too`() {
+        assertTrue(
+            "addStorageNode stopped writing through applyToStoredStreams",
+            body("suspend fun addStorageNode(").contains("applyToStoredStreams(")
+        )
+        assertTrue(
+            "removeStorageNode stopped writing through applyToStoredStreams",
+            body("suspend fun removeStorageNode(").contains("applyToStoredStreams(")
         )
     }
 }

@@ -1920,6 +1920,83 @@ class ChannelManager(
         val hasKeysStream: Boolean = false
     )
 
+    /**
+     * What the chain currently says about one stored stream.
+     *
+     * `read` is false when the lookup failed. Every decision that would SKIP
+     * a write has to treat that as nothing known and write anyway: a wrong
+     * skip leaves the stream diverged with the UI reporting success, while a
+     * redundant write only costs gas.
+     */
+    data class StoredStream(
+        val id: String,
+        val kind: String,
+        val read: Boolean,
+        val nodes: List<String>,
+        val storageDays: Int?
+    ) {
+        fun carries(address: String) = nodes.any { it.equals(address, ignoreCase = true) }
+    }
+
+    private suspend fun readStoredStreams(channel: Channel): List<StoredStream> {
+        val kinds = listOf("message", "admin", "keys")
+        return storedStreams(channel).mapIndexed { i, id ->
+            val res = streamStorage(id)
+            StoredStream(id, kinds.getOrElse(i) { "extra" }, res != null,
+                res?.first ?: emptyList(), res?.second)
+        }
+    }
+
+    /**
+     * Apply an operation to only the stored streams that still need it, then
+     * read back to confirm.
+     *
+     * Every storage operation is one on-chain transaction per stream, so a
+     * channel already half-configured should cost what is missing, not the
+     * whole set again, and the count the user approves has to be the real one.
+     *
+     * @return per-stream outcome ("unchanged" | "applied" | "failed"), how
+     *         many transactions were sent, and whether the read-back agrees
+     *         (null when nothing was sent).
+     */
+    private suspend fun applyToStoredStreams(
+        channel: Channel,
+        needs: (StoredStream) -> Boolean,
+        apply: suspend (String) -> Unit
+    ): StorageWriteResult {
+        val before = readStoredStreams(channel)
+        val results = LinkedHashMap<String, String>()
+        var sent = 0
+
+        // Sequential to avoid nonce conflicts (REPLACEMENT_UNDERPRICED).
+        for (stream in before) {
+            if (!needs(stream)) { results[stream.kind] = "unchanged"; continue }
+            sent += 1
+            results[stream.kind] = try {
+                apply(stream.id); "applied"
+            } catch (e: Exception) {
+                Log.w(TAG, "storage write failed on ${stream.kind} ${stream.id.takeLast(20)}: ${e.message}")
+                "failed"
+            }
+        }
+
+        if (sent == 0) return StorageWriteResult(results, 0, null)
+
+        val after = readStoredStreams(channel)
+        val verified = after.all { it.read && !needs(it) }
+        if (!verified) Log.w(TAG, "storage write did not converge; streams still out of sync")
+        return StorageWriteResult(results, sent, verified)
+    }
+
+    data class StorageWriteResult(
+        val results: Map<String, String>,
+        val sent: Int,
+        val verified: Boolean?
+    ) {
+        val failed: Boolean get() = results.values.any { it == "failed" }
+        val ok: Boolean get() = !failed && verified != false
+    }
+
     /** Null when the lookup failed, which is not the same as "no nodes". */
     private suspend fun streamStorage(streamId: String): Pair<List<String>, Int?>? = try {
         val res = bridge.call("getStreamStorageInfo", JSONObject().put("streamId", streamId), 30_000)
@@ -1991,7 +2068,7 @@ class ChannelManager(
      * on-chain writes from one account race on the nonce and the second gets
      * REPLACEMENT_UNDERPRICED.
      */
-    suspend fun addStorageNode(address: String, storageDays: Int? = null) {
+    suspend fun addStorageNode(address: String, storageDays: Int? = null): StorageWriteResult {
         val channel = _current.value ?: throw IllegalStateException("No channel open")
         if (!amOwner(channel)) throw IllegalStateException("Only the channel admin can change storage")
         val addr = address.trim()
@@ -2002,59 +2079,70 @@ class ChannelManager(
                 storageDays?.let { put("storageDays", it) }
             }
         }
-        storedStreams(channel).forEach { bridge.call("addToStorageNode", args(it), 180_000) }
+        val out = applyToStoredStreams(
+            channel,
+            needs = { needsNodeAdd(it, addr) },
+            apply = { bridge.call("addToStorageNode", args(it), 180_000) }
+        )
         markStorage(channel, enabled = true)
+        return out
     }
 
-    suspend fun removeStorageNode(address: String) {
+    suspend fun removeStorageNode(address: String): StorageWriteResult {
         val channel = _current.value ?: throw IllegalStateException("No channel open")
         if (!amOwner(channel)) throw IllegalStateException("Only the channel admin can change storage")
         val addr = address.trim()
-        storedStreams(channel).forEach {
-            bridge.call("removeFromStorageNode",
-                JSONObject().put("streamId", it).put("nodeAddress", addr), 180_000)
-        }
+        val out = applyToStoredStreams(
+            channel,
+            needs = { needsNodeRemove(it, addr) },
+            apply = {
+                bridge.call("removeFromStorageNode",
+                    JSONObject().put("streamId", it).put("nodeAddress", addr), 180_000)
+            }
+        )
         markStorage(channel, enabled = channelStorageInfo().enabled)
+        return out
     }
 
     /**
-     * Retention applies to every stored stream, same sequencing rationale as
-     * above. Leaving the -4 out lets a gated channel's KEY_ANNOUNCEs age out
-     * on a schedule nobody chose.
+     * Set the retention of every stored stream that is not already at [days].
+     *
+     * Only the streams that differ are written, so re-saving the same figure
+     * to heal a divergence costs one transaction per diverged stream instead
+     * of one per stream.
      */
-    suspend fun setStorageDays(days: Int) {
+    suspend fun setStorageDays(days: Int): StorageWriteResult {
         val channel = _current.value ?: throw IllegalStateException("No channel open")
         if (!amOwner(channel)) throw IllegalStateException("Only the channel admin can change storage")
         require(days >= 1) { "Retention must be a positive number of days" }
-        val applied = mutableSetOf<String>()
-        try {
-            storedStreams(channel).forEach {
+
+        val out = applyToStoredStreams(
+            channel,
+            needs = { needsRetentionWrite(it, days) },
+            apply = {
                 bridge.call("setStorageDays",
                     JSONObject().put("streamId", it).put("storageDays", days), 180_000)
-                applied.add(it)
             }
-        } finally {
-            // Recorded even when a later stream throws: the ones that landed
-            // did land, and a cache still claiming the old value for them is
-            // exactly the lie this whole path exists to stop. The Graph lags
-            // these transactions by enough to answer a reopen with the old
-            // retention, so the local copy has to carry them.
-            if (applied.isNotEmpty()) {
-                val keysId = channel.keysStreamId.ifEmpty {
-                    StreamConstants.deriveKeysId(channel.messageStreamId)
-                }
-                val updated = channel.copy(
-                    storageDays = if (channel.messageStreamId in applied) days else channel.storageDays,
-                    adminStorageDays = if (channel.adminStreamId in applied) days else channel.adminStorageDays,
-                    keysStorageDays = if (keysId in applied) days else channel.keysStorageDays
-                )
-                _channels.value = _channels.value.map {
-                    if (it.messageStreamId == updated.messageStreamId) updated else it
-                }
-                store.save(_channels.value)
-                if (_current.value?.messageStreamId == updated.messageStreamId) _current.value = updated
+        )
+
+        // Keep the local copies in sync, per stream: each is a separate
+        // transaction and the Graph lags them by enough to answer a reopen
+        // with the old retention. A stream already at `days` counts as in
+        // sync too, which is the whole point of not writing to it.
+        fun settled(kind: String) = out.results[kind] == "applied" || out.results[kind] == "unchanged"
+        val updated = channel.copy(
+            storageDays = if (settled("message")) days else channel.storageDays,
+            adminStorageDays = if (settled("admin")) days else channel.adminStorageDays,
+            keysStorageDays = if (settled("keys")) days else channel.keysStorageDays
+        )
+        if (updated != channel) {
+            _channels.value = _channels.value.map {
+                if (it.messageStreamId == updated.messageStreamId) updated else it
             }
+            store.save(_channels.value)
+            if (_current.value?.messageStreamId == updated.messageStreamId) _current.value = updated
         }
+        return out
     }
 
     /**
@@ -8048,6 +8136,24 @@ class ChannelManager(
          * ephemeral -2, which has no storage by design, and never the DM
          * inbox, which is an account-level stream.
          */
+        /**
+         * Does this stream still need the retention set to [days]?
+         *
+         * A stream that could not be read counts as needing it: skipping on
+         * an unknown leaves it diverged with the UI reporting success, while
+         * a redundant write only costs gas.
+         */
+        fun needsRetentionWrite(stream: StoredStream, days: Int): Boolean =
+            !stream.read || stream.storageDays != days
+
+        /** Does this stream still need [address] assigned to it? */
+        fun needsNodeAdd(stream: StoredStream, address: String): Boolean =
+            !stream.read || !stream.carries(address)
+
+        /** Does this stream still carry [address], so it needs removing? */
+        fun needsNodeRemove(stream: StoredStream, address: String): Boolean =
+            !stream.read || stream.carries(address)
+
         fun storedStreams(channel: Channel): List<String> = buildList {
             add(channel.messageStreamId)
             if (channel.adminStreamId.isNotEmpty()) add(channel.adminStreamId)

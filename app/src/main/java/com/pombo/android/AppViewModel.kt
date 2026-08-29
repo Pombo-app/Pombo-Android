@@ -839,9 +839,20 @@ class AppViewModel(app: Application) : AndroidViewModel(app), PomboBridge.Listen
 
     val pomboStorageNode: String get() = manager.pomboStorageNode
 
-    /** Owner-only storage ops — each writes to both -1 and -3 and costs gas. */
+    /**
+     * Owner-only storage ops. Each writes to the channel's stored streams and
+     * costs one transaction per stream that actually needs it, so the prompt
+     * states the ceiling rather than a figure that would often be too high.
+     */
+    private val storedStreamCount: Int
+        get() = if (manager.current.value?.type == "gated") 3 else 2
+
     fun addStorageNode(address: String, onDone: () -> Unit = {}) = viewModelScope.launch {
-        chainAction("Add storage node", "Assigns a storage node to this channel's streams (2 transactions).") {
+        chainAction(
+            "Add storage node",
+            "Assigns a storage node to this channel's streams (up to $storedStreamCount transactions; " +
+                "only the streams missing it are charged)."
+        ) {
             runWithToast("Adding storage node…", "Storage node added", "Failed to add storage node") {
                 manager.addStorageNode(address)
             }
@@ -852,7 +863,8 @@ class AppViewModel(app: Application) : AndroidViewModel(app), PomboBridge.Listen
     fun removeStorageNode(address: String, onDone: () -> Unit = {}) = viewModelScope.launch {
         chainAction(
             "Remove storage node",
-            "Stops retaining this channel's history on that node (2 transactions)."
+            "Stops retaining this channel's history on that node (up to $storedStreamCount transactions; " +
+                "only the streams carrying it are charged)."
         ) {
             runWithToast("Removing storage node…", "Storage node removed", "Failed to remove storage node") {
                 manager.removeStorageNode(address)
@@ -862,7 +874,11 @@ class AppViewModel(app: Application) : AndroidViewModel(app), PomboBridge.Listen
     }
 
     fun setStorageDays(days: Int, onDone: () -> Unit = {}) = viewModelScope.launch {
-        chainAction("Change retention", "Sets history retention to $days days (2 transactions).") {
+        chainAction(
+            "Change retention",
+            "Sets history retention to $days days (up to $storedStreamCount transactions; " +
+                "only the streams not already at $days are charged)."
+        ) {
             runWithToast("Updating retention…", "Retention updated to $days days", "Failed to update retention") {
                 manager.setStorageDays(days)
             }
