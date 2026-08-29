@@ -1983,7 +1983,7 @@ class ChannelManager(
         if (sent == 0) return StorageWriteResult(results, 0, null)
 
         val after = readStoredStreams(channel)
-        val verified = after.all { it.read && !needs(it) }
+        val verified = writesConverged(after, needs)
         if (!verified) Log.w(TAG, "storage write did not converge; streams still out of sync")
         return StorageWriteResult(results, sent, verified)
     }
@@ -8143,6 +8143,15 @@ class ChannelManager(
          * an unknown leaves it diverged with the UI reporting success, while
          * a redundant write only costs gas.
          */
+        /**
+         * Did the writes land? Every stream has to answer AND no longer need
+         * the write. A stream that stopped answering is not converged either:
+         * claiming success on silence is the failure this read-back exists
+         * to catch.
+         */
+        fun writesConverged(after: List<StoredStream>, needs: (StoredStream) -> Boolean): Boolean =
+            after.all { it.read && !needs(it) }
+
         fun needsRetentionWrite(stream: StoredStream, days: Int): Boolean =
             !stream.read || stream.storageDays != days
 

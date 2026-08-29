@@ -169,4 +169,25 @@ class StorageStreamsTest {
     fun `a stream that could not be read is removed from anyway`() {
         assertTrue(ChannelManager.needsNodeRemove(stream(read = false), NODE))
     }
+
+    // ===== did the writes land? =====
+
+    @Test
+    fun `converged when every stream answered and needs nothing`() {
+        val after = listOf(stream(storageDays = 180), stream(storageDays = 180))
+        assertTrue(ChannelManager.writesConverged(after) { ChannelManager.needsRetentionWrite(it, 180) })
+    }
+
+    @Test
+    fun `not converged when a stream still needs the write`() {
+        val after = listOf(stream(storageDays = 180), stream(storageDays = 3))
+        assertFalse(ChannelManager.writesConverged(after) { ChannelManager.needsRetentionWrite(it, 180) })
+    }
+
+    /** Silence is not success: an unread stream cannot confirm anything. */
+    @Test
+    fun `not converged when a stream stopped answering`() {
+        val after = listOf(stream(storageDays = 180), stream(read = false))
+        assertFalse(ChannelManager.writesConverged(after) { ChannelManager.needsRetentionWrite(it, 180) })
+    }
 }
