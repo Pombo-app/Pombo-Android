@@ -65,11 +65,11 @@ class BridgeStorageRetentionTest {
         assertTrue(
             "a lookup that threw is answered with the same empty shape a stream " +
                 "with no storage returns, and nothing can tell them apart",
-            Regex("ok:\\s*false").containsMatchIn(fn)
+            Regex("return\\s*\\{\\s*ok:\\s*false").containsMatchIn(fn)
         )
         assertTrue(
             "the success path no longer says ok: true",
-            Regex("ok:\\s*true").containsMatchIn(fn)
+            Regex("return\\s*\\{\\s*ok:\\s*true").containsMatchIn(fn)
         )
     }
 

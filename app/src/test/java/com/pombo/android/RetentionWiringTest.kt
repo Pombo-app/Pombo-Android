@@ -87,4 +87,17 @@ class RetentionWiringTest {
             body("suspend fun removeStorageNode(").contains("applyToStoredStreams(")
         )
     }
+
+    /**
+     * The bridge answers a failed lookup with the same empty shape a stream
+     * with no storage returns. Ignoring its `ok` flag brings back the bug
+     * where absence read as fact.
+     */
+    @Test
+    fun `the storage lookup checks whether the bridge actually answered`() {
+        assertTrue(
+            "streamStorage stopped checking the bridge ok flag",
+            body("private suspend fun streamStorage(").contains("optBoolean(\"ok\"")
+        )
+    }
 }
