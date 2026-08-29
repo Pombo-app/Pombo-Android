@@ -194,4 +194,31 @@ class StorageStreamsTest {
         val after = listOf(stream(storageDays = 180), stream(read = false, storageDays = 180))
         assertFalse(ChannelManager.writesConverged(after) { false })
     }
+
+    // ===== can the admin press Save? =====
+
+    @Test
+    fun `a new retention can be saved`() {
+        assertTrue(ChannelManager.canSaveRetention(30, 180, true))
+    }
+
+    @Test
+    fun `saving the value already shown is pointless when the streams agree`() {
+        assertFalse(ChannelManager.canSaveRetention(180, 180, true))
+    }
+
+    /**
+     * The panel shows the message stream. When another stream differs, the
+     * warning tells the admin to save the same figure again, so blocking it
+     * would make its own advice unfollowable.
+     */
+    @Test
+    fun `saving the value already shown heals streams that disagree`() {
+        assertTrue(ChannelManager.canSaveRetention(180, 180, false))
+    }
+
+    @Test
+    fun `a retention below one day is never saveable`() {
+        assertFalse(ChannelManager.canSaveRetention(0, 180, false))
+    }
 }

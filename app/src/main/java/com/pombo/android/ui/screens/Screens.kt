@@ -5310,7 +5310,8 @@ private fun ChannelStoragePanel(vm: AppViewModel, channel: Channel, canModerate:
             Text("days", color = Color.White.copy(alpha = 0.50f), fontSize = 14.sp)
             Spacer(Modifier.width(10.dp))
             val days = daysText.toIntOrNull() ?: 0
-            val valid = days >= 1 && days != info?.storageDays
+            val valid = com.pombo.android.ChannelManager.canSaveRetention(
+                days, info?.storageDays, info?.retentionInSync != false)
             Box(
                 Modifier
                     .background(

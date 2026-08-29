@@ -8149,6 +8149,17 @@ class ChannelManager(
          * claiming success on silence is the failure this read-back exists
          * to catch.
          */
+        /**
+         * May the admin save [days]?
+         *
+         * A value equal to the figure on screen is normally a no-op, but it
+         * is exactly what heals a channel whose streams disagree: the panel
+         * shows the message stream, and the other streams can differ from it.
+         * Blocking it there makes the warning's own advice unfollowable.
+         */
+        fun canSaveRetention(days: Int, shown: Int?, retentionInSync: Boolean): Boolean =
+            days >= 1 && (days != shown || !retentionInSync)
+
         fun writesConverged(after: List<StoredStream>, needs: (StoredStream) -> Boolean): Boolean =
             after.all { it.read && !needs(it) }
 
