@@ -221,4 +221,38 @@ class StorageStreamsTest {
     fun `a retention below one day is never saveable`() {
         assertFalse(ChannelManager.canSaveRetention(0, 180, false))
     }
+
+    // ===== what a write achieved =====
+    //
+    // These paths no longer throw on a partial failure, so this verdict is
+    // the only thing that can tell the admin some streams are still out of
+    // sync.
+
+    private fun result(vararg outcomes: Pair<String, String>, sent: Int, verified: Boolean?) =
+        ChannelManager.StorageWriteResult(outcomes.toMap(), sent, verified)
+
+    @Test
+    fun `a write where everything landed is ok`() {
+        assertTrue(result("message" to "applied", "admin" to "applied",
+            sent = 2, verified = true).ok)
+    }
+
+    @Test
+    fun `a write with a failed stream is not ok`() {
+        assertFalse(result("message" to "applied", "admin" to "failed",
+            sent = 2, verified = false).ok)
+    }
+
+    /** Every write claimed success and the streams still disagree. */
+    @Test
+    fun `a write the read-back contradicts is not ok`() {
+        assertFalse(result("message" to "applied", "admin" to "applied",
+            sent = 2, verified = false).ok)
+    }
+
+    @Test
+    fun `a write with nothing to do is ok`() {
+        assertTrue(result("message" to "unchanged", "admin" to "unchanged",
+            sent = 0, verified = null).ok)
+    }
 }

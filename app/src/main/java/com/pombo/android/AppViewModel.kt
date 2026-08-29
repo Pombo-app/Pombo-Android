@@ -847,14 +847,39 @@ class AppViewModel(app: Application) : AndroidViewModel(app), PomboBridge.Listen
     private val storedStreamCount: Int
         get() = if (manager.current.value?.type == "gated") 3 else 2
 
+    /**
+     * Report a storage write by what it actually achieved.
+     *
+     * These paths no longer throw on a partial failure, so nothing else would
+     * tell the admin that some streams are still out of sync: runWithToast
+     * decides success by exception alone.
+     */
+    private fun storageOutcomeToast(
+        res: com.pombo.android.ChannelManager.StorageWriteResult,
+        nothing: String,
+        done: String,
+        partial: String
+    ) {
+        when {
+            res.sent == 0 -> toast(nothing, com.pombo.android.ui.ToastKind.SUCCESS)
+            res.ok -> toast(done, com.pombo.android.ui.ToastKind.SUCCESS)
+            else -> toast(partial, com.pombo.android.ui.ToastKind.ERROR, 5000L)
+        }
+    }
+
     fun addStorageNode(address: String, onDone: () -> Unit = {}) = viewModelScope.launch {
         chainAction(
             "Add storage node",
             "Assigns a storage node to this channel's streams (up to $storedStreamCount transactions; " +
                 "only the streams missing it are charged)."
         ) {
-            runWithToast("Adding storage node…", "Storage node added", "Failed to add storage node") {
-                manager.addStorageNode(address)
+            runWithToast("Adding storage node…", null, "Failed to add storage node") {
+                storageOutcomeToast(
+                    manager.addStorageNode(address),
+                    nothing = "Storage node already on every stream",
+                    done = "Storage node added",
+                    partial = "Storage node partially added. Try again to sync."
+                )
             }
         }
         onDone()
@@ -866,8 +891,13 @@ class AppViewModel(app: Application) : AndroidViewModel(app), PomboBridge.Listen
             "Stops retaining this channel's history on that node (up to $storedStreamCount transactions; " +
                 "only the streams carrying it are charged)."
         ) {
-            runWithToast("Removing storage node…", "Storage node removed", "Failed to remove storage node") {
-                manager.removeStorageNode(address)
+            runWithToast("Removing storage node…", null, "Failed to remove storage node") {
+                storageOutcomeToast(
+                    manager.removeStorageNode(address),
+                    nothing = "Storage node was not on any stream",
+                    done = "Storage node removed",
+                    partial = "Storage node partially removed. Try again to sync."
+                )
             }
         }
         onDone()
@@ -879,8 +909,13 @@ class AppViewModel(app: Application) : AndroidViewModel(app), PomboBridge.Listen
             "Sets history retention to $days days (up to $storedStreamCount transactions; " +
                 "only the streams not already at $days are charged)."
         ) {
-            runWithToast("Updating retention…", "Retention updated to $days days", "Failed to update retention") {
-                manager.setStorageDays(days)
+            runWithToast("Updating retention…", null, "Failed to update retention") {
+                storageOutcomeToast(
+                    manager.setStorageDays(days),
+                    nothing = "Retention already $days days on every stream",
+                    done = "Retention updated to $days days",
+                    partial = "Retention updated partially. Try again."
+                )
             }
         }
         onDone()
