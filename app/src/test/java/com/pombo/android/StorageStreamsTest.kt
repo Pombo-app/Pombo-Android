@@ -61,8 +61,10 @@ class StorageStreamsTest {
 
     // ===== StorageNode.partial =====
 
-    private fun node(onMessage: Boolean, onAdmin: Boolean, onKeys: Boolean, hasKeys: Boolean) =
-        ChannelManager.StorageNode("0xnode", onMessage, onAdmin, onKeys, hasKeys)
+    private fun node(
+        onMessage: Boolean, onAdmin: Boolean, onKeys: Boolean,
+        hasKeys: Boolean, allStreamsRead: Boolean = true
+    ) = ChannelManager.StorageNode("0xnode", onMessage, onAdmin, onKeys, hasKeys, allStreamsRead)
 
     @Test
     fun `a node on every stored stream is complete`() {
@@ -83,5 +85,18 @@ class StorageStreamsTest {
     @Test
     fun `a channel with no keys stream is complete on the two it has`() {
         assertFalse(node(onMessage = true, onAdmin = true, onKeys = false, hasKeys = false).partial)
+    }
+
+    /**
+     * A lookup that timed out says nothing about that stream. Reading its
+     * silence as a missing assignment sends the admin to pay for a repair
+     * that may not be needed.
+     */
+    @Test
+    fun `a node is never called partial when a stream lookup failed`() {
+        assertFalse(node(
+            onMessage = false, onAdmin = true, onKeys = true,
+            hasKeys = true, allStreamsRead = false
+        ).partial)
     }
 }

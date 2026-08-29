@@ -1896,9 +1896,16 @@ class ChannelManager(
         val onAdmin: Boolean,
         val onKeys: Boolean = false,
         /** False on channels with no -4, where onKeys can never be true. */
-        val hasKeys: Boolean = false
+        val hasKeys: Boolean = false,
+        /**
+         * False when a stream lookup failed. Absence then proves nothing, and
+         * calling it partial sends the admin to spend gas on a repair that
+         * may not be needed.
+         */
+        val allStreamsRead: Boolean = true
     ) {
-        val partial: Boolean get() = !(onMessage && onAdmin && (!hasKeys || onKeys))
+        val partial: Boolean get() =
+            allStreamsRead && !(onMessage && onAdmin && (!hasKeys || onKeys))
     }
 
     data class StorageInfo(
@@ -1913,12 +1920,16 @@ class ChannelManager(
         val hasKeysStream: Boolean = false
     )
 
-    private suspend fun streamStorage(streamId: String): Pair<List<String>, Int?> = try {
+    /** Null when the lookup failed, which is not the same as "no nodes". */
+    private suspend fun streamStorage(streamId: String): Pair<List<String>, Int?>? = try {
         val res = bridge.call("getStreamStorageInfo", JSONObject().put("streamId", streamId), 30_000)
         val arr = res.optJSONArray("nodes") ?: JSONArray()
         val nodes = (0 until arr.length()).map { arr.optString(it) }.filter { it.isNotEmpty() }
         nodes to (if (res.isNull("storageDays")) null else res.optInt("storageDays").takeIf { it > 0 })
-    } catch (e: Exception) { emptyList<String>() to null }
+    } catch (e: Exception) {
+        Log.w(TAG, "storage lookup failed for " + streamId.takeLast(20) + ": " + e.message)
+        null
+    }
 
     /**
      * Every stored stream of the channel: -1, -3, and -4 on gated. The
@@ -1931,20 +1942,27 @@ class ChannelManager(
             channel.keysStreamId.ifEmpty { StreamConstants.deriveKeysId(channel.messageStreamId) }
         } else ""
 
-        val (msgNodes, days) = streamStorage(channel.messageStreamId)
-        val (adminNodes, adminDays) = if (channel.adminStreamId.isNotEmpty()) {
-            streamStorage(channel.adminStreamId)
-        } else emptyList<String>() to null
-        val (keysNodes, keysDays) = if (keysStreamId.isNotEmpty()) {
-            streamStorage(keysStreamId)
-        } else emptyList<String>() to null
+        val msg = streamStorage(channel.messageStreamId)
+        val admin = if (channel.adminStreamId.isNotEmpty()) streamStorage(channel.adminStreamId) else null
+        val keys = if (keysStreamId.isNotEmpty()) streamStorage(keysStreamId) else null
+
+        val (msgNodes, days) = msg ?: (emptyList<String>() to null)
+        val (adminNodes, adminDays) = admin ?: (emptyList<String>() to null)
+        val (keysNodes, keysDays) = keys ?: (emptyList<String>() to null)
 
         val hasKeys = keysStreamId.isNotEmpty()
+        // Every stream we are comparing has to have actually answered before
+        // a node's absence from one of them means anything.
+        val allStreamsRead = msg != null &&
+            (channel.adminStreamId.isEmpty() || admin != null) &&
+            (!hasKeys || keys != null)
         val byAddr = linkedMapOf<String, StorageNode>()
         fun mark(addresses: List<String>, set: (StorageNode) -> StorageNode) {
             addresses.forEach { n ->
                 val k = n.lowercase()
-                byAddr[k] = set(byAddr[k] ?: StorageNode(n, onMessage = false, onAdmin = false, hasKeys = hasKeys))
+                byAddr[k] = set(byAddr[k] ?: StorageNode(
+                    n, onMessage = false, onAdmin = false,
+                    hasKeys = hasKeys, allStreamsRead = allStreamsRead))
             }
         }
         mark(msgNodes) { it.copy(onMessage = true) }
@@ -1952,6 +1970,11 @@ class ChannelManager(
         mark(keysNodes) { it.copy(onKeys = true) }
 
         val nodes = byAddr.values.toList()
+        // A lookup that times out reads as "not known", which is silence the
+        // panel cannot distinguish from agreement — so say what came back.
+        Log.i(TAG, "Storage info: retention=[message=$days admin=$adminDays keys=$keysDays] " +
+            "inSync=${retentionInSync(days, adminDays, keysDays)} hasKeys=$hasKeys " +
+            "allRead=$allStreamsRead nodes=${nodes.size}")
         return StorageInfo(
             enabled = nodes.isNotEmpty(),
             nodes = nodes,
