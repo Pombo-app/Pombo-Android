@@ -4090,16 +4090,6 @@ private fun ExploreCard(
 internal fun shortAddr(a: String) = if (a.length > 10) a.take(6) + "…" + a.takeLast(4) else a
 
 @Composable
-private fun PlaceholderTab(title: String, subtitle: String) {
-    Column(Modifier.fillMaxSize().padding(20.dp)) {
-        Text(title, color = PomboColors.Text, fontSize = 24.sp, fontWeight = FontWeight.Bold)
-        Box(Modifier.weight(1f).fillMaxWidth(), contentAlignment = Alignment.Center) {
-            Text(subtitle, color = PomboColors.TextDim, fontSize = 13.sp, textAlign = androidx.compose.ui.text.style.TextAlign.Center)
-        }
-    }
-}
-
-@Composable
 internal fun Modifier.clickableNoRipple(onClick: () -> Unit): Modifier = this.clickable(
     interactionSource = remember { MutableInteractionSource() },
     indication = null,
