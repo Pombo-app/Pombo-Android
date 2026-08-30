@@ -29,7 +29,8 @@ import org.json.JSONObject
  * no evidence.
  */
 class ChannelManagerHarness(
-    channels: List<Channel> = emptyList()
+    channels: List<Channel> = emptyList(),
+    private val trustedContacts: Set<String> = emptySet()
 ) {
     /** Throwaway key; the channel pseudonym is minted from it, so it must be real. */
     val myKey = "0x4f3edf983ac636a65a842ce7c78d9aa706d3b113bce9c46f30d7d21715b23b1d"
@@ -48,6 +49,13 @@ class ChannelManagerHarness(
 
     init {
         every { store.load() } returns channels
+        // A relaxed mock answers a String? with "", not null, and ENS treats
+        // any non-null name as resolved — which silently grants trust level 1
+        // to every sender. Say "nothing cached, nothing resolves" out loud.
+        every { ensStore.cachedName(any()) } returns null
+        every { ensStore.cachedAvatar(any()) } returns null
+        coEvery { ensStore.name(any(), any()) } returns null
+
         val args = slot<JSONObject>()
         coEvery { bridge.call(any(), capture(args)) } answers {
             published += args.captured.toString()
@@ -68,7 +76,8 @@ class ChannelManagerHarness(
             inviteStore = mockk(relaxed = true),
             unreadStore = unreadStore,
             epochKeyStore = mockk(relaxed = true),
-            transferDir = java.io.File(System.getProperty("java.io.tmpdir"), "pombo-tests")
+            transferDir = java.io.File(System.getProperty("java.io.tmpdir"), "pombo-tests"),
+            isTrustedContact = { addr -> addr.lowercase() in trustedContacts }
         )
     }
 
