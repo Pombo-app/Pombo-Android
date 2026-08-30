@@ -107,6 +107,11 @@ android {
     buildFeatures {
         compose = true
     }
+    testOptions {
+        // ChannelManager and its collaborators log through android.util.Log,
+        // whose android.jar stub throws. Unit tests assert on state, never on logs.
+        unitTests.isReturnDefaultValues = true
+    }
 }
 
 // Unit tests read the bridge page from src/main/assets, which Gradle does not
@@ -132,6 +137,9 @@ dependencies {
     // Real org.json for JVM unit tests — the Android stub throws "not mocked".
     testImplementation("org.json:json:20240303")
     testImplementation("junit:junit:4.13.2")
+    // Drives ChannelManager from a unit test: the bridge and the stores are
+    // final classes over a WebView and EncryptedSharedPreferences.
+    testImplementation("io.mockk:mockk:1.13.13")
     implementation("androidx.core:core-ktx:1.13.1")
     implementation("androidx.activity:activity-compose:1.9.3")
     implementation("androidx.lifecycle:lifecycle-runtime-ktx:2.8.7")

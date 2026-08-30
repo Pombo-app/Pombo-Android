@@ -6,6 +6,12 @@ import com.pombo.android.core.InviteToken
 import com.pombo.android.core.PomboCrypto
 import com.pombo.android.core.Protocol
 import com.pombo.android.core.StreamConstants
+import com.pombo.android.core.channels.ChannelImages
+import com.pombo.android.core.channels.FileTransfers
+import com.pombo.android.core.channels.MessageVerification
+import com.pombo.android.core.channels.Moderation
+import com.pombo.android.core.channels.PresenceTracker
+import com.pombo.android.core.channels.optStringOrNull
 import com.pombo.android.data.Channel
 import com.pombo.android.data.ChannelStore
 import kotlinx.coroutines.CoroutineScope
@@ -105,18 +111,18 @@ data class UiMessage(
  * All wire formats are identical to the Pombo web ones (see spec in the README).
  */
 class ChannelManager(
-    private val bridge: PomboBridge,
-    private val store: ChannelStore,
-    private val scope: CoroutineScope,
-    private val myAddress: () -> String?,
+    internal val bridge: PomboBridge,
+    internal val store: ChannelStore,
+    internal val scope: CoroutineScope,
+    internal val myAddress: () -> String?,
     private val myPrivateKey: () -> String?,
-    private val myUsername: () -> String?,
+    internal val myUsername: () -> String?,
     /** Persistent caches so cold starts paint before the network answers. */
-    private val imageStore: com.pombo.android.core.ChannelImageStore,
+    internal val imageStore: com.pombo.android.core.ChannelImageStore,
     private val previewStore: com.pombo.android.core.LatestMessageStore,
-    private val ensStore: com.pombo.android.core.EnsStore,
-    private val blobStore: com.pombo.android.core.ImageBlobStore,
-    private val sentDmStore: com.pombo.android.data.SentDmStore,
+    internal val ensStore: com.pombo.android.core.EnsStore,
+    internal val blobStore: com.pombo.android.core.ImageBlobStore,
+    internal val sentDmStore: com.pombo.android.data.SentDmStore,
     /** Own DM/write-only reactions — no resend returns them (web sentReactions). */
     private val sentReactionsStore: com.pombo.android.data.SentReactionsStore? = null,
     private val inviteStore: com.pombo.android.data.InviteStore,
@@ -128,14 +134,32 @@ class ChannelManager(
      * may evict a cache directory at any moment, and a half-evicted transfer
      * would resume against a bitmap claiming pieces that are gone.
      */
-    private val transferDir: java.io.File,
+    internal val transferDir: java.io.File,
     /** Trust level 2 in the web comes from the trusted-contacts list. */
-    private val isTrustedContact: (String) -> Boolean = { false },
+    internal val isTrustedContact: (String) -> Boolean = { false },
     /** Blocked peers (web secureStorage.isBlocked) — a synced slice. */
     private val isBlockedPeer: (String) -> Boolean = { false },
     /** Persist a new block; the caller owns the settings store. */
     private val persistBlockedPeer: (String) -> Unit = {}
 ) {
+
+    /**
+     * Presence and typing (core/channels). Declared first: the public
+     * StateFlows below read its state at construction.
+     */
+    private val presence = PresenceTracker(this)
+
+    /** Channel images and the chunked image transport (core/channels). */
+    private val images = ChannelImages(this)
+
+    /** P2P and storage-cluster file sharing (core/channels). */
+    private val files = FileTransfers(this)
+
+    /** Moderation, permissions and gated membership (core/channels). */
+    private val admin = Moderation(this)
+
+    /** Signature verification and the trust ladder (core/channels). */
+    private val verification = MessageVerification(this)
 
     /**
      * Epoch keys for gated channels (-4, N-A/N-C). Transport is injected:
@@ -144,7 +168,7 @@ class ChannelManager(
      * very dependency the epoch protocol replaces), and announce history is a
      * plain -4 resend.
      */
-    private val epochKeys = com.pombo.android.core.EpochKeyManager(
+    internal val epochKeys = com.pombo.android.core.EpochKeyManager(
         store = epochKeyStore,
         scope = scope,
         myAddress = myAddress,
@@ -547,7 +571,7 @@ class ChannelManager(
     // ("Key was already used") — seen live on a device whose old state had a
     // channel recorded twice. Deduping at load both boots cleanly and heals
     // the store on the next save.
-    private val _channels = MutableStateFlow(store.load().distinctBy { it.messageStreamId })
+    internal val _channels = MutableStateFlow(store.load().distinctBy { it.messageStreamId })
 
     /** Re-reads the list after the storage scope changes (account switch/guest). */
     fun reloadChannels() {
@@ -571,11 +595,11 @@ class ChannelManager(
         _channelOrder.value = order
     }
 
-    private val _current = MutableStateFlow<Channel?>(null)
+    internal val _current = MutableStateFlow<Channel?>(null)
     val current: StateFlow<Channel?> = _current.asStateFlow()
 
     /** True while the open channel is a non-persisted preview (web: preview mode). */
-    private val _isPreview = MutableStateFlow(false)
+    internal val _isPreview = MutableStateFlow(false)
     val isPreview: StateFlow<Boolean> = _isPreview.asStateFlow()
 
     /**
@@ -609,23 +633,17 @@ class ChannelManager(
         onLocalStateChanged()
     }
 
-    private val _messages = MutableStateFlow<List<UiMessage>>(emptyList())
+    internal val _messages = MutableStateFlow<List<UiMessage>>(emptyList())
     val messages: StateFlow<List<UiMessage>> = _messages.asStateFlow()
 
     /** messageId -> emoji -> set of senderIds (in RAM, like the web). */
     private val _reactions = MutableStateFlow<Map<String, Map<String, Set<String>>>>(emptyMap())
     val reactions: StateFlow<Map<String, Map<String, Set<String>>>> = _reactions.asStateFlow()
 
-    private val _onlineCount = MutableStateFlow(0)
+    private val _onlineCount get() = presence._onlineCount
     val onlineCount: StateFlow<Int> = _onlineCount.asStateFlow()
 
-    /**
-     * False from the moment a channel starts opening until its subscriptions
-     * are live. The header shows "Connecting…" in the online-count slot while
-     * it is false, so that slot is never empty and the title above it does not
-     * jump once presence lands.
-     */
-    private val _presenceReady = MutableStateFlow(false)
+    private val _presenceReady get() = presence._presenceReady
     val presenceReady: StateFlow<Boolean> = _presenceReady.asStateFlow()
 
     // Moderation (ADMIN_STATE on -3/P0). Latest-wins by rev; owner-authored only.
@@ -639,35 +657,16 @@ class ChannelManager(
         /** Wall-clock of the pin itself. Carried through republishes untouched. */
         val pinnedAt: Long = 0L
     )
-    private val _pins = MutableStateFlow<List<Pin>>(emptyList())
+    private val _pins get() = admin._pins
     val pins: StateFlow<List<Pin>> = _pins.asStateFlow()
-    private val _hiddenIds = MutableStateFlow<Set<String>>(emptySet())
+    private val _hiddenIds get() = admin._hiddenIds
     val hiddenIds: StateFlow<Set<String>> = _hiddenIds.asStateFlow()
-    private val _bannedMembers = MutableStateFlow<Set<String>>(emptySet())
+    private val _bannedMembers get() = admin._bannedMembers
     val bannedMembers: StateFlow<Set<String>> = _bannedMembers.asStateFlow()
 
-    /**
-     * Last ADMIN_STATE revision applied, keyed by admin stream — NOT a single
-     * counter. Revisions are per channel, so one shared field let a late
-     * ADMIN_STATE from the channel the user just left raise the bar for the
-     * channel now open: with A at rev 40 arriving after B opened, B's own rev 3
-     * was silently discarded for the rest of the session (no pins, no bans, no
-     * error), and moderating B would then publish at rev 41 and corrupt the
-     * revision sequence for every other participant.
-     *
-     * Keyed, the value survives across opens, which is also more correct than
-     * the old reset-to-zero: revisions only ever move forward for a channel.
-     */
-    private val adminRevs = HashMap<String, Int>()
-
-    /** Snapshot timestamps beside the revs — the web's latest-wins compares
-     *  (rev, ts), so a stale snapshot sharing a rev must not win (M-C2). */
-    private val adminTs = HashMap<String, Long>()
-
-    /** Admin streams whose history was scanned at least once this session —
-     *  publishing a new rev before that would restart from rev=1 and lose to
-     *  every peer holding a higher one (M-C1; web gates on adminLoaded). */
-    private val adminLoaded = java.util.Collections.synchronizedSet(HashSet<String>())
+    private val adminRevs get() = admin.adminRevs
+    private val adminTs get() = admin.adminTs
+    private val adminLoaded get() = admin.adminLoaded
 
     /**
      * Images whose message was deleted (web `deletedImageIds`, media.js:180).
@@ -676,7 +675,7 @@ class ChannelManager(
      * image. Session-global on purpose: NOT cleared on channel switch, since
      * a deleted image is deleted everywhere.
      */
-    private val deletedImageIds = java.util.Collections.synchronizedSet(HashSet<String>())
+    internal val deletedImageIds = java.util.Collections.synchronizedSet(HashSet<String>())
 
     // Scroll-up pagination (web: channel.oldestTimestamp / hasMoreHistory / loadingHistory).
     private val _waitingForKeys = MutableStateFlow(false)
@@ -762,13 +761,13 @@ class ChannelManager(
      * loading flags into channel B — which is exactly the contamination seen on
      * fast switches and slow networks.
      */
-    @Volatile private var switchGeneration = 0
+    @Volatile internal var switchGeneration = 0
 
     /**
      * False once the user has moved on. Any caller that suspended must check
      * this before writing to shared state, and discard its result if it fails.
      */
-    private fun stillCurrent(generation: Int) = switchGeneration == generation
+    internal fun stillCurrent(generation: Int) = switchGeneration == generation
 
     /**
      * The in-flight channel-open coroutine, cancelled when the next open
@@ -784,7 +783,7 @@ class ChannelManager(
      * under it — see [prepareChannel]; the history loads run outside so a slow
      * resend never blocks the next switch.
      */
-    private val channelSwitchMutex = Mutex()
+    internal val channelSwitchMutex = Mutex()
     /** targetId -> (override payload, publisher) for targets not loaded yet. */
     private val pendingOverrides = LinkedHashMap<String, Pair<JSONObject, String?>>()
 
@@ -798,68 +797,28 @@ class ChannelManager(
      */
     data class TypingPeer(val address: String, val nickname: String?)
 
-    /**
-     * Everyone typing right now, oldest signal first. A busy channel can have
-     * several people typing at once, and a single slot meant the last signal
-     * erased whoever was already there.
-     */
-    private val _typingFrom = MutableStateFlow<List<TypingPeer>>(emptyList())
+    private val _typingFrom get() = presence._typingFrom
     val typingFrom: StateFlow<List<TypingPeer>> = _typingFrom.asStateFlow()
 
-    /** address -> when their last signal arrived. */
-    private val typingSeen = LinkedHashMap<String, Long>()
-    private val typingNames = HashMap<String, String?>()
 
-    /** Shared by the DM and channel paths — both also warm the ENS name. */
-    private fun markTyping(address: String, nickname: String?) {
-        ensureEns(address)
-        synchronized(typingSeen) {
-            typingSeen[address] = System.currentTimeMillis()
-            typingNames[address] = nickname
-            publishTyping()
-        }
-        // One sweeper for everyone: each pass drops whoever went quiet and
-        // re-arms only while someone is still typing.
-        typingClearJob?.cancel()
-        typingClearJob = scope.launch {
-            while (true) {
-                delay(1000)
-                val remaining = synchronized(typingSeen) {
-                    val cutoff = System.currentTimeMillis() - TYPING_TTL_MS
-                    typingSeen.entries.removeAll { it.value < cutoff }
-                    publishTyping()
-                    typingSeen.size
-                }
-                if (remaining == 0) break
-            }
-        }
-    }
+    private fun markTyping(address: String, nickname: String?) =
+        presence.markTyping(address, nickname)
 
-    /** Caller holds the [typingSeen] lock. */
-    private fun publishTyping() {
-        _typingFrom.value = typingSeen.keys.map { TypingPeer(it, typingNames[it]) }
-    }
+    private fun clearTyping() = presence.clearTyping()
 
-    private fun clearTyping() {
-        typingClearJob?.cancel()
-        synchronized(typingSeen) {
-            typingSeen.clear()
-            typingNames.clear()
-        }
-        _typingFrom.value = emptyList()
-    }
-
-    // presence: senderId -> lastActive
-    private val online = HashMap<String, Long>()
-    private val onlineNames = HashMap<String, String?>()
+    private val online get() = presence.online
+    private val onlineNames get() = presence.onlineNames
 
     /** Who is online, for the web's online-users list (not just the count). */
     data class OnlineUser(val address: String, val nickname: String?)
-    private val _onlineUsers = MutableStateFlow<List<OnlineUser>>(emptyList())
+    private val _onlineUsers get() = presence._onlineUsers
     val onlineUsers: StateFlow<List<OnlineUser>> = _onlineUsers.asStateFlow()
-    private var presenceJob: Job? = null
-    private var typingClearJob: Job? = null
-    private var adminPollJob: Job? = null
+    private var presenceJob: Job?
+        get() = presence.presenceJob
+        set(value) { presence.presenceJob = value }
+    private var adminPollJob: Job?
+        get() = admin.adminPollJob
+        set(value) { admin.adminPollJob = value }
 
     /** My own DM ephemeral inbox (`me/Pombo-DM-2`), where a peer's encrypted
      *  typing/presence lands. Set while a DM is open; null otherwise. */
@@ -884,7 +843,7 @@ class ChannelManager(
      * messages. Name and avatar are cached separately (like identity.js), so a
      * failed avatar lookup doesn't get pinned by a successful name lookup.
      */
-    private fun resolveEnsFor(address: String) {
+    internal fun resolveEnsFor(address: String) {
         val key = address.lowercase()
         scope.launch {
             val name = ensStore.name(address) {
@@ -969,25 +928,6 @@ class ChannelManager(
     }
     private val peerPubKeys = HashMap<String, String>()
 
-    // Chunked-image reassembly: imageId -> pending state (manifest + chunks).
-    private class PendingImage(var messageId: String) {
-        /** Owning stream, so an assembled image can be ledgered like the web does. */
-        var streamId: String = ""
-        var chunkCount = 0
-        var chunkHashes: List<String> = emptyList()
-        var assembledSha256 = ""
-        var finalSizeBytes = 0
-        var finalMime = "image/jpeg"
-        var haveManifest = false
-        var lastSeen = System.currentTimeMillis()
-        val chunks = HashMap<Int, ByteArray>()
-        // Targeted recovery bookkeeping (web imageRecovery config).
-        var manifestTs = 0L
-        var recoveryAttempts = 0
-        var recoveryScheduled = false
-    }
-    private val pendingImages = HashMap<String, PendingImage>()
-
     // ==================== channel image (ADMIN -3 / P1) ====================
 
     /** Every known channel image, keyed by admin stream id (shared cache). */
@@ -997,238 +937,26 @@ class ChannelManager(
     val channelImagesPending: StateFlow<Set<String>> = imageStore.pending
 
     /** Decoded channel image for the open channel, or null when unset. */
-    private val _channelImage = MutableStateFlow<ByteArray?>(null)
+    private val _channelImage get() = images._channelImage
     val channelImage: StateFlow<ByteArray?> = _channelImage.asStateFlow()
-    @Volatile private var channelImageRev = 0
+    private var channelImageRev: Int
+        get() = images.channelImageRev
+        set(value) { images.channelImageRev = value }
 
-    /**
-     * Fetches a channel image for any channel (not just the open one), used by
-     * the list and Explore. Cache-first with a background refresh, one network
-     * round-trip per channel thanks to the store's inflight dedup.
-     */
-    fun ensureChannelImage(adminStreamId: String, password: String? = null, label: String = adminStreamId) {
-        if (adminStreamId.isEmpty()) return
-        scope.launch {
-            // One shot used to be it: a transient resend timeout or an empty
-            // read during the bridge-connect burst (Explore's own fetches all
-            // land in the same tick, see AppViewModel.onBridgeConnected) meant
-            // that channel's card never got another chance this session. 3
-            // tries, spaced apart, without hammering the bridge further.
-            repeat(3) { attempt ->
-                val result = imageStore.dedup(adminStreamId) { fetchChannelImage(adminStreamId, password, label) }
-                if (result != null || attempt == 2) return@launch
-                delay(2_500L * (attempt + 1))
-            }
-        }
-    }
+    fun ensureChannelImage(adminStreamId: String, password: String? = null, label: String = adminStreamId) =
+        images.ensureChannelImage(adminStreamId, password, label)
 
-    /**
-     * Resends the latest CHANNEL_IMAGE payload and validates type + owner
-     * authority (the admin stream is owned by the address that prefixes it).
-     * Returns the parsed payload, or null when absent/invalid.
-     */
     private suspend fun resendImagePayload(
         adminStreamId: String,
         password: String?,
         label: String = adminStreamId,
         timeoutMs: Long = 30_000
-    ): JSONObject? {
-        bridge.awaitConnected()
-        val gatedChannel = channelByStream(adminStreamId)?.takeIf { it.type == "gated" }
-        // recoverSigner unconditionally: an Explore fetch of a visible gated
-        // storefront has no channel object, yet its authority check below
-        // still needs the envelope signer. Raw envelopes only for channels we
-        // KNOW are gated — the owner check below is the authority either way.
-        val imageArgs = JSONObject()
-            .put("streamId", adminStreamId)
-            .put("partition", StreamConstants.ADMIN_CHANNEL_IMAGE)
-            .put("last", 1)
-            .put("recoverSigner", true)
-        if (gatedChannel != null) imageArgs.put("raw", true)
-        val res = bridge.call("resend", imageArgs, timeoutMs)
-        val arr = res.optJSONArray("messages")
-        if (arr == null) { Log.w(TAG, "channelImage $label ($adminStreamId): no messages array in resend response"); return null }
-        if (arr.length() == 0) { Log.w(TAG, "channelImage $label ($adminStreamId): resend returned 0 entries"); return null }
-        val entry = arr.getJSONObject(arr.length() - 1)
-        val meta = entry.optJSONObject("meta") ?: JSONObject()
-        val contentAny = entry.opt("content")
-        var data: JSONObject = when (contentAny) {
-            is JSONObject -> contentAny
-            is String -> {
-                val pwd = password
-                if (pwd == null) { Log.w(TAG, "channelImage $label ($adminStreamId): content is sealed, no password to open it"); return null }
-                try { JSONObject(PomboCrypto.decryptString(contentAny, pwd)) } catch (e: Exception) {
-                    Log.w(TAG, "channelImage $label ($adminStreamId): password decrypt failed: ${e.message}"); return null
-                }
-            }
-            else -> { Log.w(TAG, "channelImage $label ($adminStreamId): content is neither object nor string (${contentAny?.javaClass})"); return null }
-        }
-        // Gated: CHANNEL_IMAGE arrives as an epoch envelope. History context
-        // so an image sealed under an older epoch opens in that epoch's
-        // validity window instead of skipping the freshness rule.
-        if (com.pombo.android.core.EpochKeyCrypto.isEpochEnvelope(data)) {
-            val messageStreamId = adminStreamId.replace(Regex("-3$"), StreamConstants.SUFFIX_MESSAGE)
-            val keysId = StreamConstants.deriveKeysId(messageStreamId)
-            // List/Explore fetch channels that were never OPENED this session
-            // — the epoch state only loads on open, so without this the image
-            // stays undecryptable everywhere but inside the channel.
-            epochKeys.loadPersistedState(messageStreamId)
-            data = epochKeys.tryDecrypt(
-                messageStreamId, keysId, data,
-                gated = true, live = false, timestamp = meta.optLong("timestamp", 0L)
-            )
-                ?: run { Log.w(TAG, "channelImage $label ($adminStreamId): epoch envelope present but key unavailable/decrypt failed"); return null }
-        }
-        if (data.optString("type") != "CHANNEL_IMAGE") {
-            Log.w(TAG, "channelImage $label ($adminStreamId): entry type is '${data.optString("type")}', not CHANNEL_IMAGE"); return null
-        }
-        if (gatedChannel != null) {
-            // Gated: the transport publisher is the CLONE for everyone —
-            // authority is the recovered envelope signer, and gatedAuthor
-            // already enforces signer == namespace admin on -3 (D10c: never
-            // fall back to the transport publisher).
-            gatedAuthor(gatedChannel, adminStreamId, meta)
-                ?: run { Log.w(TAG, "channelImage $label ($adminStreamId): gatedAuthor check failed"); return null }
-        } else {
-            // Unknown channels (Explore) may be gated storefronts: the clone
-            // publishes for every member, so a non-owner transport publisher
-            // is only acceptable when the envelope SIGNER is the owner —
-            // otherwise any member could plant an image on the card.
-            val senderId = meta.optString("publisherId").lowercase()
-            val owner = adminStreamId.substringBefore('/').lowercase()
-            if (senderId.isNotEmpty() && senderId != owner
-                && meta.optString("signer").lowercase() != owner) {
-                Log.w(TAG, "channelImage $label ($adminStreamId): authority check failed (sender=$senderId signer=${meta.optString("signer").lowercase()} owner=$owner)")
-                return null
-            }
-        }
-        return data
-    }
+    ): JSONObject? = images.resendImagePayload(adminStreamId, password, label, timeoutMs)
 
-    /** Returns the decoded bytes and caches them; null when unset/invalid. */
-    private suspend fun fetchChannelImage(adminStreamId: String, password: String?, label: String = adminStreamId): ByteArray? {
-        return try {
-            val data = resendImagePayload(adminStreamId, password, label) ?: return null
+    private fun loadChannelImage(channel: Channel) = images.loadChannelImage(channel)
 
-            val hash = data.optString("hash")
-            // Unchanged payload: keep what we have and skip the decode.
-            if (hash.isNotEmpty() && imageStore.isFresh(adminStreamId, hash)) {
-                return imageStore.cached(adminStreamId)
-            }
-            // Stale guard: a storage read can lag a just-published image; an
-            // older payload must never overwrite the newer entry we hold.
-            val ts = data.optLong("ts", 0L)
-            if (ts in 1 until imageStore.cachedTs(adminStreamId)) {
-                return imageStore.cached(adminStreamId)
-            }
-            val base64 = data.optString("data").substringAfter(',', "")
-            if (base64.isEmpty()) return null
-            val actual = java.security.MessageDigest.getInstance("SHA-256")
-                .digest(base64.toByteArray(Charsets.UTF_8))
-                .joinToString("") { "%02x".format(it) }
-            if (hash.isNotEmpty() && hash != actual) return null
-            val bytes = android.util.Base64.decode(base64, android.util.Base64.DEFAULT)
-            if (bytes.size > IMAGE_MAX_ASSEMBLED_BYTES) return null
-            imageStore.put(adminStreamId, hash.ifEmpty { actual }, bytes, ts)
-            bytes
-        } catch (e: Exception) {
-            Log.w(TAG, "channelImage $label ($adminStreamId): fetch threw ${e.javaClass.simpleName}: ${e.message}")
-            null
-        }
-    }
-
-    /**
-     * Channel image for the open channel: paint whatever is cached first, then
-     * refresh in the background (web ChannelImageManager stale-while-revalidate).
-     */
-    private fun loadChannelImage(channel: Channel) {
-        imageStore.cached(channel.adminStreamId)?.let { _channelImage.value = it }
-        scope.launch {
-            val fresh = imageStore.dedup(channel.adminStreamId) {
-                fetchChannelImage(channel.adminStreamId, channel.password)
-            }
-            if (fresh != null && _current.value?.adminStreamId == channel.adminStreamId) {
-                _channelImage.value = fresh
-            }
-        }
-    }
-
-    /**
-     * Publishes a new channel image (owner only). [bytes] is the finished
-     * 512² crop from the crop dialog (web renderSquareCrop output).
-     *
-     * Returns true when the storage node confirmed the new payload, false when
-     * the publish went through but confirmation never arrived in time — the
-     * web's "Published — propagating…" outcome, NOT a failure. A genuinely
-     * failed publish throws.
-     */
-    suspend fun publishChannelImage(bytes: ByteArray, mime: String): Boolean {
-        val channel = _current.value ?: throw IllegalStateException("No channel open")
-        if (!amOwner(channel)) throw IllegalStateException("Only the channel admin can change the image")
-        // Base64 + SHA-256 over a 512² image is still main-thread hostile.
-        val base64 = withContext(Dispatchers.Default) {
-            android.util.Base64.encodeToString(bytes, android.util.Base64.NO_WRAP)
-        }
-        val hash = withContext(Dispatchers.Default) {
-            java.security.MessageDigest.getInstance("SHA-256")
-                .digest(base64.toByteArray(Charsets.UTF_8))
-                .joinToString("") { "%02x".format(it) }
-        }
-        val ts = System.currentTimeMillis()
-        val payload = JSONObject()
-            .put("type", "CHANNEL_IMAGE")
-            .put("v", 1)
-            .put("rev", channelImageRev + 1)
-            .put("ts", ts)
-            .put("createdBy", myAddress())
-            .put("encrypted", false)
-            .put("mime", mime)
-            .put("hash", hash)
-            .put("data", "data:$mime;base64,$base64")
-        if (isEpochChannel(channel)) {
-            // Epoch envelope, same reason as ADMIN_STATE: the SDK's group-key
-            // AES on -3 would be unreadable cross-device. Visible channels
-            // are STOREFRONTS instead: the image is the marketing and
-            // publishes in the CLEAR so non-members (Explore) can render it —
-            // only the transport differs.
-            val content = if (channel.exposure == "visible") payload
-            else epochKeys.encryptCurrent(channel.messageStreamId, payload)
-                ?: throw IllegalStateException("No epoch key — cannot publish the channel image yet")
-            val args = JSONObject()
-                .put("streamId", channel.adminStreamId)
-                .put("partition", StreamConstants.ADMIN_CHANNEL_IMAGE)
-                .put("content", content)
-            // -3 publishes as the ACCOUNT on gated too — the owner is its
-            // only writer and the transport enforces that (new gated -3s
-            // grant the clone subscribe-only).
-            bridge.call("publishAsAccount", args, 60_000)
-        } else {
-            bridge.call("publish", JSONObject()
-                .put("streamId", channel.adminStreamId)
-                .put("partition", StreamConstants.ADMIN_CHANNEL_IMAGE)
-                .put("content", payload), 60_000)
-        }
-        channelImageRev += 1
-        _channelImage.value = bytes
-        // Publish into the shared cache so list/Explore update without a refetch.
-        // Recording ts also arms the stale guard in fetchChannelImage, so a
-        // background refresh racing this publish cannot regress the cache.
-        imageStore.put(channel.adminStreamId, hash, bytes, ts)
-
-        // Verify it actually persisted, like the web's "Verifying…" step: an
-        // optimistic local cache is not proof the storage node kept it. The
-        // node takes a few seconds to index a publish, so poll by HASH ONLY —
-        // going through fetchChannelImage here used to write the still-old
-        // payload back into the store and revert the image everywhere.
-        repeat(5) {
-            kotlinx.coroutines.delay(3_000)
-            val remote = try {
-                resendImagePayload(channel.adminStreamId, channel.password, timeoutMs = 10_000)?.optString("hash")
-            } catch (e: Exception) { null }
-            if (remote == hash) return true
-        }
-        return false
-    }
+    suspend fun publishChannelImage(bytes: ByteArray, mime: String): Boolean =
+        images.publishChannelImage(bytes, mime)
 
     /** Whether this channel's name/description live in PUBLIC on-chain
      *  metadata — visible channels of any access type. Hidden channels keep
@@ -1339,200 +1067,18 @@ class ChannelManager(
         val paidUntil: Long
     )
 
-    /**
-     * Candidate membership read straight from the gate: the local cache, the
-     * KEY_REQUEST authors seen on -4 and the -4/P1 roster, each answered by
-     * the contract. Empty on failure — every caller decides its own fallback.
-     */
-    suspend fun gateMemberFlags(): List<GateMemberFlags> {
-        val channel = _current.value?.takeIf { it.type == "gated" } ?: return emptyList()
-        val gate = channel.gateAddress ?: return emptyList()
-        // Roster (-4/P1) is the persistent, device-independent candidate
-        // source; seenRequesters stays as the fallback for channels created
-        // before the roster partition existed.
-        val roster = try {
-            val keysId = channel.keysStreamId.ifEmpty {
-                StreamConstants.deriveKeysId(channel.messageStreamId)
-            }
-            epochKeys.rosterMembers(channel.messageStreamId, keysId).map { it.account }
-        } catch (e: Exception) { emptyList() }
-        // knownBanned: the ban drops them from `members` and the roster stops
-        // carrying them, so without it a banned address falls out of the
-        // candidate set and Moderation loses the entry it exists to show.
-        val candidates = (channel.members + channel.knownBanned +
-            epochKeys.seenRequesters(channel.messageStreamId) + roster)
-            .map { it.lowercase() }.distinct()
-        return try {
-            val res = bridge.call("gateMembers", JSONObject()
-                .put("gate", gate)
-                .put("candidates", JSONArray(candidates)), 60_000)
-            val arr = res.optJSONArray("members") ?: return emptyList()
-            val out = mutableListOf<GateMemberFlags>()
-            for (i in 0 until arr.length()) {
-                val m = arr.optJSONObject(i) ?: continue
-                val addr = m.optString("address").ifEmpty { null } ?: continue
-                out.add(GateMemberFlags(
-                    address = addr,
-                    isOwner = m.optBoolean("isOwner"),
-                    moderator = m.optBoolean("moderator"),
-                    access = m.optBoolean("access"),
-                    banned = m.optBoolean("banned"),
-                    everMember = m.optBoolean("everMember"),
-                    erased = m.optBoolean("erased"),
-                    paidUntil = m.optLong("paidUntil", 0L)
-                ))
-            }
-            rememberBanned(channel, out)
-            out
-        } catch (e: Exception) {
-            Log.w(TAG, "gateMembers failed: ${e.message}")
-            emptyList()
-        }
-    }
+    suspend fun gateMemberFlags(): List<GateMemberFlags> = admin.gateMemberFlags()
 
-    /**
-     * Remember every banned address the gate reports, so it stays a candidate
-     * once the roster and the members cache have let go of it. Self-healing:
-     * bans made before this record existed stick the first time they are seen.
-     */
-    private fun rememberBanned(channel: Channel, flags: List<GateMemberFlags>) {
-        val known = channel.knownBanned.map { it.lowercase() }.toSet()
-        val fresh = flags.filter { it.banned }
-            .map { it.address.lowercase() }
-            .filterNot { it in known }
-        if (fresh.isEmpty()) return
-        val updated = _channels.value.find { it.messageStreamId == channel.messageStreamId }
-            ?.let { it.copy(knownBanned = (it.knownBanned + fresh).distinct()) } ?: return
-        _channels.value = _channels.value.map {
-            if (it.messageStreamId == updated.messageStreamId) updated else it
-        }
-        store.save(_channels.value)
-        if (_current.value?.messageStreamId == updated.messageStreamId) _current.value = updated
-    }
+    suspend fun gateBannedMembers(): List<String> = admin.gateBannedMembers()
 
-    /** Addresses the GATE has banned (Moderation panel's protocol-level list). */
-    suspend fun gateBannedMembers(): List<String> =
-        gateMemberFlags().filter { it.banned }.map { it.address }
+    private suspend fun rotateForPendingBans(channel: Channel) = admin.rotateForPendingBans(channel)
 
-    /**
-     * Rotate the epoch for bans this device never rotated for.
-     *
-     * Only the channel admin can announce an epoch, so a moderator's ban cuts
-     * key distribution immediately but leaves the banned member holding the
-     * current key until an admin shows up. Comparing the gate's banned set
-     * with the one we last rotated for closes that window on the admin's next
-     * open, whoever did the banning and whenever. No event scan: free RPCs cap
-     * eth_getLogs at 10k blocks, and the flags read is one we already make.
-     */
-    private suspend fun rotateForPendingBans(channel: Channel) {
-        if (channel.type != "gated" || channel.gateAddress == null) return
-        val me = myAddress()?.lowercase() ?: return
-        if (me != channel.messageStreamId.substringBefore('/').lowercase()) return
+    suspend fun channelMembers(): List<MemberRow> = admin.channelMembers()
 
-        val banned = try { gateBannedMembers().map { it.lowercase() } }
-            catch (e: Exception) { return }
-        if (banned.isEmpty()) return
-        val covered = channel.rotatedForBanned.map { it.lowercase() }.toSet()
-        if (banned.all { it in covered }) return
+    suspend fun canManageGate(): Boolean = admin.canManageGate()
 
-        val keysId = channel.keysStreamId.ifEmpty { StreamConstants.deriveKeysId(channel.messageStreamId) }
-        try {
-            epochKeys.rotateEpoch(channel.messageStreamId, keysId)
-            val updated = channel.copy(rotatedForBanned = banned)
-            _channels.value = _channels.value.map {
-                if (it.messageStreamId == updated.messageStreamId) updated else it
-            }
-            store.save(_channels.value)
-            if (_current.value?.messageStreamId == updated.messageStreamId) _current.value = updated
-            Log.i(TAG, "Rotated the epoch for bans made while the admin was away")
-        } catch (e: Exception) {
-            Log.w(TAG, "Deferred rotation for pending bans failed (will retry next open): ${e.message}")
-        }
-    }
+    suspend fun gateAccessLabel(): String? = admin.gateAccessLabel()
 
-    suspend fun channelMembers(): List<MemberRow> {
-        val channel = _current.value ?: return emptyList()
-        if (channel.type == "gated") {
-            if (channel.gateAddress == null) return channel.members.map { MemberRow(it) }
-            val flags = gateMemberFlags()
-            if (flags.isEmpty()) return channel.members.map { MemberRow(it) }
-            return flags
-                .filter { it.isOwner || it.moderator || it.access }   // banned/ex-members
-                .map { MemberRow(it.address, it.paidUntil, it.isOwner, it.moderator) }
-        }
-        val owner = channelOwner(channel)
-        val members = com.pombo.android.core.GraphApi.streamMembers(channel.messageStreamId)
-        return (listOfNotNull(owner) + members.filter { !it.equals(owner, ignoreCase = true) })
-            .distinct().map { MemberRow(it) }
-    }
-
-    /**
-     * May this account manage the open gated channel's membership? The gate's
-     * owner or one of its moderators (web: canAddMembers). Stream permissions
-     * cannot answer it: a moderator holds none, every grant is the clone's.
-     * Fail-closed, cached per (gate, account) for the session.
-     */
-    suspend fun canManageGate(): Boolean {
-        val channel = _current.value?.takeIf { it.type == "gated" } ?: return false
-        val gate = channel.gateAddress ?: return false
-        val me = myAddress()?.lowercase() ?: return false
-        gateManageCache["$gate:$me"]?.let { return it }
-        val allowed = try {
-            val res = bridge.call("gateMembers", JSONObject()
-                .put("gate", gate)
-                .put("candidates", JSONArray(listOf(me))), 30_000)
-            val arr = res.optJSONArray("members")
-            var ok = false
-            if (arr != null) for (i in 0 until arr.length()) {
-                val m = arr.optJSONObject(i) ?: continue
-                if (!m.optString("address").equals(me, ignoreCase = true)) continue
-                ok = m.optBoolean("isOwner") || m.optBoolean("moderator")
-            }
-            ok
-        } catch (e: Exception) {
-            Log.w(TAG, "canManageGate failed (fail-closed): ${e.message}")
-            return false
-        }
-        gateManageCache["$gate:$me"] = allowed
-        return allowed
-    }
-
-    private val gateManageCache = java.util.concurrent.ConcurrentHashMap<String, Boolean>()
-
-    /**
-     * Channel Details access line for the CURRENT channel's gate (N-D):
-     * NONE 'Verified Membership' · TOKEN 'Gated · ≥ N SYM' · NFT
-     * 'Gated · SYM NFT' · PAID 'N SYM / D days'. Null = not gated or
-     * unreadable — the caller keeps its default label.
-     */
-    suspend fun gateAccessLabel(): String? {
-        val channel = _current.value?.takeIf { it.type == "gated" } ?: return null
-        val gate = channel.gateAddress ?: return null
-        return try {
-            val info = bridge.call("gateInfo", JSONObject().put("gate", gate))
-            val mode = info.optInt("mode", GATE_MODE_NONE)
-            if (mode == GATE_MODE_NONE) return "Verified Membership"
-            val meta = bridge.call("gateTokenMeta", JSONObject().put("token", info.optString("token")))
-            val symbol = meta.optString("symbol")
-            val decimals = if (meta.isNull("decimals")) 0 else meta.optInt("decimals")
-            fun fmt(raw: String) = java.math.BigDecimal(raw)
-                .movePointLeft(decimals).stripTrailingZeros().toPlainString()
-            when (mode) {
-                GATE_MODE_TOKEN -> "Gated · Hold ≥ ${fmt(info.optString("minBalance", "0"))} $symbol"
-                GATE_MODE_NFT -> "Gated · Hold $symbol NFT"
-                GATE_MODE_PAID -> {
-                    val days = (info.optString("duration", "0").toLongOrNull() ?: 0L) / 86_400.0
-                    val d = if (days == days.toLong().toDouble()) days.toLong().toString()
-                        else "%.1f".format(days)
-                    // WPOL-priced gates display POL: gatePay auto-wraps, so
-                    // plain POL is literally what the subscriber spends.
-                    val paySymbol = if (info.optString("token").lowercase() == WRAPPED_NATIVE) "POL" else symbol
-                    "Paid · ${fmt(info.optString("price", "0"))} $paySymbol / $d ${if (d == "1") "day" else "days"}"
-                }
-                else -> null
-            }
-        } catch (e: Exception) { null }
-    }
 
     /**
      * Explore card access info (N-D), as the 3-line pricing anatomy the
@@ -1545,44 +1091,10 @@ class ChannelManager(
         val mode: Int, val verb: String?, val value: String?, val qualifier: String?
     )
 
-    suspend fun gateCardInfo(gateAddress: String): GateCardInfo? = try {
-        val info = bridge.call("gateInfo", JSONObject().put("gate", gateAddress))
-        val mode = info.optInt("mode", GATE_MODE_NONE)
-        if (mode == GATE_MODE_NONE) GateCardInfo(mode, null, null, null)
-        else {
-            val meta = bridge.call("gateTokenMeta", JSONObject().put("token", info.optString("token")))
-            val symbol = meta.optString("symbol")
-            val decimals = if (meta.isNull("decimals")) 0 else meta.optInt("decimals")
-            fun fmt(raw: String) = java.math.BigDecimal(raw)
-                .movePointLeft(decimals).stripTrailingZeros().toPlainString()
-            when (mode) {
-                GATE_MODE_TOKEN -> GateCardInfo(
-                    mode, "Hold", "${fmt(info.optString("minBalance", "0"))} $symbol", "in your wallet")
-                GATE_MODE_NFT -> GateCardInfo(mode, "Hold", "$symbol NFT", "in your wallet")
-                GATE_MODE_PAID -> {
-                    val days = (info.optString("duration", "0").toLongOrNull() ?: 0L) / 86_400.0
-                    val d = if (days == days.toLong().toDouble()) days.toLong().toString()
-                        else "%.1f".format(days)
-                    val sym = if (info.optString("token").lowercase() == WRAPPED_NATIVE) "POL" else symbol
-                    // "per" spells out the recurrence under SUBSCRIBE
-                    GateCardInfo(mode, "Subscribe",
-                        "${fmt(info.optString("price", "0"))} $sym",
-                        if (d == "1") "per day" else "per $d days")
-                }
-                else -> GateCardInfo(mode, null, null, null)
-            }
-        }
-    } catch (e: Exception) { null }
+    suspend fun gateCardInfo(gateAddress: String): GateCardInfo? = admin.gateCardInfo(gateAddress)
 
-    /** Gate mode of the CURRENT channel; null = not gated or unreadable. */
-    suspend fun currentGateMode(): Int? {
-        val channel = _current.value?.takeIf { it.type == "gated" } ?: return null
-        val gate = channel.gateAddress ?: return null
-        return try {
-            bridge.call("gateInfo", JSONObject().put("gate", gate))
-                .optInt("mode", -1).takeIf { it >= 0 }
-        } catch (e: Exception) { null }
-    }
+    suspend fun currentGateMode(): Int? = admin.currentGateMode()
+
 
     /** Everything the gate entry screen renders, in one fetch. */
     data class GateEntryInfo(
@@ -1597,282 +1109,30 @@ class ChannelManager(
         val paidUntil: Long
     )
 
-    suspend fun gateEntryInfo(gateAddress: String): GateEntryInfo {
-        val info = bridge.call("gateInfo", JSONObject().put("gate", gateAddress))
-        val mode = info.optInt("mode", GATE_MODE_NONE)
-        val token = info.optString("token")
-        val me = myAddress() ?: throw IllegalStateException("No identity")
-        var symbol = ""
-        var decimals: Int? = null
-        var balance = "0"
-        var paidUntil = 0L
-        if (mode != GATE_MODE_NONE && token.isNotEmpty()) {
-            val meta = bridge.call("gateTokenMeta", JSONObject().put("token", token))
-            symbol = meta.optString("symbol")
-            decimals = if (meta.isNull("decimals")) null else meta.optInt("decimals")
-            if (mode == GATE_MODE_PAID) {
-                paidUntil = bridge.call("gatePaidUntil", JSONObject()
-                    .put("gate", gateAddress).put("user", me))
-                    .optString("paidUntil", "0").toLongOrNull() ?: 0L
-            } else {
-                balance = bridge.call("gateTokenBalance", JSONObject()
-                    .put("token", token).put("user", me)).optString("balance", "0")
-            }
-        }
-        return GateEntryInfo(
-            gateAddress.lowercase(), mode, token,
-            info.optString("minBalance", "0"), info.optString("price", "0"),
-            info.optString("duration", "0").toLongOrNull() ?: 0L,
-            symbol, decimals, balance, paidUntil)
-    }
+    suspend fun gateEntryInfo(gateAddress: String): GateEntryInfo = admin.gateEntryInfo(gateAddress)
 
-    /** Creation-form helper: token metadata (also probes the contract). */
-    suspend fun gateTokenMeta(token: String): Pair<String, Int?> {
-        val meta = bridge.call("gateTokenMeta", JSONObject().put("token", token))
-        return Pair(meta.optString("symbol"),
-            if (meta.isNull("decimals")) null else meta.optInt("decimals"))
-    }
+    suspend fun gateTokenMeta(token: String): Pair<String, Int?> = admin.gateTokenMeta(token)
 
-    /**
-     * Creation-form probe: an address without a working balanceOf would mint
-     * a gate that fails checkAccess for everyone, forever. Throws on failure.
-     */
-    suspend fun gateTokenBalance(token: String, user: String? = null): String {
-        val who = user ?: myAddress() ?: throw IllegalStateException("No identity")
-        return bridge.call("gateTokenBalance", JSONObject()
-            .put("token", token).put("user", who)).optString("balance", "0")
-    }
+    suspend fun gateTokenBalance(token: String, user: String? = null): String =
+        admin.gateTokenBalance(token, user)
 
-    /** Drop the bridge's cached (fail-closed) access verdicts for a gate. */
-    suspend fun gateInvalidateAccess(gateAddress: String) {
-        runCatching {
-            bridge.call("gateInvalidateAccess", JSONObject().put("gate", gateAddress))
-        }
-    }
+    suspend fun gateInvalidateAccess(gateAddress: String) = admin.gateInvalidateAccess(gateAddress)
 
-    /**
-     * PAID gates: pay one subscription period (wrap/approve/pay inside the
-     * bridge call — the deny cache for the payer clears with the tx).
-     */
-    suspend fun gatePay(gateAddress: String) {
-        bridge.call("gatePay", JSONObject().put("gate", gateAddress), 600_000)
-    }
+    suspend fun gatePay(gateAddress: String) = admin.gatePay(gateAddress)
 
-    /**
-     * Resolves a member input to a 0x address: passes a raw address through,
-     * otherwise treats it as an ENS name and resolves it forward (name→address).
-     * Lets the Members panel accept "pombo.eth" as well as a raw address.
-     */
-    suspend fun resolveMemberInput(input: String): String? {
-        val t = input.trim()
-        if (Regex("^0x[a-fA-F0-9]{40}$").matches(t)) return t
-        if (!t.contains('.')) return null
-        return try {
-            bridge.call("resolveEnsName", JSONObject().put("name", t), 20_000)
-                .optString("address").takeIf { Regex("^0x[a-fA-F0-9]{40}$").matches(it) }
-        } catch (e: Exception) { null }
-    }
+    suspend fun resolveMemberInput(input: String): String? = admin.resolveMemberInput(input)
 
-    /**
-     * Grants a member access on all three streams — sequential, because
-     * parallel on-chain writes from one account collide on the nonce.
-     * Admin stream is subscribe-only: members read moderation, owner writes it.
-     */
-    suspend fun addMember(address: String) {
-        val channel = _current.value ?: throw IllegalStateException("No channel open")
-        if (channel.type != "gated" && !amOwner(channel)) throw IllegalStateException("Only the channel admin can add members")
-        // Accept an ENS name or a raw address.
-        val addr = resolveMemberInput(address)
-            ?: throw IllegalStateException("Invalid address or ENS name")
-        if (channel.members.any { it.equals(addr, ignoreCase = true) }) {
-            throw IllegalStateException("Address is already a member")
-        }
+    suspend fun addMember(address: String) = admin.addMember(address)
 
-        // Gated (N-C): membership is ONE gate transaction — allow() marks the
-        // address allowlisted + everMember. No stream grants: access is proven
-        // per-message via ERC-1271.
-        if (channel.type == "gated") {
-            val gate = channel.gateAddress
-                ?: throw IllegalStateException("Gate address unknown (repair pending)")
-            bridge.call("gateAllow", JSONObject().put("gate", gate).put("user", addr), 180_000)
-            val updated = channel.copy(members = channel.members + addr)
-            _channels.value = _channels.value.map { if (it.messageStreamId == updated.messageStreamId) updated else it }
-            store.save(_channels.value)
-            _current.value = updated
-            return
-        }
+    suspend fun removeMember(address: String) = admin.removeMember(address)
 
-        // `-1`, `-2` and `-4`: subscribe + publish (messages, presence, and
-        // the keys stream needs publish so the member can answer KEY_REQUESTs).
-        // `-3` (moderation): subscribe ONLY — a normal member reads the admin
-        // state but never writes it; publishing ADMIN_STATE is the owner's alone
-        // (web addMember does the same).
-        val rw = JSONArray().put(
-            JSONObject().put("userId", addr).put("permissions", JSONArray(listOf("subscribe", "publish")))
-        )
-        val readOnly = JSONArray().put(
-            JSONObject().put("userId", addr).put("permissions", JSONArray(listOf("subscribe")))
-        )
-        setPermissionsRetry(channel.messageStreamId, rw)
-        setPermissionsRetry(channel.ephemeralStreamId, rw)
-        if (channel.adminStreamId.isNotEmpty()) setPermissionsRetry(channel.adminStreamId, readOnly)
-        val keysId = channel.keysStreamId.ifEmpty { StreamConstants.deriveKeysId(channel.messageStreamId) }
-        setPermissionsRetry(keysId, rw)
+    suspend fun rekeyPublishKey(): Int = admin.rekeyPublishKey()
 
-        com.pombo.android.core.GraphApi.clearCache()
-        val updated = channel.copy(members = channel.members + addr)
-        _channels.value = _channels.value.map { if (it.messageStreamId == updated.messageStreamId) updated else it }
-        store.save(_channels.value)
-        _current.value = updated
-    }
+    suspend fun streamPermissions(): List<com.pombo.android.core.GraphApi.StreamPermission> = admin.streamPermissions()
 
-    /** Revokes all permissions (web: empty permission array = revoke). */
-    suspend fun removeMember(address: String) {
-        val channel = _current.value ?: throw IllegalStateException("No channel open")
-        if (channel.type != "gated" && !amOwner(channel)) throw IllegalStateException("Only the channel admin can remove members")
-        val addr = address.trim()
-        // The creator owns the streams on-chain; removing them is meaningless
-        // and would only strip their explicit grants.
-        if (channelOwner(channel)?.equals(addr, ignoreCase = true) == true) {
-            throw IllegalStateException("Cannot remove the channel creator")
-        }
+    suspend fun setMemberGrant(address: String, canGrant: Boolean) =
+        admin.setMemberGrant(address, canGrant)
 
-        // Gated: removing takes the address off the allowlist WITHOUT the ban
-        // mark, so re-adding later is a plain allow(). The rotation below cuts
-        // their reads, and the contract's sticky isValidSignature keeps their
-        // history readable for everyone else (Q10). Only Closed gates have an
-        // allowlist: elsewhere membership is the asset or the subscription, and
-        // Ban is the only way to cut it.
-        if (channel.type == "gated") {
-            val gate = channel.gateAddress
-                ?: throw IllegalStateException("Gate address unknown (repair pending)")
-            check(currentGateMode() == GATE_MODE_NONE) {
-                "Only Closed channels have an allowlist to remove from — use Ban instead"
-            }
-            bridge.call("gateRevokeAllow", JSONObject()
-                .put("gate", gate).put("user", addr), 180_000)
-            val keysIdGated = channel.keysStreamId.ifEmpty { StreamConstants.deriveKeysId(channel.messageStreamId) }
-            val updated = channel.copy(members = channel.members.filterNot { it.equals(addr, ignoreCase = true) })
-            _channels.value = _channels.value.map { if (it.messageStreamId == updated.messageStreamId) updated else it }
-            store.save(_channels.value)
-            _current.value = updated
-            gateManageCache.clear()
-            try {
-                epochKeys.rotateEpoch(channel.messageStreamId, keysIdGated)
-            } catch (e: Exception) {
-                Log.w(TAG, "Epoch rotation after removal FAILED — the removed member can still read new messages until the next rotation: ${e.message}")
-            }
-            return
-        }
-
-        val revoke = JSONArray().put(
-            JSONObject().put("userId", addr).put("permissions", JSONArray())
-        )
-        setPermissionsRetry(channel.messageStreamId, revoke)
-        setPermissionsRetry(channel.ephemeralStreamId, revoke)
-        if (channel.adminStreamId.isNotEmpty()) setPermissionsRetry(channel.adminStreamId, revoke)
-        val keysId = channel.keysStreamId.ifEmpty { StreamConstants.deriveKeysId(channel.messageStreamId) }
-        setPermissionsRetry(keysId, revoke)
-
-        com.pombo.android.core.GraphApi.clearCache()
-        val updated = channel.copy(members = channel.members.filterNot { it.equals(addr, ignoreCase = true) })
-        _channels.value = _channels.value.map { if (it.messageStreamId == updated.messageStreamId) updated else it }
-        store.save(_channels.value)
-        _current.value = updated
-
-        // Rotate the epoch so the removed member cannot read anything published
-        // from here on — they keep what they already read; the rotation protects
-        // the future, not the past. Failure is surfaced, not fatal.
-        try {
-            epochKeys.rotateEpoch(channel.messageStreamId, keysId)
-        } catch (e: Exception) {
-            Log.w(TAG, "Epoch rotation after member removal FAILED — removed member can still read new messages until the next rotation: ${e.message}")
-        }
-    }
-
-    /**
-     * Replaces the shared publish key of a Members-only channel: grants the
-     * new key's address and revokes the old one on `-1`/`-2` (one transaction
-     * per stream), then announces the new key on `-4`. Members pick it up
-     * through the normal PUB_WRAP flow.
-     */
-    suspend fun rekeyPublishKey(): Int {
-        val channel = _current.value ?: throw IllegalStateException("No channel open")
-        check(channel.type == "gated" && channel.authorMode == "members") {
-            "the publish key only exists on Members-only channels"
-        }
-        val keysId = channel.keysStreamId.ifEmpty { StreamConstants.deriveKeysId(channel.messageStreamId) }
-        return epochKeys.rekeyPublishKey(channel.messageStreamId, keysId) { newAddress, oldAddress ->
-            val assignments = JSONArray().apply {
-                // PUBLISH alone: the shared key writes, the clone reads.
-                put(JSONObject().put("userId", newAddress)
-                    .put("permissions", JSONArray(listOf("publish"))))
-                if (oldAddress != null) put(JSONObject().put("userId", oldAddress)
-                    .put("permissions", JSONArray()))
-            }
-            setPermissionsRetry(channel.messageStreamId, assignments)
-            setPermissionsRetry(channel.ephemeralStreamId, assignments)
-        }
-    }
-
-    /**
-     * The on-chain permission matrix for the channel's message stream (web:
-     * graphAPI.getStreamPermissions), for the Members panel's Stream Permissions
-     * list. Owner-only surface, so no permission gate here — the caller shows it.
-     */
-    suspend fun streamPermissions(): List<com.pombo.android.core.GraphApi.StreamPermission> {
-        val channel = _current.value ?: return emptyList()
-        return com.pombo.android.core.GraphApi.getStreamPermissions(channel.messageStreamId)
-    }
-
-    /**
-     * Grants or revokes admin for a member (Members panel "Admin" toggle).
-     *
-     * ADMIN = TRUSTED CO-OWNER. Streamr's GRANT permission is all-or-nothing:
-     * anyone with `canGrant` can set ANY of the five flags (edit, delete,
-     * publish, subscribe, grant) for ANY user, including themselves — there is
-     * no "manage read/write only" permission on-chain. So an admin can already
-     * escalate to full owner. Given that, we grant admin the full non-owner set
-     * — subscribe + publish + grant on ALL THREE streams — and only withhold the
-     * two flags that define ownership: EDIT and DELETE. Those stay the owner's,
-     * which is the sole on-chain line left between admin and owner
-     * (isOwner = canGrant && canEdit && canDelete).
-     *
-     * Revoking returns the member to the normal set: sub+pub on `-1`/`-2`, sub
-     * on `-3` (they read moderation state but do not publish it).
-     */
-    suspend fun setMemberGrant(address: String, canGrant: Boolean) {
-        val channel = _current.value ?: throw IllegalStateException("No channel open")
-        if (!amOwner(channel)) throw IllegalStateException("Only the channel admin can change permissions")
-        val addr = address.trim()
-        // Gated (N-C): "can add members" is the gate's moderator flag — one
-        // owner transaction; the contract enforces the rest (mods manage
-        // members, never erase history, never touch owner/other mods).
-        if (channel.type == "gated") {
-            val gate = channel.gateAddress
-                ?: throw IllegalStateException("Gate address unknown (repair pending)")
-            bridge.call("gateSetModerator", JSONObject()
-                .put("gate", gate).put("user", addr).put("enabled", canGrant), 180_000)
-            return
-        }
-        fun assign(perms: List<String>) = JSONArray().put(
-            JSONObject().put("userId", addr).put("permissions", JSONArray(perms))
-        )
-        if (canGrant) {
-            // Admin: subscribe + publish + grant on every stream. Never edit/delete.
-            val all = listOf("subscribe", "publish", "grant")
-            setPermissionsRetry(channel.messageStreamId, assign(all))
-            setPermissionsRetry(channel.ephemeralStreamId, assign(all))
-            if (channel.adminStreamId.isNotEmpty()) setPermissionsRetry(channel.adminStreamId, assign(all))
-        } else {
-            // Back to a normal member: sub+pub on -1/-2, sub only on -3.
-            val rw = listOf("subscribe", "publish")
-            setPermissionsRetry(channel.messageStreamId, assign(rw))
-            setPermissionsRetry(channel.ephemeralStreamId, assign(rw))
-            if (channel.adminStreamId.isNotEmpty()) setPermissionsRetry(channel.adminStreamId, assign(listOf("subscribe")))
-        }
-        com.pombo.android.core.GraphApi.clearCache()
-    }
 
     /** Storage nodes actually assigned to the message stream. */
     suspend fun storageNodes(): List<String> = try {
@@ -2204,12 +1464,6 @@ class ChannelManager(
         if (_current.value?.messageStreamId == updated.messageStreamId) _current.value = updated
     }
 
-    /** Drops partial assemblies whose chunks stopped arriving (web: TTL sweep). */
-    private fun sweepStaleAssemblies() {
-        val cutoff = System.currentTimeMillis() - ASSEMBLY_TTL_MS
-        pendingImages.entries.removeAll { it.value.lastSeen < cutoff }
-    }
-
     /**
      * Full streamr.js createStream flow: 3 streams serially (nonce),
      * permissions per type, storage on -1/-3, password challenge on -3/P2.
@@ -2526,7 +1780,7 @@ class ChannelManager(
             .put("id", id).put("description", description).put("partitions", partitions), 120_000)
     }
 
-    private suspend fun setPermissionsRetry(streamId: String, assignments: JSONArray) = retry(7) {
+    internal suspend fun setPermissionsRetry(streamId: String, assignments: JSONArray) = retry(7) {
         bridge.call("setPermissions", JSONObject()
             .put("streamId", streamId).put("assignments", assignments), 120_000)
     }
@@ -2895,17 +2149,7 @@ class ChannelManager(
 
     // ==================== moderation (ADMIN_STATE) ====================
 
-    /**
-     * Channel owner. Falls back to the address that prefixes the stream ID
-     * (`0xowner/path`), which Streamr guarantees — the web does the same when
-     * `createdBy` is unknown, e.g. for channels joined from Explore.
-     */
-    private fun channelOwner(channel: Channel): String? =
-        channel.createdBy?.lowercase()
-            ?: channel.messageStreamId.substringBefore('/', "").lowercase().ifEmpty { null }
-
-    fun amOwner(channel: Channel): Boolean =
-        channelOwner(channel)?.equals(myAddress(), ignoreCase = true) == true
+    fun amOwner(channel: Channel): Boolean = admin.amOwner(channel)
 
     /**
      * Whether the current account may moderate the open channel: an on-chain
@@ -2928,7 +2172,7 @@ class ChannelManager(
         val canDelete: Boolean = false
     )
 
-    private val _perms = MutableStateFlow(ChannelPerms())
+    private val _perms get() = admin._perms
     val perms: StateFlow<ChannelPerms> = _perms.asStateFlow()
 
     /** Convenience for the moderation surfaces, which all key off DELETE. */
@@ -2936,120 +2180,15 @@ class ChannelManager(
         .map { it.canDelete }
         .stateIn(scope, SharingStarted.Eagerly, false)
 
-    /** streamId -> (address that was checked, verdict). */
-    private val permCache = HashMap<String, Pair<String, ChannelPerms>>()
+    private fun refreshModerationPermission(channel: Channel, preview: Boolean) =
+        admin.refreshModerationPermission(channel, preview)
 
-    private fun refreshModerationPermission(channel: Channel, preview: Boolean) {
-        val me = myAddress()?.lowercase()
-        // A DM has no moderation surface, and a preview is read-only until the
-        // user joins — the web zeroes both cases before it even asks.
-        if (me == null || preview || channel.type == "dm") {
-            _perms.value = ChannelPerms()
-            return
-        }
-        val key = channel.messageStreamId
-        // Serve the cache only when it was filled by THIS account: switching
-        // accounts must not inherit the previous one's verdict.
-        permCache[key]?.let { (addr, cached) ->
-            if (addr == me) { _perms.value = cached; return }
-        }
-        _perms.value = ChannelPerms()
-        scope.launch {
-            val verdict = try {
-                val r = bridge.call("checkPermissions", JSONObject().put("streamId", key), 30_000)
-                ChannelPerms(
-                    canPublish = r.optBoolean("canPublish", false),
-                    canGrant = r.optBoolean("canGrant", false),
-                    canEdit = r.optBoolean("canEdit", false),
-                    canDelete = r.optBoolean("canDelete", false)
-                )
-            } catch (e: Exception) {
-                // Fail closed: offering actions we cannot perform is worse than
-                // hiding actions the user might have — the former fails at
-                // publish time with nothing to show for it.
-                Log.w(TAG, "Permission check failed for $key: ${e.message}")
-                ChannelPerms()
-            }
-            permCache[key] = me to verdict
-            // Only apply if this channel is still the open one — a fast switch
-            // must not stamp the previous channel's verdict onto the new one.
-            if (_current.value?.messageStreamId == key) _perms.value = verdict
-        }
-    }
+    private suspend fun loadAdminState(channel: Channel, generation: Int) =
+        admin.loadAdminState(channel, generation)
 
-    private suspend fun loadAdminState(channel: Channel, generation: Int) {
-        try {
-            // Password channels seal ADMIN_STATE too, and applyAdminMessage's
-            // fallback opens it with PomboCrypto — Bouncy Castle PBKDF2, ~1s per
-            // message on a phone, up to 5 of them, all inside the render gate.
-            // Handing the password to the bridge moves that to BoringSSL and
-            // overlaps it with the resend.
-            val args = JSONObject()
-                .put("streamId", channel.adminStreamId)
-                .put("partition", StreamConstants.ADMIN_MODERATION)
-                .put("last", 5)
-            channel.password?.let { args.put("password", it) }
-            // Raw envelopes for gated, same as message history: authority on
-            // -3 is the recovered envelope signer, never the present gate.
-            if (channel.type == "gated") args.put("recoverSigner", true).put("raw", true)
-            val t0 = System.currentTimeMillis()
-            val res = bridge.call("resend", args, 30_000)
-            android.util.Log.d("PomboPerf",
-                "adminState ${channel.name}: call=${System.currentTimeMillis() - t0}ms " +
-                    "n=${res.optJSONArray("messages")?.length() ?: -1}")
-            if (!stillCurrent(generation)) return
-            val arr = res.optJSONArray("messages") ?: return
-            for (i in 0 until arr.length()) {
-                val entry = arr.optJSONObject(i) ?: continue
-                var content = entry.opt("content")
-                val meta = entry.optJSONObject("meta") ?: JSONObject()
-                // Gated: -3 authority moved to ingest — the clone holds the
-                // publish grant for everyone, so only the envelope SIGNER
-                // proves the admin wrote this (gatedAuthor drops the rest).
-                if (channel.type == "gated" &&
-                    gatedAuthor(channel, channel.adminStreamId, meta) == null) continue
-                // ADMIN_STATE arrives as an epoch envelope. History context so
-                // entries sealed under an older epoch open in that epoch's
-                // validity window instead of skipping the freshness rule.
-                if (content is JSONObject &&
-                    com.pombo.android.core.EpochKeyCrypto.isEpochEnvelope(content) &&
-                    isEpochChannel(channel)
-                ) {
-                    val keysId = channel.keysStreamId.ifEmpty {
-                        StreamConstants.deriveKeysId(channel.messageStreamId)
-                    }
-                    content = epochKeys.tryDecrypt(
-                        channel.messageStreamId, keysId, content,
-                        gated = true, live = false, timestamp = meta.optLong("timestamp", 0L)
-                    ) ?: continue
-                }
-                applyAdminMessage(channel, content, meta, generation)
-            }
-            // Even an empty history is an answer: the stream holds no
-            // snapshot, so rev bookkeeping may start from zero.
-            adminLoaded.add(channel.adminStreamId)
-        } catch (e: Exception) { /* no admin history */ }
-    }
+    private fun startAdminPoller(channel: Channel, generation: Int) =
+        admin.startAdminPoller(channel, generation)
 
-    /**
-     * Periodic ADMIN_STATE refresh for the open channel (web adminStatePoller,
-     * CONFIG.subscriptions.adminPollIntervalMs). There is no live subscription
-     * on -3 — like the web, moderation converges via the on-open load, the
-     * admin_invalidate signal on the already-subscribed -2 (instant path) and
-     * this poller (safety net). The resend goes straight to the storage node,
-     * so no overlay membership is spent on it. Same lifecycle as presence:
-     * starts on open, dies on close/switch.
-     */
-    private fun startAdminPoller(channel: Channel, generation: Int) {
-        adminPollJob?.cancel()
-        adminPollJob = scope.launch {
-            while (isActive) {
-                delay(ADMIN_POLL_INTERVAL_MS)
-                if (!stillCurrent(generation)) return@launch
-                loadAdminState(channel, generation)
-            }
-        }
-    }
 
     /**
      * TTL-aware republish of the -3 artifacts on owner open (web channels.js
@@ -3199,210 +2338,21 @@ class ChannelManager(
         contentAny: Any?,
         meta: JSONObject,
         generation: Int
-    ) {
-        // Pins, hidden ids and bans are flat flows describing the OPEN channel,
-        // so a late arrival for any other channel must not reach them. Same
-        // two independent nets as handleContent: the generation fence, plus a
-        // counter-independent check that this is the admin stream on screen.
-        if (!stillCurrent(generation)) return
-        if (channel.adminStreamId != _current.value?.adminStreamId) return
-        val data: JSONObject = when (contentAny) {
-            is JSONObject -> contentAny
-            is String -> {
-                val pwd = channel.password ?: return
-                try { JSONObject(PomboCrypto.decryptString(contentAny, pwd)) } catch (e: Exception) { return }
-            }
-            else -> return
-        }
-        if (data.optString("type") != "ADMIN_STATE") return
-        // Owner-authored only. Authority is the ACCOUNT: on the -3 stream the
-        // owner always publishes as the wallet (on-chain permission — an
-        // ephemeral key can't), so publisherId still works there; but the
-        // admin_invalidate snapshot rides the -2 stream, which will publish
-        // under an ephemeral key once step 5 lands — there the proof-resolved
-        // `account` (stamped by attachAccount before this is called) is the
-        // only field that still names the owner. Web checks data.account too.
-        // Latest-wins by (rev, ts) — the timestamp breaks rev ties so a stale
-        // replica snapshot sharing a rev cannot overwrite a newer one.
-        val senderId = data.optString("account")
-            .ifEmpty { meta.optString("publisherId") }.lowercase()
-        val owner = channelOwner(channel)
-        if (owner != null && senderId.isNotEmpty() && senderId != owner) return
-        val rev = data.optInt("rev", 0)
-        val ts = data.optLong("ts", 0L)
-        val curRev = adminRevs[channel.adminStreamId] ?: 0
-        val curTs = adminTs[channel.adminStreamId] ?: 0L
-        if (rev < curRev || (rev == curRev && ts < curTs)) return
-        adminRevs[channel.adminStreamId] = rev
-        adminTs[channel.adminStreamId] = ts
-        val state = data.optJSONObject("state") ?: return
-        state.optJSONArray("hiddenMessageIds")?.let { arr ->
-            _hiddenIds.value = (0 until arr.length()).mapNotNull { arr.optString(it).ifEmpty { null } }.toSet()
-        }
-        state.optJSONArray("bannedMembers")?.let { arr ->
-            _bannedMembers.value = (0 until arr.length()).mapNotNull { arr.optString(it).lowercase().ifEmpty { null } }.toSet()
-        }
-        state.optJSONArray("pins")?.let { _pins.value = pinsFromJson(it) }
-    }
+    ) = admin.applyAdminMessage(channel, contentAny, meta, generation)
 
-    /** Publishes the full ADMIN_STATE with an incremented rev (owner only). */
-    private suspend fun publishAdminState(channel: Channel) {
-        val addr = myAddress() ?: return
-        // Never compute a rev off an unscanned stream (web gates publish on
-        // adminLoaded): moderating fast, before the on-open load finished,
-        // published rev=1 over a channel already at rev N — every peer with
-        // the higher rev discarded it. Failure proceeds with the stale rev,
-        // matching the web's "may publish stale rev" warning path.
-        if (channel.adminStreamId !in adminLoaded) {
-            runCatching { loadAdminState(channel, switchGeneration) }
-        }
-        val rev = (adminRevs[channel.adminStreamId] ?: 0) + 1
-        val state = JSONObject()
-            .put("bannedMembers", JSONArray(_bannedMembers.value.toList()))
-            .put("hiddenMessageIds", JSONArray(_hiddenIds.value.toList()))
-            .put("pins", pinsToJson(_pins.value))
-        val msg = JSONObject()
-            .put("type", "ADMIN_STATE").put("rev", rev)
-            .put("ts", System.currentTimeMillis()).put("createdBy", addr)
-            .put("state", state)
-        publishForChannel(channel, channel.adminStreamId, StreamConstants.ADMIN_MODERATION, msg)
-        // Commit the revision only once it is on the wire. Incrementing up
-        // front meant a failed publish — which [moderate] rolls back — still
-        // burned a revision, so the next attempt skipped a number.
-        adminRevs[channel.adminStreamId] = rev
-        adminTs[channel.adminStreamId] = msg.optLong("ts")
-        // Low-latency fan-out (web channels.js publishAdminState): nobody —
-        // web or Android — subscribes -3 live, so this ephemeral signal with
-        // the full snapshot is what makes a ban/pin/hide reach open channels
-        // immediately; the 30s pollers are the fallback. Best-effort: the
-        // canonical -3 publish above already succeeded.
-        try {
-            val signal = JSONObject()
-                .put("type", "admin_invalidate")
-                .put("rev", rev)
-                .put("ts", msg.optLong("ts"))
-                .put("snapshot", msg)
-            publishForChannel(channel, channel.ephemeralStreamId, StreamConstants.EPH_CONTROL, signal)
-        } catch (e: Exception) {
-            Log.d(TAG, "admin_invalidate publish failed (non-fatal): ${e.message}")
-        }
-    }
+    private suspend fun publishAdminState(channel: Channel) = admin.publishAdminState(channel)
 
-    /**
-     * Moderation is applied locally first so the UI reacts instantly, then
-     * published as ADMIN_STATE. If the publish fails the optimistic change is
-     * rolled back and the error propagates — otherwise this device would show
-     * a pin/ban that no one else can see.
-     */
-    private suspend fun <T> moderate(
-        channel: Channel,
-        state: MutableStateFlow<T>,
-        next: T
-    ) {
-        val previous = state.value
-        state.value = next
-        try {
-            publishAdminState(channel)
-        } catch (e: Exception) {
-            state.value = previous
-            throw e
-        }
-    }
+    suspend fun hideMessage(messageId: String, hide: Boolean) = admin.hideMessage(messageId, hide)
 
-    suspend fun hideMessage(messageId: String, hide: Boolean) {
-        val channel = _current.value ?: throw IllegalStateException("No channel open")
-        if (!amOwner(channel)) throw IllegalStateException("Only the channel admin can moderate")
-        moderate(channel, _hiddenIds, if (hide) _hiddenIds.value + messageId else _hiddenIds.value - messageId)
-    }
+    suspend fun pinMessage(messageId: String, pin: Boolean) = admin.pinMessage(messageId, pin)
 
-    suspend fun pinMessage(messageId: String, pin: Boolean) {
-        val channel = _current.value ?: throw IllegalStateException("No channel open")
-        if (!amOwner(channel)) throw IllegalStateException("Only the channel admin can moderate")
-        val next = if (pin) {
-            val msg = _messages.value.find { it.id == messageId }
-                ?: throw IllegalStateException("Message not found")
-            if (_pins.value.any { it.targetId == messageId }) return
-            _pins.value + Pin(
-                messageId, msg.text, msg.sender,
-                senderName = msg.senderName, ensName = msg.ensName,
-                pinnedAt = System.currentTimeMillis()
-            )
-        } else {
-            _pins.value.filterNot { it.targetId == messageId }
-        }
-        moderate(channel, _pins, next)
-    }
+    suspend fun banMember(address: String, ban: Boolean = true) = admin.banMember(address, ban)
 
-    suspend fun banMember(address: String, ban: Boolean = true) {
-        val channel = _current.value ?: throw IllegalStateException("No channel open")
-        if (!amOwner(channel)) throw IllegalStateException("Only the channel admin can moderate")
-        val addr = address.lowercase()
-        moderate(
-            channel, _bannedMembers,
-            if (ban) _bannedMembers.value + addr else _bannedMembers.value - addr
-        )
-    }
+    suspend fun banMemberLevels(address: String, client: Boolean, protocol: Boolean) =
+        admin.banMemberLevels(address, client, protocol)
 
-    /**
-     * The two enforcement levels behind one Ban action.
-     *
-     * CLIENT is the ADMIN_STATE ban: every client hides the author's messages,
-     * free and reversible, and only the creator may publish it. PROTOCOL is
-     * the gate ban: `checkAccess` goes false, so no responder hands out keys,
-     * and the epoch rotation that follows cuts reads from here on. Costs gas.
-     */
-    suspend fun banMemberLevels(address: String, client: Boolean, protocol: Boolean) {
-        val channel = _current.value ?: throw IllegalStateException("No channel open")
-        val addr = address.trim()
-        if (channelOwner(channel)?.equals(addr, ignoreCase = true) == true) {
-            throw IllegalStateException("Cannot ban the channel creator")
-        }
-        if (protocol) {
-            val gate = channel.gateAddress
-                ?: throw IllegalStateException("Only gated channels have a protocol-level ban")
-            bridge.call("gateBan", JSONObject()
-                .put("gate", gate).put("user", addr).put("erase", false), 180_000)
-            gateManageCache.clear()
-            val keysId = channel.keysStreamId.ifEmpty { StreamConstants.deriveKeysId(channel.messageStreamId) }
-            var rotated = channel.rotatedForBanned
-            try {
-                epochKeys.rotateEpoch(channel.messageStreamId, keysId)
-                // Covered: the deferred pass must not rotate again for this one.
-                rotated = (rotated + addr.lowercase()).distinct()
-            } catch (e: Exception) {
-                Log.w(TAG, "Epoch rotation after gate ban FAILED — banned member can still read new messages until the next rotation: ${e.message}")
-            }
-            val updated = channel.copy(
-                members = channel.members.filterNot { it.equals(addr, ignoreCase = true) },
-                rotatedForBanned = rotated,
-                knownBanned = (channel.knownBanned + addr.lowercase()).distinct()
-            )
-            _channels.value = _channels.value.map { if (it.messageStreamId == updated.messageStreamId) updated else it }
-            store.save(_channels.value)
-            _current.value = updated
-        }
-        if (client) banMember(addr, true)
-    }
+    suspend fun unbanMemberLevels(address: String) = admin.unbanMemberLevels(address)
 
-    /**
-     * Lifts whichever bans the address actually carries: the gate ban costs a
-     * transaction, so it is only sent when the contract really has them
-     * banned, and the free ADMIN_STATE entry is always cleared alongside.
-     */
-    suspend fun unbanMemberLevels(address: String) {
-        val channel = _current.value ?: throw IllegalStateException("No channel open")
-        val addr = address.trim()
-        val bannedOnChain = channel.gateAddress != null &&
-            gateBannedMembers().any { it.equals(addr, ignoreCase = true) }
-        if (bannedOnChain) {
-            bridge.call("gateUnban", JSONObject()
-                .put("gate", channel.gateAddress).put("user", addr), 180_000)
-            gateManageCache.clear()
-        }
-        if (_bannedMembers.value.any { it.equals(addr, ignoreCase = true) }) {
-            banMember(addr, false)
-        }
-    }
 
     // ==================== DMs (E2E) ====================
 
@@ -4029,7 +2979,7 @@ class ChannelManager(
         return channel
     }
 
-    private suspend fun peerPubKey(address: String): String? {
+    internal suspend fun peerPubKey(address: String): String? {
         val key = address.lowercase()
         peerPubKeys[key]?.let { return it }
         return try {
@@ -4492,170 +3442,19 @@ class ChannelManager(
         )
     }
 
-    /**
-     * Shares a video over the P2P swarm (web media.js sendVideo): only the
-     * type check is video-specific — everything downstream is [sendFile].
-     */
     suspend fun sendVideo(
         fileName: String,
         fileSize: Long,
         mimeType: String,
         openInput: () -> java.io.InputStream
-    ) {
-        if (mimeType !in com.pombo.android.core.MediaConfig.ALLOWED_VIDEO_TYPES) {
-            throw IllegalArgumentException(
-                "Invalid video type. Allowed: " +
-                    com.pombo.android.core.MediaConfig.ALLOWED_VIDEO_TYPES.joinToString(", ")
-            )
-        }
-        sendFile(fileName, fileSize, mimeType, openInput)
-    }
+    ) = files.sendVideo(fileName, fileSize, mimeType, openInput)
 
-    /**
-     * Shares a file in the open channel over the P2P swarm — the Android side
-     * of web media.js sendFile: hash piece by piece, sign the manifest (the
-     * hashes live INSIDE the signature), announce on -1/P0, then seed.
-     *
-     * The source is streamed in PIECE_SIZE slices straight into a [PieceStore]
-     * (the same sparse file a download would build), so a 500MB send never
-     * holds the file in memory and the serving path needs no second read path.
-     */
     suspend fun sendFile(
         fileName: String,
         fileSize: Long,
         mimeType: String,
         openInput: () -> java.io.InputStream
-    ) {
-        val channel = _current.value ?: throw IllegalStateException("No channel open")
-        if (fileSize <= 0) throw IllegalArgumentException("File is empty")
-        if (fileSize > com.pombo.android.core.MediaConfig.MAX_FILE_SIZE)
-            throw IllegalArgumentException("File exceeds the 500MB limit")
-        val sender = myAddress() ?: throw IllegalStateException("No identity")
-        val isDm = channel.type == "dm"
-        // DM: resolve the pair's key BEFORE hashing — failing after a 500MB
-        // hashing pass over a missing public key would waste all of it.
-        val dmPeerPk = if (isDm) {
-            val peer = channel.peerAddress ?: throw IllegalStateException("DM has no peer")
-            peerPubKey(peer) ?: throw IllegalStateException("Peer public key unavailable")
-        } else null
-
-        // The wire requires exactly 36 UTF-8 bytes — a random UUID is exactly that.
-        val fileId = java.util.UUID.randomUUID().toString()
-        val store = withContext(Dispatchers.IO) {
-            com.pombo.android.core.PieceStore.open(transferDir, fileId, fileSize)
-        }
-        val pieceHashes = ArrayList<String>(com.pombo.android.core.MediaConfig.pieceCount(fileSize))
-        try {
-            withContext(Dispatchers.IO) {
-                openInput().use { input ->
-                    val buf = ByteArray(com.pombo.android.core.MediaConfig.PIECE_SIZE)
-                    var index = 0
-                    var total = 0L
-                    while (total < fileSize) {
-                        // A content stream may return short reads; a piece
-                        // boundary must never move because of one.
-                        val want = minOf(buf.size.toLong(), fileSize - total).toInt()
-                        var read = 0
-                        while (read < want) {
-                            val n = input.read(buf, read, want - read)
-                            if (n < 0) break
-                            read += n
-                        }
-                        if (read != want) throw java.io.IOException(
-                            "file shrank while reading: got $read of $want at piece $index"
-                        )
-                        val piece = buf.copyOf(read)
-                        val hash = com.pombo.android.core.PieceStore.sha256Hex(piece)
-                        if (!store.writePiece(index, piece, hash)) {
-                            throw java.io.IOException("piece $index write failed")
-                        }
-                        pieceHashes.add(hash)
-                        total += read
-                        index++
-                    }
-                }
-            }
-        } catch (e: Exception) {
-            store.close()
-            com.pombo.android.core.PieceStore.delete(transferDir, fileId)
-            throw e
-        }
-
-        val id = Protocol.generateMessageId()
-        val timestamp = System.currentTimeMillis()
-        // Unsigned (D6) — identity comes from the proof/envelope; the
-        // canonical builders in Protocol.kt survive only to verify history.
-        val metadataJson = JSONObject()
-            .put("fileId", fileId).put("fileName", fileName)
-            .put("fileSize", fileSize).put("fileType", mimeType)
-            .put("pieceCount", pieceHashes.size)
-            .put("pieceHashes", org.json.JSONArray(pieceHashes))
-        val announce = JSONObject()
-            .put("type", "file_announce").put("v", 2).put("id", id)
-            .put("sender", sender).put("senderName", myUsername() ?: JSONObject.NULL)
-            .put("timestamp", timestamp)
-            .put("metadata", metadataJson)
-            .put("replyTo", JSONObject.NULL)
-
-        val metadata = com.pombo.android.core.MediaController.FileMetadata(
-            fileId = fileId, fileName = fileName, fileSize = fileSize,
-            fileType = mimeType, pieceCount = pieceHashes.size, pieceHashes = pieceHashes
-        )
-        // Local echo before the publish, like every other send path.
-        mergeMessages(listOf(UiMessage(
-            id = id, text = "", sender = sender, senderName = myUsername(),
-            timestamp = timestamp, mine = true, pending = true, verified = true,
-            file = metadata,
-            ensName = ensStore.cachedName(sender),
-            ensAvatar = ensStore.cachedAvatar(sender)
-        )))
-        try {
-            if (isDm) {
-                // Same wire as web DM announces: sealed-sender v2 to the
-                // peer's inbox, one throwaway publisher per message.
-                val peer = channel.peerAddress
-                    ?: throw IllegalStateException("DM conversation has no peer")
-                publishTextWithRetry {
-                    publishContent(
-                        channel.messageStreamId, StreamConstants.P_MESSAGES,
-                        announce, password = null, dmPeer = peer
-                    )
-                }
-            } else {
-                publishForChannel(channel, channel.messageStreamId, StreamConstants.P_MESSAGES, announce)
-            }
-        } catch (e: Exception) {
-            // The seed store stays on disk: re-sending re-uses nothing today,
-            // but a failed announce must not strand a bubble that looks sent.
-            _messages.value = _messages.value.filterNot { it.id == id }
-            store.close()
-            com.pombo.android.core.PieceStore.delete(transferDir, fileId)
-            throw e
-        }
-        confirmMessage(id)
-        if (isDm) {
-            // Web parity (media.js sendFile DM branch): persist the manifest
-            // LEAN — without pieceHashes (a 500MB file's hashes are ~160KB in
-            // one sync message) and with the signature dropped alongside them
-            // (it covers the hashes, so kept it could never verify again).
-            val leanMeta = JSONObject()
-                .put("fileId", fileId).put("fileName", fileName)
-                .put("fileSize", fileSize).put("fileType", mimeType)
-                .put("pieceCount", pieceHashes.size)
-            val lean = JSONObject(announce.toString())
-                .put("metadata", leanMeta)
-                .put("signature", JSONObject.NULL)
-            sentDmStore.add(channel.messageStreamId, lean)
-            onLocalStateChanged()
-        }
-        media.seedSentFile(
-            metadata = metadata,
-            messageStreamId = channel.messageStreamId,
-            isDm = isDm,
-            password = channel.password,
-            store = store
-        )
-    }
+    ) = files.sendFile(fileName, fileSize, mimeType, openInput)
 
     /** Sends an E2E-encrypted DM to the peer's inbox (partition 0). */
     private suspend fun sendDm(channel: Channel, text: String) {
@@ -5501,7 +4300,7 @@ class ChannelManager(
      * decrypt. Failed entries become null and fall through handleContent's
      * type check, exactly as they would have inline.
      */
-    private suspend fun predecrypt(arr: JSONArray, password: String?): List<Any?> {
+    internal suspend fun predecrypt(arr: JSONArray, password: String?): List<Any?> {
         val n = arr.length()
         val out = arrayOfNulls<Any>(n)
         val sealedIdx = ArrayList<Int>()
@@ -5836,7 +4635,7 @@ class ChannelManager(
     }
 
     /** Web publishWithRetry: 3 attempts, 2s apart, then the error surfaces. */
-    private suspend fun publishTextWithRetry(block: suspend () -> Unit) {
+    internal suspend fun publishTextWithRetry(block: suspend () -> Unit) {
         var last: Exception? = null
         repeat(3) { attempt ->
             try { block(); return } catch (e: Exception) {
@@ -5847,94 +4646,8 @@ class ChannelManager(
         throw last ?: IllegalStateException("publish failed")
     }
 
-    /** Sends an image via the chunked transport (manifest + image_chunk on partition 0). */
-    suspend fun sendImage(input: ByteArray, originalMime: String) {
-        val channel = _current.value ?: return
-        val sender = myAddress() ?: return
-        // A DM uses the same chunked transport, but every payload is sealed in
-        // the ECDH envelope: the peer's inbox accepts public publishes, so an
-        // unsealed chunk there would be readable by anyone.
-        // A DM image publishes through publishForChannel → sealed sender v2;
-        // fail early here if the peer's key is unreachable, before the
-        // expensive encode below.
-        if (channel.type == "dm") {
-            val peer = channel.peerAddress
-                ?: throw IllegalStateException("DM conversation has no peer")
-            peerPubKey(peer) ?: throw IllegalStateException(
-                "Cannot send image: peer public key not available"
-            )
-        }
-
-        // The heaviest single operation in the app: bitmap decode, then a
-        // resolution × quality ladder that re-compresses until the output fits,
-        // then SHA-256 per chunk and over the whole image. Never on main.
-        // Sealed transports (DM envelope, password) double the base64 cost, so
-        // their chunks are cut smaller to stay under the 220KB wire ceiling.
-        val sealed = channel.type == "dm" || channel.password != null
-        val enc = withContext(Dispatchers.Default) {
-            com.pombo.android.core.MediaEncoder.encode(
-                input, originalMime,
-                if (sealed) com.pombo.android.core.MediaEncoder.CHUNK_RAW_SEALED
-                else com.pombo.android.core.MediaEncoder.CHUNK_RAW
-            )
-        } ?: throw IllegalStateException("Couldn't read image")
-        val id = Protocol.generateMessageId()
-        val imageId = Protocol.generateMessageId()
-        val timestamp = System.currentTimeMillis()
-
-        // Immediate local echo (already assembled).
-        mergeMessages(listOf(UiMessage(
-            id = id, text = "", sender = sender, senderName = myUsername(),
-            timestamp = timestamp, mine = true, isImage = true,
-            imageId = imageId, imageBytes = enc.bytes, imageMime = enc.mime, verified = true
-        )))
-
-        // Ledger the image before publishing: it is the only copy once storage
-        // retention drops the chunks, and blob sync pushes it to my other
-        // devices. Marked unsynced so the next sync picks it up.
-        blobStore.save(
-            imageId, channel.messageStreamId,
-            com.pombo.android.core.ImageBlobStore.toDataUrl(enc.bytes, enc.mime),
-            synced = false
-        )
-        onLocalStateChanged()
-
-        // Unsigned manifest (D6) — identity comes from the proof/envelope.
-        val manifest = JSONObject()
-            .put("type", "image").put("transport", "chunked").put("v", 2)
-            .put("id", id).put("imageId", imageId).put("sender", sender)
-            .put("senderName", myUsername() ?: JSONObject.NULL)
-            .put("timestamp", timestamp)
-            .put("originalMime", enc.originalMime).put("finalMime", enc.mime)
-            .put("finalSizeBytes", enc.bytes.size).put("chunkCount", enc.chunks.size)
-            .put("chunkHashes", JSONArray(enc.chunkHashes))
-            .put("assembledSha256", enc.assembledSha256)
-            .put("preservedOriginal", enc.preservedOriginal)
-            .put("convertedTo", enc.convertedTo ?: JSONObject.NULL)
-            .put("qualityUsed", enc.quality ?: JSONObject.NULL)
-
-        // Chunks first, manifest last (web media.js order): the manifest is what
-        // tells the receiver how many pieces to expect, so publishing it before
-        // them invites an assembly attempt against data that has not landed.
-        for ((index, piece) in enc.chunks.withIndex()) {
-            val chunkMsg = JSONObject()
-                .put("type", "image_chunk").put("v", 2)
-                .put("imageId", imageId).put("chunkIndex", index)
-                .put("timestamp", System.currentTimeMillis())
-                .put("chunkHash", enc.chunkHashes[index])
-                .put("data", android.util.Base64.encodeToString(piece, android.util.Base64.NO_WRAP))
-            publishForChannel(channel, channel.messageStreamId, StreamConstants.P_MESSAGES, chunkMsg)
-        }
-        publishForChannel(channel, channel.messageStreamId, StreamConstants.P_MESSAGES, manifest)
-
-        // A DM's sent half lives only here (the peer's inbox is not readable by
-        // us). Image bytes stay in the ledger, so the stored entry is metadata
-        // only — same split as the web's addSentMessage.
-        if (channel.type == "dm") {
-            sentDmStore.add(channel.messageStreamId, manifest)
-            onLocalStateChanged()
-        }
-    }
+    suspend fun sendImage(input: ByteArray, originalMime: String) =
+        images.sendImage(input, originalMime)
 
     /** Web dedup key `streamId:messageId:emoji:action` -> last send time. */
     private val recentReactions = HashMap<String, Long>()
@@ -6041,29 +4754,9 @@ class ChannelManager(
         }
     }
 
-    // Web InputUI.js sends the typing signal at most every 2s while keys keep
-    // coming. Without this floor every keystroke becomes a full Streamr publish
-    // (plus an ECDH seal on DMs) queued on the single WebView JS thread, which
-    // is enough to make the whole app feel frozen while composing a message.
-    @Volatile private var lastTypingSent = 0L
+    fun sendTyping() = presence.sendTyping()
 
-    fun sendTyping() {
-        val channel = _current.value ?: return
-        val now = System.currentTimeMillis()
-        if (now - lastTypingSent < 2_000) return
-        lastTypingSent = now
-        scope.launch {
-            try {
-                val typing = JSONObject()
-                    .put("type", "typing")
-                    .put("nickname", myUsername() ?: JSONObject.NULL)
-                    .put("timestamp", System.currentTimeMillis())
-                publishForChannel(channel, channel.ephemeralStreamId, StreamConstants.EPH_CONTROL, typing)
-            } catch (e: Exception) { }
-        }
-    }
-
-    private suspend fun publishContent(
+    internal suspend fun publishContent(
         streamId: String,
         partition: Int,
         payload: JSONObject,
@@ -6107,7 +4800,7 @@ class ChannelManager(
      *   password -> AES with the channel password
      *   public   -> plain
      */
-    private suspend fun publishForChannel(
+    internal suspend fun publishForChannel(
         channel: Channel,
         streamId: String,
         partition: Int,
@@ -6277,7 +4970,7 @@ class ChannelManager(
     }
 
     /** Channel lookup by ANY of its streams, for transports that only know a stream id. */
-    private fun channelByStream(streamId: String): Channel? {
+    internal fun channelByStream(streamId: String): Channel? {
         val match: (Channel) -> Boolean = {
             it.messageStreamId == streamId || it.ephemeralStreamId == streamId ||
                 it.adminStreamId == streamId ||
@@ -6298,7 +4991,7 @@ class ChannelManager(
     }
 
     /** Gated channels run the epoch-key machinery (N-A/N-C). */
-    private fun isEpochChannel(channel: Channel?): Boolean =
+    internal fun isEpochChannel(channel: Channel?): Boolean =
         channel?.type == "gated"
 
     /**
@@ -6328,7 +5021,7 @@ class ChannelManager(
         } catch (e: Exception) { true }
     }
 
-    private fun gatedAuthor(channel: Channel, streamId: String, meta: JSONObject): String? {
+    internal fun gatedAuthor(channel: Channel, streamId: String, meta: JSONObject): String? {
         val gate = channel.gateAddress ?: return null
         val publisher = meta.optString("publisherId").lowercase()
         if (streamId.endsWith(StreamConstants.SUFFIX_ADMIN)) {
@@ -6354,33 +5047,7 @@ class ChannelManager(
         return signer
     }
 
-    private fun startPresence(channel: Channel) {
-        presenceJob?.cancel()
-        presenceJob = scope.launch {
-            while (isActive) {
-                try {
-                    val presence = JSONObject()
-                        .put("type", "presence")
-                        .put("nickname", myUsername() ?: JSONObject.NULL)
-                        .put("lastActive", System.currentTimeMillis())
-                    publishForChannel(channel, channel.ephemeralStreamId, StreamConstants.EPH_CONTROL, presence)
-                } catch (e: Exception) { }
-                evictStale()
-                // A preview heartbeats at the web's slower cadence
-                // (config.previewPresenceIntervalMs = 20s) — the browsing user
-                // is not in the conversation, 4× the traffic bought nothing.
-                delay(if (_isPreview.value) PREVIEW_PRESENCE_INTERVAL_MS else PRESENCE_INTERVAL_MS)
-            }
-        }
-    }
-
-    private fun evictStale() {
-        val now = System.currentTimeMillis()
-        synchronized(online) {
-            online.entries.removeAll { now - it.value > ONLINE_TIMEOUT_MS }
-            _onlineCount.value = online.size
-        }
-    }
+    private fun startPresence(channel: Channel) = presence.startPresence(channel)
 
     /** Called by the bridge listener (background thread). */
     fun onIncoming(streamId: String, partition: Int, contentRaw: String, metaRaw: String) {
@@ -6832,70 +5499,11 @@ class ChannelManager(
         }
     }
 
-    // ---- P2P shared file (wire type 'file_announce') ----
+    private fun handleFileAnnounce(channel: Channel, data: JSONObject) =
+        files.handleFileAnnounce(channel, data)
 
-    /**
-     * Turns a file announcement into a bubble. Nothing is downloaded here: the
-     * announcement carries only the description and the piece hashes, and the
-     * user decides whether to fetch the content — a channel could hold hundreds
-     * of announcements and auto-fetching would be both a data bill and a way to
-     * fill someone's storage from a message.
-     */
-    private fun handleFileAnnounce(channel: Channel, data: JSONObject) {
-        val messageId = data.optString("id").ifEmpty { return }
-        // Rejected rather than shown as a broken bubble: FileMetadata.from
-        // refuses an announcement without one hash per piece, and without those
-        // a download could never be verified.
-        val metadata = com.pombo.android.core.MediaController.FileMetadata
-            .from(data.optJSONObject("metadata")) ?: run {
-            Log.w(TAG, "unusable file_announce $messageId — dropped")
-            return
-        }
-        if (_messages.value.any { it.id == messageId }) return
-
-        val sender = data.optString("sender").ifEmpty { return }
-        mergeMessages(listOf(UiMessage(
-            id = messageId,
-            text = "",
-            sender = sender,
-            senderName = data.optStringOrNull("senderName"),
-            timestamp = data.optLong("timestamp", 0L),
-            mine = sender.equals(myAddress(), ignoreCase = true),
-            file = metadata,
-            ensName = ensStore.cachedName(sender),
-            ensAvatar = ensStore.cachedAvatar(sender)
-        )))
-        if (!sender.equals(myAddress(), ignoreCase = true)) resolveEnsFor(sender)
-        verifyFileAnnounceAsync(data)
-    }
-
-    // ---- Persistent File Sharing (wire type 'storage_file_announce') ----
-
-    /** Turns a storage-file announcement into a bubble (download deferred to phase 3). */
-    private fun handleStorageFileAnnounce(channel: Channel, data: JSONObject) {
-        val messageId = data.optString("id").ifEmpty { return }
-        val metadata = com.pombo.android.core.StorageMedia.StorageFileMetadata
-            .from(data.optJSONObject("metadata")) ?: run {
-            Log.w(TAG, "unusable storage_file_announce $messageId — dropped")
-            return
-        }
-        // Our own echo would double the optimistic bubble; the id guards it.
-        if (_messages.value.any { it.id == messageId }) return
-        val sender = data.optString("sender").ifEmpty { return }
-        mergeMessages(listOf(UiMessage(
-            id = messageId,
-            text = "",
-            sender = sender,
-            senderName = data.optStringOrNull("senderName"),
-            timestamp = data.optLong("timestamp", 0L),
-            mine = sender.equals(myAddress(), ignoreCase = true),
-            storageFile = metadata,
-            ensName = ensStore.cachedName(sender),
-            ensAvatar = ensStore.cachedAvatar(sender)
-        )))
-        if (!sender.equals(myAddress(), ignoreCase = true)) resolveEnsFor(sender)
-        verifyStorageAnnounceAsync(data)
-    }
+    private fun handleStorageFileAnnounce(channel: Channel, data: JSONObject) =
+        files.handleStorageFileAnnounce(channel, data)
 
     /** File/channel of a storage transfer + (uploads) the optimistic bubble to restore. */
     data class StorageTransferInfo(
@@ -6915,637 +5523,62 @@ class ChannelManager(
         val timestamp: Long = 0L
     )
 
-    /**
-     * transferId -> [StorageTransferInfo]. Storage transfers survive a channel
-     * switch (the engine is standalone), so the Active Transfers list needs the
-     * file/channel names even when it is no longer the open channel — the
-     * progress snapshots do not carry them.
-     */
-    private val storageTransferChannel = java.util.concurrent.ConcurrentHashMap<String, StorageTransferInfo>()
-
-    /** transferId -> the Job running its download, so pauseStorageTransfer() can cancel just that one. */
-    private val storageDownloadJobs = java.util.concurrent.ConcurrentHashMap<String, kotlinx.coroutines.Job>()
-
-    /**
-     * transferId -> "pausing" | "resuming": the gap between a tap and the
-     * engine confirming it. Cancellation is cooperative — a Job mid
-     * network-read only unwinds once that read returns — so the download's
-     * own status can lag either tap by seconds. The Active Transfers row
-     * flips its icon and shows "Pausing…"/"Resuming…" off this map instead
-     * of waiting that lag out. Entries are cleared by the owning Job's
-     * completion handler (see [launchStorageDownload]).
-     */
-    private val _storageTransferPhase = MutableStateFlow<Map<String, String>>(emptyMap())
+    private val _storageTransferPhase get() = files._storageTransferPhase
     val storageTransferPhase: StateFlow<Map<String, String>> = _storageTransferPhase.asStateFlow()
 
-    fun storageTransferInfo(transferId: String): StorageTransferInfo? = storageTransferChannel[transferId]
+    fun storageTransferInfo(transferId: String): StorageTransferInfo? =
+        files.storageTransferInfo(transferId)
 
-    /** Distinct channel stream ids of the storage transfers currently in flight. */
-    fun activeStorageTransferStreams(): Set<String> {
-        val tids = storageMedia.uploads.value.filterValues { it.stage != "done" && it.error == null }.keys +
-            storageMedia.downloads.value.filterValues { it.status == "downloading" }.keys
-        return tids.mapNotNull { storageTransferChannel[it]?.messageStreamId }.toSet()
-    }
+    fun activeStorageTransferStreams(): Set<String> = files.activeStorageTransferStreams()
 
-    /** A human label for a channel/DM (Active Transfers list). */
-    private fun channelDisplayName(channel: Channel): String = when {
-        channel.name.isNotEmpty() -> channel.name
-        channel.type == "dm" -> channel.peerAddress?.let { ensStore.cachedName(it) ?: it.take(8) } ?: "DM"
-        else -> channel.messageStreamId.substringAfterLast('/').take(12)
-    }
+    private fun restoreStorageUploadBubbles(channel: Channel) =
+        files.restoreStorageUploadBubbles(channel)
 
-    /**
-     * Re-inserts the optimistic bubbles for storage UPLOADS still running in
-     * [channel]. A channel switch clears the timeline, but an in-progress upload
-     * has not published its announce yet, so nothing else would bring the bubble
-     * back until it finishes. Downloads need no restore — their announce reloads
-     * from history and the download-progress state drives the bubble.
-     */
-    private fun restoreStorageUploadBubbles(channel: Channel) {
-        val bubbles = storageMedia.uploads.value.keys.mapNotNull { tid ->
-            val info = storageTransferChannel[tid] ?: return@mapNotNull null
-            if (info.messageStreamId != channel.messageStreamId) return@mapNotNull null
-            val b = info.uploadBubble ?: return@mapNotNull null
-            if (_messages.value.any { it.id == b.id }) null else b
-        }
-        if (bubbles.isNotEmpty()) mergeMessages(bubbles)
-    }
+    suspend fun sendStorageFile(source: com.pombo.android.core.StorageMedia.Source) = files.sendStorageFile(source)
 
-    /**
-     * Shares a file in the open channel over the storage nodes (Persistent File
-     * Sharing). The engine publishes chunks, verifies & repairs, then signs and
-     * publishes the announce; here we only own the optimistic bubble and the
-     * timeline. Progress is observed via [storageMedia].uploads, keyed by the
-     * bubble's transferId.
-     */
-    suspend fun sendStorageFile(source: com.pombo.android.core.StorageMedia.Source) {
-        val channel = _current.value ?: throw IllegalStateException("No channel open")
-        if (source.size <= 0) throw IllegalArgumentException("File is empty")
-        val sender = myAddress() ?: throw IllegalStateException("No identity")
-        val isDm = channel.type == "dm"
-        // DM: resolve the pair's key up front — the chunks seal with it and the
-        // announce rides the ECDH envelope to the peer's inbox.
-        val dmPeerPk = if (isDm) {
-            val peer = channel.peerAddress ?: throw IllegalStateException("DM has no peer")
-            peerPubKey(peer) ?: throw IllegalStateException("Peer public key unavailable")
-        } else null
+    fun downloadStorageFile(messageId: String) = files.downloadStorageFile(messageId)
 
-        val id = Protocol.generateMessageId()
-        val tid = Protocol.generateMessageId()
-        val timestamp = System.currentTimeMillis()
-        val draft = com.pombo.android.core.StorageMedia.StorageFileMetadata(
-            transferId = tid, fileName = source.fileName, fileType = source.fileType,
-            originalSize = source.size, compressedSize = null, compression = "none",
-            totalChunks = null, chunkDataSize = null,
-            chunkPartitions = StreamConstants.STORAGE_CHUNK_PARTITIONS,
-            firstChunkPartition = StreamConstants.STORAGE_FIRST_CHUNK_PARTITION,
-            firstChunkTs = null, lastChunkTs = null, storedChunks = null, encSalt = null
-        )
-        // Optimistic bubble before the upload, like every other send path. Kept in
-        // storageTransferChannel so it can be re-inserted if the user leaves and
-        // returns to this channel mid-upload (the announce is not published yet).
-        val bubble = UiMessage(
-            id = id, text = "", sender = sender, senderName = myUsername(),
-            timestamp = timestamp, mine = true, pending = true, verified = true,
-            storageFile = draft,
-            ensName = ensStore.cachedName(sender), ensAvatar = ensStore.cachedAvatar(sender)
-        )
-        storageTransferChannel[tid] = StorageTransferInfo(source.fileName, channelDisplayName(channel), channel.messageStreamId, bubble)
-        mergeMessages(listOf(bubble))
-        try {
-            // Gated channels: capture the CURRENT key for the whole transfer
-            // and fail closed without one — a plaintext chunk on a stored
-            // partition would be harvestable forever.
-            val epochKey = if (!isDm && isEpochChannel(channel)) {
-                epochKeys.currentKey(channel.messageStreamId)
-                    ?: throw IllegalStateException(
-                        "No epoch key for ${channel.messageStreamId} — cannot store media")
-            } else null
-            // Members-only: chunks travel under the SHARED key; the clone path
-            // would stamp the uploader's account onto every stored chunk.
-            val membersOnly = !isDm && channel.authorMode == "members"
-            val sharedKeyHex = if (membersOnly) {
-                epochKeys.publishKeyFor(channel.messageStreamId)?.keyHex
-                    ?: throw IllegalStateException(
-                        "No publish key for ${channel.messageStreamId} — cannot store media on a Members-only channel")
-            } else null
-            val gate = if (!isDm && channel.type == "gated" && !membersOnly) {
-                channel.gateAddress ?: throw IllegalStateException(
-                    "Gate address unknown for ${channel.messageStreamId} — cannot publish")
-            } else null
-            val result = storageMedia.sendFile(
-                messageStreamId = channel.messageStreamId,
-                source = source,
-                password = channel.password,
-                isDm = isDm,
-                dmPeerPublicKey = dmPeerPk,
-                // public/password channels publish chunks under the channel's
-                // ephemeral identity (same as the announce); readOnly keeps
-                // the account (D3), same rule as publishChannel.
-                channelEphemeral = !isDm && !isEpochChannel(channel) && !channel.readOnly,
-                epochKey = epochKey,
-                gateAddress = gate,
-                sharedPublishKeyHex = sharedKeyHex,
-                messageId = id,
-                transferId = tid
-            )
-            // Replace the draft with the confirmed metadata from the announce.
-            val finalMeta = com.pombo.android.core.StorageMedia.StorageFileMetadata
-                .from(result.announce.optJSONObject("metadata"))
-            _messages.value = _messages.value.map {
-                if (it.id == id) it.copy(pending = false, storageFile = finalMeta ?: it.storageFile) else it
-            }
-            if (isDm) {
-                // A DM cannot be replayed from the peer's inbox — persist the whole
-                // (small) announce so this device keeps rendering the bubble across
-                // restarts. No bulky fields here (unlike mesh pieceHashes).
-                sentDmStore.add(channel.messageStreamId, result.announce)
-                onLocalStateChanged()
-            }
-        } catch (e: Exception) {
-            _messages.value = _messages.value.filterNot { it.id == id }
-            throw e
-        }
-    }
+    fun pauseStorageTransfer(transferId: String) = files.pauseStorageTransfer(transferId)
 
-    /**
-     * Runs the actual download for [meta] against [channel] as a tracked Job.
-     * Shared by [downloadStorageFile] (channel + announce come from whatever is
-     * on screen) and [resumeStorageTransfer] (both come from caches instead,
-     * since that one is called from outside any open channel).
-     *
-     * [waitFor], when given, is joined first — cancellation is cooperative, so
-     * a Job just cancel()led by [pauseStorageTransfer] can still be unwinding
-     * (its status not yet flipped to "paused") when the user immediately taps
-     * resume. Starting a fresh download while that is still true would hit
-     * downloadFile()'s own isDownloading() guard and silently do nothing, so
-     * resumeStorageTransfer waits for the old Job to fully finish first.
-     */
-    private fun launchStorageDownload(
-        channel: Channel,
-        meta: com.pombo.android.core.StorageMedia.StorageFileMetadata,
-        timestamp: Long,
-        waitFor: kotlinx.coroutines.Job? = null
-    ): kotlinx.coroutines.Job {
-        val job = scope.launch {
-            waitFor?.join()
-            try {
-                if (channel.type == "dm") {
-                    // Chunks live on OUR own inbox (the sender published there); the
-                    // channel's streamId points at the PEER's inbox. Open them with
-                    // the sender's key (= the peer for this DM).
-                    val me = myAddress()?.lowercase() ?: return@launch
-                    val peer = channel.peerAddress ?: return@launch
-                    val peerPk = peerPubKey(peer) ?: throw IllegalStateException("Peer public key unavailable")
-                    storageMedia.downloadFile(
-                        channel.messageStreamId, meta, timestamp, channel.password,
-                        isDm = true, dmInboxStreamId = "$me/Pombo-DM-1", peerPublicKey = peerPk
-                    )
-                } else if (isEpochChannel(channel)) {
-                    // Epoch chunks (0x04) resolve their kid per row; history
-                    // freshness (gated) judges old kids by the row's transport
-                    // timestamp. runBlocking is acceptable here: the opener
-                    // runs on the HTTP parser's IO thread, which already
-                    // blocks on the row handler as backpressure.
-                    val gated = channel.type == "gated"
-                    storageMedia.downloadFile(
-                        channel.messageStreamId, meta, timestamp, password = null,
-                        epochOpener = { bytes, ts ->
-                            kotlinx.coroutines.runBlocking {
-                                epochKeys.tryOpenBinary(
-                                    channel.messageStreamId, channel.keysStreamId, bytes,
-                                    gated = gated, live = false, timestamp = ts
-                                )
-                            }
-                        }
-                    )
-                } else {
-                    storageMedia.downloadFile(channel.messageStreamId, meta, timestamp, channel.password)
-                }
-            } catch (e: Exception) {
-                if (e !is kotlinx.coroutines.CancellationException) {
-                    Log.w(TAG, "storage download failed: ${e.message}")
-                }
-            }
-        }
-        job.invokeOnCompletion {
-            // Clear this transfer's pausing/resuming phase, but only while this
-            // Job is still the registered one: a pause's unwind finishing after
-            // resume already installed its successor must not wipe the
-            // successor's "resuming" marker.
-            if (storageDownloadJobs[meta.transferId] === job) {
-                _storageTransferPhase.value = _storageTransferPhase.value - meta.transferId
-            }
-        }
-        return job
-    }
+    fun cancelStorageTransfer(transferId: String) = files.cancelStorageTransfer(transferId)
 
-    /**
-     * Starts downloading the storage-shared file announced by [messageId] in the
-     * open channel. The engine handles resume and the completed-file handoff; the
-     * bubble reflects [storageMedia].downloads. Non-DM only for now.
-     */
-    fun downloadStorageFile(messageId: String) {
-        val channel = _current.value ?: return
-        val msg = _messages.value.firstOrNull { it.id == messageId } ?: return
-        val meta = msg.storageFile ?: return
-        if (storageDownloadJobs[meta.transferId]?.isActive == true) return
-        storageTransferChannel[meta.transferId] = StorageTransferInfo(
-            meta.fileName, channelDisplayName(channel), channel.messageStreamId,
-            meta = meta, timestamp = msg.timestamp
-        )
-        storageDownloadJobs[meta.transferId] = launchStorageDownload(channel, meta, msg.timestamp)
-    }
+    fun resumeStorageTransfer(transferId: String) = files.resumeStorageTransfer(transferId)
 
-    /**
-     * Pauses a running storage download from the Active Transfers list: cancels
-     * just its Job. [StorageMedia.downloadFile]'s own cancellation handling keeps
-     * the staged bytes on disk (see its CancellationException branch), so
-     * [resumeStorageTransfer] continues from here instead of starting over.
-     * The "pausing" phase flips first — cancellation is cooperative, so the
-     * download's own status can lag the tap by a network read's worth of time;
-     * the Job's completion handler clears it once the unwind confirms.
-     */
-    fun pauseStorageTransfer(transferId: String) {
-        val job = storageDownloadJobs[transferId] ?: return
-        if (!job.isActive) return
-        _storageTransferPhase.value = _storageTransferPhase.value + (transferId to "pausing")
-        job.cancel()
-    }
+    fun storageCompletedFile(transferId: String): java.io.File? =
+        files.storageCompletedFile(transferId)
 
-    /**
-     * Cancels a storage download: "I do not want this", the mesh
-     * cancelDownload's meaning — unlike [pauseStorageTransfer], the staged
-     * bytes are deleted once the Job unwinds. Works on paused downloads too
-     * (their Job already finished; join returns at once).
-     */
-    fun cancelStorageTransfer(transferId: String) {
-        _storageTransferPhase.value = _storageTransferPhase.value - transferId
-        val job = storageDownloadJobs.remove(transferId)
-        job?.cancel()
-        scope.launch {
-            job?.join()
-            storageMedia.discardDownload(transferId)
-        }
-    }
+    fun cancelTransfer(fileId: String) = files.cancelTransfer(fileId)
 
-    /**
-     * Resumes a storage download [pauseStorageTransfer] stopped. Deliberately
-     * does NOT go through [downloadStorageFile]/[_messages] — the Active
-     * Transfers list this is called from lives outside any open channel (see
-     * [storageTransferChannel]'s doc comment), so the announce and channel are
-     * resolved from caches that survive a channel switch instead.
-     */
-    fun resumeStorageTransfer(transferId: String) {
-        val previous = storageDownloadJobs[transferId]
-        // isActive alone cannot tell "running" from "cancelled but still
-        // unwinding" — and the instant icon flip invites the user to tap
-        // resume during exactly that unwind. During "pausing" the resume must
-        // win: the successor Job joins [previous] before touching the engine,
-        // so the old run has fully released the transfer by the time it starts.
-        if (previous?.isActive == true && _storageTransferPhase.value[transferId] != "pausing") return
-        val info = storageTransferChannel[transferId] ?: return
-        val meta = info.meta ?: return
-        val channel = _channels.value.firstOrNull { it.messageStreamId == info.messageStreamId } ?: return
-        storageDownloadJobs[transferId] = launchStorageDownload(channel, meta, info.timestamp, waitFor = previous)
-        _storageTransferPhase.value = _storageTransferPhase.value + (transferId to "resuming")
-    }
+    fun pauseTransfer(fileId: String) = files.pauseTransfer(fileId)
 
-    /** The completed storage download's file on disk, or null (for saving). */
-    fun storageCompletedFile(transferId: String): java.io.File? = storageMedia.completedFile(transferId)
+    fun resumeTransfer(fileId: String) = files.resumeTransfer(fileId)
 
-    /**
-     * Starts fetching the file announced by [messageId] in the open channel.
-     * Safe to call twice — a download already running is left alone.
-     */
-    /**
-     * Cancels a running download from the Active Transfers list. Runs under
-     * the channel-switch mutex because it may drop media partitions, and those
-     * only ever change inside it.
-     */
-    fun cancelTransfer(fileId: String) {
-        scope.launch {
-            channelSwitchMutex.withLock {
-                releaseMediaIfIdle(media.cancelDownload(fileId))
-            }
-        }
-    }
+    fun stopSeeding(fileId: String) = files.stopSeeding(fileId)
 
-    /** Pauses a running download from the Active Transfers list — keeps its bytes. */
-    fun pauseTransfer(fileId: String) = media.pauseDownload(fileId)
+    fun deleteSeed(fileId: String) = files.deleteSeed(fileId)
 
-    /** Resumes a download [pauseTransfer] stopped, from wherever it left off. */
-    fun resumeTransfer(fileId: String) = media.resumeDownload(fileId)
+    fun reseedFile(fileId: String, messageStreamId: String) =
+        files.reseedFile(fileId, messageStreamId)
 
-    /** Stops SERVING a file (bytes kept, reseed offered) from the Transfers list. */
-    fun stopSeeding(fileId: String) {
-        scope.launch {
-            channelSwitchMutex.withLock {
-                releaseMediaIfIdle(media.stopSeeding(fileId))
-            }
-        }
-    }
+    fun inactiveSeeds() = files.inactiveSeeds()
 
-    /** Deletes a seed's bytes and record for good — the destructive half of the old stop. */
-    fun deleteSeed(fileId: String) {
-        scope.launch {
-            channelSwitchMutex.withLock {
-                releaseMediaIfIdle(media.deleteSeed(fileId))
-            }
-        }
-    }
-
-    /**
-     * Re-activates an inactive seed from the Transfers list. The password
-     * comes from the channel store — the registry deliberately does not hold
-     * it — so a seed whose channel was left cannot be reseeded (the row
-     * should not be offered for those). Runs under the channel-switch mutex
-     * because it brings media partitions up.
-     */
-    fun reseedFile(fileId: String, messageStreamId: String) {
-        scope.launch {
-            channelSwitchMutex.withLock {
-                val password = _channels.value.firstOrNull { it.messageStreamId == messageStreamId }?.password
-                try {
-                    media.reseedRegistered(fileId, password)
-                } catch (e: Exception) {
-                    Log.w(TAG, "reseed failed for $fileId: ${e.message}")
-                }
-            }
-        }
-    }
-
-    /** Files held complete on disk but not being served — the Transfers list's "inactive" rows. */
-    fun inactiveSeeds() = media.inactiveSeeds()
-
-    /**
-     * Drops the media partitions a finished/cancelled transfer was holding,
-     * unless something still needs them: another transfer on the same stream,
-     * or the channel being on screen (its open handler owns them then).
-     */
-    private suspend fun releaseMediaIfIdle(ref: Pair<String, Boolean>?) {
-        val (messageStreamId, isDm) = ref ?: return
-        if (isDm) {
-            if (_current.value?.type != "dm" && !media.hasActiveDMTransfers()) {
-                media.myDmEphemeralId()?.let { media.releaseMediaPartitions(it) }
-            }
-            return
-        }
-        val onScreen = _current.value?.messageStreamId == messageStreamId
-        if (!onScreen && !media.hasActiveTransfers(messageStreamId)) {
-            media.releaseMediaPartitions(StreamConstants.deriveEphemeralId(messageStreamId))
-        }
-    }
-
-    fun downloadFile(messageId: String) {
-        val channel = _current.value ?: return
-        val metadata = _messages.value.firstOrNull { it.id == messageId }?.file ?: return
-        // A lean record (own DM manifest persisted without pieceHashes) must
-        // never start a download: with no expected hash, writePiece would
-        // accept whatever bytes arrive. The full announce is what peers hold.
-        if (metadata.pieceHashes.size != metadata.pieceCount) {
-            Log.w(TAG, "refusing download of ${metadata.fileId}: manifest has no piece hashes")
-            return
-        }
-        if (channel.type == "dm") {
-            // Sealed-sender pieces open with OUR OWN static key and the epk in
-            // each envelope — no peer-key registration, no publisher hint. The
-            // bridge does it inline on the -2/P2 callback.
-            scope.launch {
-                media.startDownload(
-                    messageStreamId = channel.messageStreamId,
-                    metadata = metadata,
-                    password = null,
-                    isDm = true
-                )
-            }
-            return
-        }
-        media.startDownload(
-            messageStreamId = channel.messageStreamId,
-            metadata = metadata,
-            password = channel.password,
-            isDm = false
-        )
-    }
-
-    // ---- chunked image receive (transport 'chunked' v2) ----
+    fun downloadFile(messageId: String) = files.downloadFile(messageId)
 
     /**
      * Fills an image from the local ledger. Chunks live only as long as the
      * stream's retention, so history older than that would otherwise render as
      * a permanent placeholder even though we hold the bytes.
      */
-    /**
-     * Repaints any on-screen placeholders whose blobs just landed (called by
-     * the sync pipeline after a blob import). A no-op for ids that belong to
-     * closed conversations — their bubbles hydrate from the ledger on open.
-     */
-    fun hydrateImages(imageIds: List<String>) {
-        imageIds.forEach { hydrateFromLedger(it) }
-    }
+    fun hydrateImages(imageIds: List<String>) = images.hydrateImages(imageIds)
 
-    private fun hydrateFromLedger(imageId: String) {
-        if (imageId.isEmpty() || imageId in deletedImageIds) return
-        scope.launch {
-            val dataUrl = blobStore.load(imageId) ?: return@launch
-            val (bytes, mime) = com.pombo.android.core.ImageBlobStore.fromDataUrl(dataUrl) ?: return@launch
-            synchronized(this@ChannelManager) {
-                _messages.value = _messages.value.map {
-                    if (it.imageId == imageId && it.imageBytes == null) {
-                        it.copy(imageBytes = bytes, imageMime = mime, pending = false)
-                    } else it
-                }
-            }
-        }
-    }
+    private fun hydrateFromLedger(imageId: String) = images.hydrateFromLedger(imageId)
 
-    /**
-     * @param showBubble whether the placeholder belongs on the visible timeline.
-     *   False for a DM arriving while another channel is open: the chunk
-     *   assembly still has to be registered, but the bubble must not be merged
-     *   into a timeline it does not belong to.
-     */
-    private fun handleImageManifest(channel: Channel, data: JSONObject, showBubble: Boolean = true) {
-        if (data.optString("transport") != "chunked" || data.optInt("v") != 2) return
-        val imageId = data.optString("imageId").ifEmpty { return }
-        if (imageId in deletedImageIds) return
-        val messageId = data.optString("id").ifEmpty { return }
-        val hashes = data.optJSONArray("chunkHashes") ?: return
-        val chunkCount = data.optInt("chunkCount")
-        if (chunkCount <= 0 || hashes.length() != chunkCount) return
+    private fun handleImageManifest(channel: Channel, data: JSONObject, showBubble: Boolean = true) =
+        images.handleImageManifest(channel, data, showBubble)
 
-        // Refuse oversized manifests before allocating anything (web media.js
-        // enforces the same ceiling at assembly time). A hostile peer must not
-        // be able to make us buffer an arbitrary number of bytes.
-        val finalMime = data.optString("finalMime", "image/jpeg")
-        val declaredSize = data.optInt("finalSizeBytes")
-        val sizeLimit = if (finalMime == "image/gif") GIF_MAX_ASSEMBLED_BYTES else IMAGE_MAX_ASSEMBLED_BYTES
-        if (declaredSize <= 0 || declaredSize > sizeLimit) return
-        if (chunkCount > MAX_CHUNKS) return
+    private fun handleImageChunk(data: JSONObject) = images.handleImageChunk(data)
 
-        val sender = data.optString("sender").ifEmpty { return }
-        val mine = sender.equals(myAddress(), ignoreCase = true)
-        // Placeholder bubble (image loading) keyed by the message id.
-        if (showBubble && _messages.value.none { it.id == messageId }) {
-            mergeMessages(listOf(UiMessage(
-                id = messageId, text = "", sender = sender,
-                senderName = data.optStringOrNull("senderName"),
-                timestamp = data.optLong("timestamp", 0L), mine = mine,
-                isImage = true, imageId = imageId, imageMime = data.optString("finalMime", "image/jpeg"),
-                // Same ENS treatment as handleText: seed from the cache and
-                // resolve below. Without both, a sender whose only message on
-                // screen is an image never showed a name or avatar at all —
-                // and an image merged after another message's resolve patch
-                // missed the patch for good.
-                ensName = ensStore.cachedName(sender),
-                ensAvatar = ensStore.cachedAvatar(sender)
-            )))
-            // If we already hold the bytes, the placeholder resolves without
-            // waiting for chunks that may no longer exist on the storage node.
-            hydrateFromLedger(imageId)
-            if (!mine) resolveEnsFor(sender)
-        }
-
-        // Chunks may arrive before the manifest (resend order): always (re)bind the message id.
-        val p = pendingImages.getOrPut(imageId) { PendingImage(messageId) }
-        p.messageId = messageId
-        p.chunkCount = chunkCount
-        p.chunkHashes = (0 until hashes.length()).map { hashes.optString(it) }
-        p.assembledSha256 = data.optString("assembledSha256")
-        p.finalSizeBytes = declaredSize
-        p.finalMime = finalMime
-        p.streamId = channel.messageStreamId
-        p.haveManifest = true
-        p.manifestTs = data.optLong("timestamp", 0L)
-        // Image manifests are signed too (web verifyMessage branches on
-        // transport 'chunked' and hashes the manifest fields).
-        verifyImageManifestAsync(data)
-        tryAssemble(imageId)
-        // A manifest whose chunks never finish used to wait forever — the web
-        // re-queries a window around it instead (channels.js:3842-3930).
-        if (channel.type != "dm") scheduleChunkRecovery(channel, imageId)
-    }
-
-    /**
-     * Targeted chunk recovery: when the manifest is in hand but chunks are
-     * still missing after a grace period, re-resend a window around the
-     * manifest's timestamp and feed any matching chunks back through the
-     * normal path. Up to 3 attempts (web: 3 fetch tries over up to 20 rounds;
-     * here the resend IS the transfer, so 3 windows carry the same coverage).
-     * Channels only — a DM's chunks replay through the inbox router.
-     */
-    private fun scheduleChunkRecovery(channel: Channel, imageId: String) {
-        val pending = pendingImages[imageId] ?: return
-        if (pending.recoveryScheduled) return
-        pending.recoveryScheduled = true
-        val generation = switchGeneration
-        scope.launch {
-            while (true) {
-                delay(CHUNK_RECOVERY_DELAY_MS)
-                val p = pendingImages[imageId] ?: return@launch  // assembled or swept
-                if (imageId in deletedImageIds || !stillCurrent(generation)) return@launch
-                if (p.recoveryAttempts >= CHUNK_RECOVERY_MAX_ATTEMPTS) return@launch
-                p.recoveryAttempts++
-                val ts = p.manifestTs.takeIf { it > 0 } ?: return@launch
-                try {
-                    val res = bridge.call("resendWindow", JSONObject()
-                        .put("streamId", channel.messageStreamId)
-                        .put("partition", StreamConstants.P_MESSAGES)
-                        .put("before", ts + CHUNK_RECOVERY_WINDOW_MS)
-                        .put("windowMs", CHUNK_RECOVERY_WINDOW_MS * 2)
-                        .put("budgetMs", 20_000), 30_000)
-                    val arr = res.optJSONArray("messages") ?: continue
-                    val contents = predecrypt(arr, channel.password)
-                    for (i in 0 until arr.length()) {
-                        val data = contents[i] as? JSONObject ?: continue
-                        if (data.optString("type") == "image_chunk" &&
-                            data.optString("imageId") == imageId
-                        ) handleImageChunk(data)
-                    }
-                    android.util.Log.d(
-                        TAG,
-                        "chunk recovery for …${imageId.takeLast(8)}: attempt ${p.recoveryAttempts}, " +
-                            "have ${p.chunks.size}/${p.chunkCount}"
-                    )
-                } catch (e: Exception) { /* next attempt */ }
-            }
-        }
-    }
-
-    /** Drops every trace of a deleted image (web blocks the same five paths). */
-    private fun tombstoneImage(imageId: String) {
-        deletedImageIds.add(imageId)
-        pendingImages.remove(imageId)
-        scope.launch { blobStore.forget(imageId) }
-    }
-
-    private fun handleImageChunk(data: JSONObject) {
-        if (data.optInt("v") != 2) return
-        val imageId = data.optString("imageId").ifEmpty { return }
-        if (imageId in deletedImageIds) return
-        val index = data.optInt("chunkIndex", -1)
-        if (index < 0) return
-        val b64 = data.optString("data").ifEmpty { return }
-        val bytes = try { android.util.Base64.decode(b64, android.util.Base64.DEFAULT) } catch (e: Exception) { return }
-        if (bytes.size > MAX_CHUNK_BYTES) return
-        if (index >= MAX_CHUNKS) return
-        // Chunks routinely arrive before their manifest, so an entry may be
-        // created here — bound the buffered total to keep that path safe too.
-        val p = pendingImages.getOrPut(imageId) { PendingImage("") }
-        if (p.chunks.values.sumOf { it.size } + bytes.size > GIF_MAX_ASSEMBLED_BYTES) return
-        p.chunks[index] = bytes
-        p.lastSeen = System.currentTimeMillis()
-        sweepStaleAssemblies()
-        tryAssemble(imageId)
-    }
-
-    /** Verifies and assembles a chunked image once all chunks + manifest are present. */
-    private fun tryAssemble(imageId: String) {
-        val p = pendingImages[imageId] ?: return
-        if (!p.haveManifest || p.chunks.size < p.chunkCount) return
-        val digest = try { java.security.MessageDigest.getInstance("SHA-256") } catch (e: Exception) { return }
-
-        val ordered = ArrayList<ByteArray>(p.chunkCount)
-        var total = 0
-        for (i in 0 until p.chunkCount) {
-            val bytes = p.chunks[i] ?: return
-            val hex = digest.digest(bytes).joinToString("") { "%02x".format(it) }
-            digest.reset()
-            if (hex != p.chunkHashes.getOrNull(i)) return  // hash mismatch — keep waiting for redelivery
-            ordered.add(bytes)
-            total += bytes.size
-        }
-        if (total != p.finalSizeBytes) return
-        val assembled = ByteArray(total)
-        var off = 0
-        for (b in ordered) { System.arraycopy(b, 0, assembled, off, b.size); off += b.size }
-        val assembledHex = digest.digest(assembled).joinToString("") { "%02x".format(it) }
-        if (assembledHex != p.assembledSha256) return
-
-        pendingImages.remove(imageId)
-        // Web media.js dispatches assembled data by imageId — order-independent.
-        _messages.value = _messages.value.map {
-            if (it.imageId == imageId) it.copy(imageBytes = assembled, imageMime = p.finalMime, pending = false) else it
-        }
-
-        // Ledger it, exactly as media.js does after a successful assembly. This
-        // covers RECEIVED images too, which until now lived only in memory:
-        // reopening the chat re-fetched them, and once retention dropped the
-        // chunks they were gone for good. Saved unsynced so blob sync carries
-        // them to this account's other devices.
-        val streamId = p.streamId
-        if (streamId.isNotEmpty()) {
-            scope.launch {
-                blobStore.save(
-                    imageId, streamId,
-                    com.pombo.android.core.ImageBlobStore.toDataUrl(assembled, p.finalMime),
-                    synced = false
-                )
-                onLocalStateChanged()
-            }
-        }
-    }
+    private fun tombstoneImage(imageId: String) = images.tombstoneImage(imageId)
 
     private fun handleText(channel: Channel, data: JSONObject, historical: Boolean) {
         val id = data.optString("id").ifEmpty { return }
@@ -7589,233 +5622,18 @@ class ChannelManager(
         }
     }
 
-    /** Signature check for chunked-image manifests (same trust levels as text). */
-    private fun verifyImageManifestAsync(data: JSONObject) {
-        val id = data.optString("id")
-        val signature = data.optString("signature")
-        // Same discriminant as text (see verifyAsync): absent = current
-        // format, identity already established at ingest.
-        if (signature.isEmpty()) { markVerifiedFromAccount(id, data); return }
-        scope.launch {
-            try {
-                val hashes = data.optJSONArray("chunkHashes") ?: return@launch
-                val canonical = Protocol.canonicalImageManifestData(
-                    id = id,
-                    imageId = data.optString("imageId"),
-                    sender = data.optString("sender"),
-                    timestamp = data.optLong("timestamp", 0L),
-                    channelId = data.optString("channelId"),
-                    originalMime = data.optString("originalMime"),
-                    finalMime = data.optString("finalMime"),
-                    finalSizeBytes = data.optInt("finalSizeBytes"),
-                    chunkCount = data.optInt("chunkCount"),
-                    chunkHashes = (0 until hashes.length()).map { hashes.optString(it) },
-                    assembledSha256 = data.optString("assembledSha256"),
-                    qualityUsed = if (data.isNull("qualityUsed")) null else data.optDouble("qualityUsed"),
-                    preservedOriginal = data.optBoolean("preservedOriginal", false),
-                    convertedTo = if (data.isNull("convertedTo")) null
-                        else data.optString("convertedTo").ifEmpty { null }
-                )
-                val res = bridge.call("verifyCanonical", JSONObject()
-                    .put("data", canonical).put("signature", signature))
-                val recovered = res.optString("address")
-                val valid = recovered.equals(data.optString("sender"), ignoreCase = true)
-                markVerified(id, valid)
-                if (valid) applyTrustLevel(id, recovered)
-            } catch (e: Exception) {
-                markVerified(id, false)
-            }
-        }
-    }
+    private fun verifyAsync(channel: Channel, data: JSONObject, historical: Boolean) =
+        verification.verifyAsync(channel, data, historical)
 
-    /**
-     * Signature check for a P2P file/video announce.
-     *
-     * The announce IS signed on send (canonicalFileManifestData, see
-     * sendFile) — the receive side simply never checked it, so a file bubble
-     * carried no badge at all while text and images did. Same trust ladder as
-     * text, and the same batched queue: nothing here is announce-specific
-     * beyond rebuilding the canonical string the sender signed.
-     */
-    private fun verifyFileAnnounceAsync(data: JSONObject) {
-        val id = data.optString("id")
-        val signature = data.optString("signature")
-        // Same discriminant as text (see verifyAsync): absent = current
-        // format, identity already established at ingest.
-        if (signature.isEmpty()) { markVerifiedFromAccount(id, data); return }
-        val meta = data.optJSONObject("metadata")
-        val hashes = meta?.optJSONArray("pieceHashes")
-        if (meta == null || hashes == null) { markVerified(id, null); return }
-        val canonical = Protocol.canonicalFileManifestData(
-            id = id,
-            sender = data.optString("sender"),
-            timestamp = data.optLong("timestamp", 0L),
-            channelId = data.optString("channelId"),
-            fileId = meta.optString("fileId"),
-            fileName = meta.optString("fileName"),
-            fileSize = meta.optLong("fileSize"),
-            fileType = meta.optString("fileType"),
-            pieceCount = meta.optInt("pieceCount"),
-            pieceHashes = (0 until hashes.length()).map { hashes.optString(it) }
-        )
-        enqueueVerify(PendingVerify(id, canonical, signature, data.optString("sender")))
-    }
+    internal fun verifyImageManifestAsync(data: JSONObject) =
+        verification.verifyImageManifestAsync(data)
 
-    /**
-     * Signature check for a Persistent File Sharing announce
-     * (canonicalStorageFileManifestData, signed in StorageMedia.sendFile).
-     *
-     * Every optional field has to come back as absent-vs-present exactly as the
-     * sender wrote it: the canonical emits `null` for a missing value, so an
-     * absent `storedChunks` read as 0 would produce a different string and fail
-     * a perfectly good signature. Hence isNull() rather than opt* defaults.
-     */
-    private fun verifyStorageAnnounceAsync(data: JSONObject) {
-        val id = data.optString("id")
-        val signature = data.optString("signature")
-        // Same discriminant as text (see verifyAsync): absent = current
-        // format, identity already established at ingest.
-        if (signature.isEmpty()) { markVerifiedFromAccount(id, data); return }
-        val meta = data.optJSONObject("metadata") ?: run { markVerified(id, null); return }
-        fun str(k: String): String? = if (meta.isNull(k)) null else meta.optString(k)
-        fun int(k: String): Int? = if (meta.isNull(k)) null else meta.optInt(k)
-        fun long(k: String): Long? = if (meta.isNull(k)) null else meta.optLong(k)
-        val canonical = Protocol.canonicalStorageFileManifestData(
-            id = id,
-            sender = data.optString("sender"),
-            timestamp = data.optLong("timestamp", 0L),
-            channelId = data.optString("channelId"),
-            transferId = str("transferId"),
-            fileName = str("fileName"),
-            fileType = str("fileType"),
-            originalSize = long("originalSize"),
-            compressedSize = long("compressedSize"),
-            compression = str("compression"),
-            totalChunks = int("totalChunks"),
-            chunkDataSize = int("chunkDataSize"),
-            chunkPartitions = int("chunkPartitions"),
-            firstChunkPartition = int("firstChunkPartition"),
-            firstChunkTs = long("firstChunkTs"),
-            lastChunkTs = long("lastChunkTs"),
-            storedChunks = int("storedChunks"),
-            encSalt = str("encSalt")
-        )
-        enqueueVerify(PendingVerify(id, canonical, signature, data.optString("sender")))
-    }
+    internal fun verifyFileAnnounceAsync(data: JSONObject) =
+        verification.verifyFileAnnounceAsync(data)
 
-    /**
-     * Trust level for a verified sender (web identity.js _getTrustLevelSync):
-     * 2 = trusted contact, 1 = has ENS, 0 = valid signature only.
-     */
-    private fun applyTrustLevel(messageId: String, address: String) {
-        val level = when {
-            isTrustedContact(address) -> 2
-            ensStore.cachedName(address) != null -> 1
-            else -> 0
-        }
-        // Via patchMessage so a batched (historical) message — still in the
-        // merge buffer at verify time — gets its trust level too, not just
-        // live messages (the trusted-contact star was missing on history).
-        patchMessage(messageId) { it.copy(trustLevel = level) }
-    }
+    internal fun verifyStorageAnnounceAsync(data: JSONObject) =
+        verification.verifyStorageAnnounceAsync(data)
 
-    /**
-     * Verification discriminates on the PRESENCE of `signature`, no version
-     * field (web identity.js verifyMessage):
-     *
-     *  - present → pre-migration message; verify the old way (the canonical
-     *    hash functions are kept exactly for this).
-     *  - absent  → current format (D6). Identity was already established at
-     *    ingest — account = ecrecover(proof) — so trusting it here is not a
-     *    weakening: the Streamr envelope authenticates the ephemeral publisher
-     *    and the proof authenticates the account behind it. A third signature
-     *    added no authority and re-exposed the address.
-     *
-     * The replay guard runs on BOTH paths — the window must not widen just
-     * because the app-layer signature went away.
-     */
-    private fun verifyAsync(channel: Channel, data: JSONObject, historical: Boolean) {
-        val id = data.optString("id")
-        val signature = data.optString("signature")
-        val timestamp = data.optLong("timestamp", 0L)
-        // The replay guard only applies to genuinely fresh messages. The web
-        // keys this off the message age (isRecentMessage = < 30s), not off the
-        // delivery path: a live subscription routinely delivers older messages
-        // (resend-on-subscribe, slow peers, clock skew) and those must not be
-        // failed for being old.
-        val isRecent = System.currentTimeMillis() - timestamp < RECENT_MESSAGE_MS
-        if (isRecent && kotlin.math.abs(System.currentTimeMillis() - timestamp) > TIMESTAMP_TOLERANCE_MS) {
-            markVerified(id, false)
-            return
-        }
-        if (signature.isEmpty()) { markVerifiedFromAccount(id, data); return }
-        val canonical = Protocol.canonicalMessageData(
-            id, data.optString("text"), data.optString("sender"), timestamp, data.optString("channelId")
-        )
-        enqueueVerify(PendingVerify(id, canonical, signature, data.optString("sender")))
-    }
-
-    /**
-     * The unsigned-path verdict: valid via the ingest-resolved account, badge
-     * from the same trust ladder as a recovered signature. No account at all
-     * (a payload that never went through attachAccount, or arrived with no
-     * publisher) keeps the web's old "no badge, not a red flag" behaviour.
-     */
-    private fun markVerifiedFromAccount(id: String, data: JSONObject) {
-        val account = data.optString("account").ifEmpty { null }
-        if (account == null) { markVerified(id, null); return }
-        markVerified(id, true)
-        applyTrustLevel(id, account)
-    }
-
-    private data class PendingVerify(
-        val id: String, val canonical: String, val signature: String, val sender: String
-    )
-
-    private val verifyQueue = ArrayList<PendingVerify>()
-    @Volatile private var verifyFlushJob: Job? = null
-
-    /**
-     * Batched signature verification (web verifies in a 50-message batch per
-     * 100ms window over a worker pool — channels.js:2888). The WebView is
-     * single-threaded, so what the batch buys here is the per-message
-     * evaluateJavascript round-trip: a 100-message resend used to cost 100
-     * bridge calls; now it costs two or three.
-     */
-    private fun enqueueVerify(pv: PendingVerify) {
-        synchronized(verifyQueue) { verifyQueue.add(pv) }
-        if (verifyFlushJob?.isActive == true) return
-        verifyFlushJob = scope.launch {
-            delay(VERIFY_BATCH_WINDOW_MS)
-            while (true) {
-                val batch = synchronized(verifyQueue) {
-                    val take = ArrayList(verifyQueue.take(VERIFY_BATCH_MAX))
-                    repeat(take.size) { verifyQueue.removeAt(0) }
-                    take
-                }
-                if (batch.isEmpty()) return@launch
-                try {
-                    val items = JSONArray()
-                    batch.forEach {
-                        items.put(JSONObject().put("data", it.canonical).put("signature", it.signature))
-                    }
-                    val res = bridge.call(
-                        "verifyCanonicalBatch", JSONObject().put("items", items), 60_000
-                    )
-                    val addrs = res.optJSONArray("addresses") ?: JSONArray()
-                    batch.forEachIndexed { i, pv2 ->
-                        val recovered = addrs.optString(i)
-                        val valid = recovered.isNotEmpty() &&
-                            recovered.equals(pv2.sender, ignoreCase = true)
-                        markVerified(pv2.id, valid)
-                        if (valid) applyTrustLevel(pv2.id, recovered)
-                    }
-                } catch (e: Exception) {
-                    batch.forEach { markVerified(it.id, false) }
-                }
-            }
-        }
-    }
 
     private fun addChannel(channel: Channel) {
         _channels.value = _channels.value + channel
@@ -7929,7 +5747,7 @@ class ChannelManager(
     }
 
     @Synchronized
-    private fun mergeMessages(incoming: List<UiMessage>) {
+    internal fun mergeMessages(incoming: List<UiMessage>) {
         if (incoming.isEmpty()) return
         // Inside a batch, park these and let the batch flush them in one pass.
         mergeBuffer?.let { it.addAll(incoming); return }
@@ -7951,7 +5769,7 @@ class ChannelManager(
     }
 
     @Synchronized
-    private fun confirmMessage(id: String) {
+    internal fun confirmMessage(id: String) {
         _messages.value = _messages.value.map { if (it.id == id) it.copy(pending = false) else it }
     }
 
@@ -7967,7 +5785,7 @@ class ChannelManager(
      * the update survives the flush no matter which list holds it.
      */
     @Synchronized
-    private fun patchMessage(id: String, transform: (UiMessage) -> UiMessage) {
+    internal fun patchMessage(id: String, transform: (UiMessage) -> UiMessage) {
         mergeBuffer?.let { buf ->
             for (i in buf.indices) if (buf[i].id == id) buf[i] = transform(buf[i])
         }
@@ -7976,8 +5794,6 @@ class ChannelManager(
         }
     }
 
-    private fun markVerified(id: String, valid: Boolean?) =
-        patchMessage(id) { it.copy(verified = valid) }
 
     @Synchronized
     private fun applyEdit(id: String, newText: String) {
@@ -7996,13 +5812,6 @@ class ChannelManager(
         if (users.isEmpty()) perMsg.remove(emoji) else perMsg[emoji] = users
         if (perMsg.isEmpty()) map.remove(messageId) else map[messageId] = perMsg
         _reactions.value = map
-    }
-
-    /** Android optString returns the string "null" for JSON null — guard against that. */
-    private fun JSONObject.optStringOrNull(key: String): String? {
-        if (isNull(key)) return null
-        val v = optString(key, "")
-        return v.ifEmpty { null }
     }
 
     /**
