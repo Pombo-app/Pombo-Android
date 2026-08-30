@@ -3821,10 +3821,6 @@ private fun ExploreTab(vm: AppViewModel, onCreate: () -> Unit, onConnect: () -> 
 }
 
 /**
- * Full category set from the web ExploreUI (orderedCategoryChips). NSFW
- * categories stay behind the same opt-in the web uses.
- */
-/**
  * Measured height of the floating pill: 38dp profile avatar + 4dp wrapper
  * padding top and bottom + 6dp inner vertical padding. Named so the content
  * reserve and the pill's own offset cannot drift apart — when they did, the
@@ -3841,6 +3837,10 @@ private val PILL_NAV_HEIGHT = 58.dp
  */
 private val PILL_NAV_BOTTOM_OFFSET = 20.dp
 
+/**
+ * Full category set from the web ExploreUI (orderedCategoryChips). NSFW
+ * categories stay behind the same opt-in the web uses.
+ */
 private val EXPLORE_CATEGORIES = listOf(
     "All", "General", "News", "Crypto", "Finance", "Politics", "Science",
     "Gaming", "Sports", "Health", "Tech & AI", "Entertainment", "Education", "Comedy"
