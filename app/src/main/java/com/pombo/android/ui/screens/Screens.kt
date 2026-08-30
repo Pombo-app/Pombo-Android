@@ -7057,13 +7057,6 @@ internal fun pomboFieldColors() = OutlinedTextFieldDefaults.colors(
     unfocusedContainerColor = PomboColors.SurfaceHigh
 )
 
-@Composable
-private fun Modifier.clickableNoRipple(onClick: () -> Unit): Modifier = this.clickable(
-    interactionSource = remember { MutableInteractionSource() },
-    indication = null,
-    onClick = onClick
-)
-
 /**
  * Password prompt shown before opening a Protected channel — the password is
  * needed to decrypt anything, and verification is fail-closed against the
