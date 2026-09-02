@@ -2015,7 +2015,7 @@ class ChannelManager(
                 val entry = arr.optJSONObject(i) ?: continue
                 val content = decrypted.getOrNull(i) as? JSONObject ?: continue
                 val ts = entry.optJSONObject("meta")?.optLong("timestamp") ?: 0L
-                // Same §3.6 clamp the ingest funnel applies — this resend does
+                // Same forged-timestamp clamp the ingest funnel applies — this resend does
                 // not pass through it, and a dropped message must not surface
                 // through the preview line either.
                 val pTs = content.optLong("timestamp", 0L)
@@ -2096,7 +2096,7 @@ class ChannelManager(
                 // the same entries forever (web does the same).
                 if (ts > maxTs) maxTs = ts
 
-                // §3.6 clamp — a message the ingest funnel would drop must not
+                // Forged-timestamp clamp — a message the ingest funnel would drop must not
                 // count for the preview or the unread badge.
                 val pTs = content.optLong("timestamp", 0L)
                 if (pTs > 0 && (pTs > System.currentTimeMillis() + TIMESTAMP_TOLERANCE_MS ||
@@ -5506,7 +5506,7 @@ class ChannelManager(
                 data = opened.payload
             }
         }
-        // Timestamp forgery clamps (§3.6): the payload timestamp is what the
+        // Timestamp forgery clamps: the payload timestamp is what the
         // UI orders and pages by, and the publisher writes it freely. Reject a
         // payload dated ahead of the wall clock or ahead of its own signed
         // envelope beyond clock skew. One-sided on purpose: a payload OLDER

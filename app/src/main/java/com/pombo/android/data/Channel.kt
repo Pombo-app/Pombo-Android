@@ -41,11 +41,11 @@ data class Channel(
      * Access losses this device has already rotated the epoch for. Only the
      * admin can announce an epoch, so a cut elsewhere waits for one; without
      * this the admin would rotate again on every open for the same cut.
-     * (Named rotatedForBanned before §6.2 widened it beyond bans.)
+     * (Named rotatedForBanned before the sweep widened it beyond bans.)
      */
     val rotatedForNoAccess: List<String> = emptyList(),
     /** Who had gate access at the last sweep — losing it is what triggers the
-     *  deferred rotation (§6.2). */
+     *  deferred rotation. */
     val accessSnapshot: List<String> = emptyList(),
     /**
      * Addresses banned from this device, kept as gate-read candidates: the ban
@@ -125,7 +125,7 @@ data class Channel(
                 for (i in 0 until arr.length()) arr.optString(i)?.let { members.add(it) }
             }
             val rotatedForNoAccess = mutableListOf<String>()
-            // The pre-§6.2 key was "rotatedForBanned" — same set, narrower name.
+            // The older key was "rotatedForBanned" — same set, narrower name.
             (o.optJSONArray("rotatedForNoAccess") ?: o.optJSONArray("rotatedForBanned"))?.let { arr ->
                 for (i in 0 until arr.length()) arr.optString(i)?.let { rotatedForNoAccess.add(it) }
             }
@@ -146,7 +146,7 @@ data class Channel(
                 type = o.optString("type", "public"),
                 gateAddress = o.optJSONObject("gate")
                     ?.optString("address")?.lowercase()?.ifEmpty { null },
-                // Records persisted (or synced) before the §1 rename carry
+                // Records persisted (or synced) before the rename carry
                 // authorMode 'members'/'everyone' — same axis, old names.
                 wireIdentity = when (val raw =
                     (o.optString("wireIdentity").ifEmpty { null }

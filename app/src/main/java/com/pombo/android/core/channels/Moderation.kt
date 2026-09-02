@@ -181,7 +181,7 @@ internal class Moderation(private val manager: ChannelManager) {
     /**
      * Rotate the epoch for anyone who LOST access since the last sweep —
      * bans made while the admin was away, expired PAID subscriptions, sold
-     * tokens/NFTs, Closed revokes (§6.2).
+     * tokens/NFTs, Closed revokes.
      *
      * Only the channel admin can announce an epoch, so a cut elsewhere leaves
      * the ex-member holding the current key until an admin shows up. The

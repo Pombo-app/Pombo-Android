@@ -1686,7 +1686,7 @@ class EpochKeyManager(
         val current = s.announces[s.currentEpoch] ?: return true  // no anchor — cannot judge
         if (kid == current.keyId) {
             // Current epoch — but a history timestamp from before the epoch
-            // existed is backdating under the current key (§3.6): the kid in
+            // existed is backdating under the current key: the kid in
             // force then was an older one.
             if (live || timestamp <= 0L) return true
             return timestamp >= current.validFrom - KID_FRESHNESS_TOLERANCE_MS
