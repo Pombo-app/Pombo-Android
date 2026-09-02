@@ -1679,7 +1679,33 @@ private fun ChannelModerationPanel(vm: AppViewModel, channel: Channel, canModera
         color = Color.White.copy(alpha = 0.40f), fontSize = 12.sp
     )
 
-    if (canModerate && channel.type == "gated" && channel.authorMode == "members") {
+    val myAddr by vm.address.collectAsState()
+    val isChannelAdmin = myAddr?.lowercase() ==
+        (channel.createdBy ?: channel.messageStreamId.substringBefore('/')).lowercase()
+    if (isChannelAdmin && channel.type == "gated") {
+        Spacer(Modifier.height(20.dp))
+        Box(Modifier.fillMaxWidth().height(1.dp).background(Color.White.copy(alpha = 0.05f)))
+        Spacer(Modifier.height(20.dp))
+        SectionLabel("Rotate Channel Key")
+        Spacer(Modifier.height(6.dp))
+        Text(
+            "Issues a new encryption key now. Anyone without current access stops " +
+                "reading new messages. Free — no transaction.",
+            color = Color.White.copy(alpha = 0.40f), fontSize = 12.sp
+        )
+        Spacer(Modifier.height(10.dp))
+        Box(
+            Modifier
+                .fillMaxWidth()
+                .background(Color.White.copy(alpha = 0.05f), RoundedCornerShape(12.dp))
+                .border(1.dp, Color.White.copy(alpha = 0.10f), RoundedCornerShape(12.dp))
+                .clickableNoRipple { vm.rotateEpochNow() }
+                .padding(vertical = 12.dp),
+            contentAlignment = Alignment.Center
+        ) { Text("Rotate Channel Key", color = Color.White.copy(alpha = 0.80f), fontSize = 13.sp) }
+    }
+
+    if (canModerate && channel.type == "gated" && channel.wireIdentity == "sealed") {
         Spacer(Modifier.height(20.dp))
         Box(Modifier.fillMaxWidth().height(1.dp).background(Color.White.copy(alpha = 0.05f)))
         Spacer(Modifier.height(20.dp))

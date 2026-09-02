@@ -25,24 +25,28 @@ data class Channel(
      */
     val gateAddress: String? = null,
     /**
-     * Author visibility ('members' | 'everyone'), IMMUTABLE, from the -1
-     * metadata's `m` flag: 'members' publishes -1/-2 under the channel's
+     * Identity on the wire ('sealed' | 'visible'), IMMUTABLE, from the -1
+     * metadata's `m` flag: 'sealed' publishes -1/-2 under the channel's
      * SHARED key with authorship sealed inside the epoch envelope. Null on
      * non-gated channels; a gated channel persisted without it is from
-     * before the mode existed — Everyone by definition.
+     * before the mode existed — Visible by definition.
      */
-    val authorMode: String? = null,
+    val wireIdentity: String? = null,
     val createdAt: Long = System.currentTimeMillis(),
     val createdBy: String? = null,
     val joinedAt: Long? = null,
     val password: String? = null,
     val members: List<String> = emptyList(),
     /**
-     * Bans this device has already rotated the epoch for. Only the admin can
-     * announce an epoch, so a moderator's ban waits for one; without this the
-     * admin would rotate again on every open for the same ban.
+     * Access losses this device has already rotated the epoch for. Only the
+     * admin can announce an epoch, so a cut elsewhere waits for one; without
+     * this the admin would rotate again on every open for the same cut.
+     * (Named rotatedForBanned before §6.2 widened it beyond bans.)
      */
-    val rotatedForBanned: List<String> = emptyList(),
+    val rotatedForNoAccess: List<String> = emptyList(),
+    /** Who had gate access at the last sweep — losing it is what triggers the
+     *  deferred rotation (§6.2). */
+    val accessSnapshot: List<String> = emptyList(),
     /**
      * Addresses banned from this device, kept as gate-read candidates: the ban
      * drops them from [members] and the roster stops carrying them, so without
@@ -91,13 +95,14 @@ data class Channel(
         // Same shape as the web ({ address }) — sync merges whole channel
         // objects, so the two platforms must serialize the gate identically.
         .put("gate", gateAddress?.let { JSONObject().put("address", it) } ?: JSONObject.NULL)
-        .put("authorMode", authorMode ?: JSONObject.NULL)
+        .put("wireIdentity", wireIdentity ?: JSONObject.NULL)
         .put("createdAt", createdAt)
         .put("createdBy", createdBy ?: JSONObject.NULL)
         .put("joinedAt", joinedAt ?: JSONObject.NULL)
         .put("password", password ?: JSONObject.NULL)
         .put("members", JSONArray(members))
-        .put("rotatedForBanned", JSONArray(rotatedForBanned))
+        .put("rotatedForNoAccess", JSONArray(rotatedForNoAccess))
+        .put("accessSnapshot", JSONArray(accessSnapshot))
         .put("knownBanned", JSONArray(knownBanned))
         .put("storageEnabled", storageEnabled)
         .put("storageProvider", storageProvider)
@@ -119,9 +124,14 @@ data class Channel(
             o.optJSONArray("members")?.let { arr ->
                 for (i in 0 until arr.length()) arr.optString(i)?.let { members.add(it) }
             }
-            val rotatedForBanned = mutableListOf<String>()
-            o.optJSONArray("rotatedForBanned")?.let { arr ->
-                for (i in 0 until arr.length()) arr.optString(i)?.let { rotatedForBanned.add(it) }
+            val rotatedForNoAccess = mutableListOf<String>()
+            // The pre-§6.2 key was "rotatedForBanned" — same set, narrower name.
+            (o.optJSONArray("rotatedForNoAccess") ?: o.optJSONArray("rotatedForBanned"))?.let { arr ->
+                for (i in 0 until arr.length()) arr.optString(i)?.let { rotatedForNoAccess.add(it) }
+            }
+            val accessSnapshot = mutableListOf<String>()
+            o.optJSONArray("accessSnapshot")?.let { arr ->
+                for (i in 0 until arr.length()) arr.optString(i)?.let { accessSnapshot.add(it) }
             }
             val knownBanned = mutableListOf<String>()
             o.optJSONArray("knownBanned")?.let { arr ->
@@ -136,16 +146,24 @@ data class Channel(
                 type = o.optString("type", "public"),
                 gateAddress = o.optJSONObject("gate")
                     ?.optString("address")?.lowercase()?.ifEmpty { null },
-                authorMode = if (o.isNull("authorMode")) {
-                    if (o.optString("type") == "gated") "everyone" else null
-                } else o.optString("authorMode").ifEmpty { null },
+                // Records persisted (or synced) before the §1 rename carry
+                // authorMode 'members'/'everyone' — same axis, old names.
+                wireIdentity = when (val raw =
+                    (o.optString("wireIdentity").ifEmpty { null }
+                        ?: o.optString("authorMode").ifEmpty { null })) {
+                    "members" -> "sealed"
+                    "everyone" -> "visible"
+                    null -> if (o.optString("type") == "gated") "visible" else null
+                    else -> raw
+                },
                 createdAt = o.optLong("createdAt", 0L),
                 // isNull first: Android's optString yields the literal "null" for JSON null.
                 createdBy = if (o.isNull("createdBy")) null else o.optString("createdBy").ifEmpty { null },
                 joinedAt = if (o.isNull("joinedAt")) null else o.optLong("joinedAt"),
                 password = if (o.isNull("password")) null else o.optString("password").ifEmpty { null },
                 members = members,
-                rotatedForBanned = rotatedForBanned,
+                rotatedForNoAccess = rotatedForNoAccess,
+                accessSnapshot = accessSnapshot,
                 knownBanned = knownBanned,
                 storageEnabled = o.optBoolean("storageEnabled", false),
                 storageProvider = o.optString("storageProvider", "streamr").ifEmpty { "streamr" },

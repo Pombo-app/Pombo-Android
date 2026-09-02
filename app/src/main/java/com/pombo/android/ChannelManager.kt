@@ -62,7 +62,7 @@ data class ExploreChannel(
     val gateValue: String? = null,
     val gateQualifier: String? = null,
     /** Author visibility from metadata `m` ('members' | 'everyone'). */
-    val authorMode: String? = null
+    val wireIdentity: String? = null
 )
 
 /** Quoted message carried by a reply (web: msg.replyTo). */
@@ -282,6 +282,12 @@ class ChannelManager(
             }
         },
         pubKeyBlockedForSelf = { messageStreamId -> messageStreamId in pubKeyBlocked },
+        // Only a preview lives outside _channels (channelByStream falls back to
+        // _current for it) — membership in the persisted list is the signal,
+        // not _isPreview, whose flip can race the async hello.
+        isPreviewChannel = { messageStreamId ->
+            _channels.value.none { it.messageStreamId == messageStreamId }
+        },
         myPrivateKey = myPrivateKey,
         publishRoster = { keysStreamId, data ->
             val channel = channelByStream(keysStreamId) ?: throw IllegalStateException(
@@ -333,7 +339,7 @@ class ChannelManager(
             channelByStream(messageStreamId)?.let { sendWakeSignal(it, kind = "keys") }
         },
         sharedPublishFor = { messageStreamId ->
-            channelByStream(messageStreamId)?.authorMode == "members"
+            channelByStream(messageStreamId)?.wireIdentity == "sealed"
         }
     )
 
@@ -470,7 +476,7 @@ class ChannelManager(
                             "No epoch key for ${channel.messageStreamId} — cannot send media")
                     // Members-only: pieces travel under the SHARED key — the
                     // clone path would stamp the sender's account onto them.
-                    if (channel.authorMode == "members") {
+                    if (channel.wireIdentity == "sealed") {
                         val pub = epochKeys.publishKeyFor(channel.messageStreamId)
                             ?: throw IllegalStateException(
                                 "No publish key for ${channel.messageStreamId} — cannot send media on a Members-only channel")
@@ -1086,7 +1092,7 @@ class ChannelManager(
 
     suspend fun gateBannedMembers(): List<String> = admin.gateBannedMembers()
 
-    private suspend fun rotateForPendingBans(channel: Channel) = admin.rotateForPendingBans(channel)
+    private suspend fun rotateForLostAccess(channel: Channel) = admin.rotateForLostAccess(channel)
 
     suspend fun channelMembers(): List<MemberRow> = admin.channelMembers()
 
@@ -1142,6 +1148,7 @@ class ChannelManager(
     suspend fun removeMember(address: String) = admin.removeMember(address)
 
     suspend fun rekeyPublishKey(): Int = admin.rekeyPublishKey()
+    suspend fun rotateEpochManual() = admin.rotateEpochManual()
 
     suspend fun streamPermissions(): List<com.pombo.android.core.GraphApi.StreamPermission> = admin.streamPermissions()
 
@@ -1513,7 +1520,7 @@ class ChannelManager(
         /** PAID: subscription period in SECONDS. */
         gateDuration: Long? = null,
         /** Author visibility for gated channels ('members' | 'everyone'), IMMUTABLE. */
-        authorMode: String = "members",
+        wireIdentity: String = "sealed",
         /** Called once per on-chain step so the UI can drive the progress ring. */
         onProgress: () -> Unit = {}
     ): Channel {
@@ -1531,7 +1538,7 @@ class ChannelManager(
         // spent).
         val gateAddress: String? = if (type == "gated") {
             val createArgs = JSONObject().put("mode", gateMode)
-                .put("wireIdentity", if (authorMode == "members") 1 else 0)
+                .put("wireIdentity", if (wireIdentity == "sealed") 1 else 0)
                 .put("readOnly", readOnly)
             gateToken?.let { createArgs.put("token", it) }
             gateMinBalance?.let { createArgs.put("minBalance", it) }
@@ -1547,7 +1554,7 @@ class ChannelManager(
 
         // Members-only author visibility (the default for gated): mint the
         // SHARED publish key now so its address rides the permission batch.
-        val sharedPub = if (type == "gated" && authorMode == "members")
+        val sharedPub = if (type == "gated" && wireIdentity == "sealed")
             epochKeys.mintPublishKey() else null
 
         val base = "${addr.lowercase()}/${PomboCrypto.randomHex(8)}"
@@ -1746,7 +1753,7 @@ class ChannelManager(
             classification = classification ?: if (type == "gated") "personal" else null,
             readOnly = readOnly,
             gateAddress = gateAddress,
-            authorMode = if (type == "gated") authorMode else null
+            wireIdentity = if (type == "gated") wireIdentity else null
         )
         addChannel(channel)
         sharedPub?.let { epochKeys.adoptPublishKey(messageStreamId, it) }
@@ -1863,7 +1870,7 @@ class ChannelManager(
         var exposure = "hidden"
         var descriptionMeta = ""
         var gateAddress: String? = null
-        var metaAuthorMode: String? = null
+        var metaWireIdentity: String? = null
         var netNamed = false
         var metaRead = false
         try {
@@ -1883,7 +1890,7 @@ class ChannelManager(
                     // Author visibility (immutable `m` flag): it has to be
                     // right BEFORE the first publish — joining a Members-only
                     // channel as Everyone would put the account on the wire.
-                    metaAuthorMode = if (meta.optInt("m") == 1) "members" else "everyone"
+                    metaWireIdentity = if (meta.optInt("m") == 1) "sealed" else "visible"
                 }
             }
         } catch (e: Exception) { /* metadata is optional */ }
@@ -1911,7 +1918,7 @@ class ChannelManager(
             // as Visible would put the account on the wire.
             try {
                 val info = bridge.call("gateInfo", JSONObject().put("gate", gateAddress))
-                metaAuthorMode = if (info.optString("wireIdentityName") == "sealed") "members" else "everyone"
+                metaWireIdentity = if (info.optString("wireIdentityName") == "sealed") "sealed" else "visible"
                 gateReadOnly = info.optBoolean("readOnly", false)
             } catch (e: Exception) {
                 Log.w(TAG, "gateInfo unreadable at join — keeping the metadata flags: ${e.message}")
@@ -1942,7 +1949,7 @@ class ChannelManager(
             name = name,
             type = resolvedType,
             gateAddress = gateAddress,
-            authorMode = if (resolvedType == "gated") (metaAuthorMode ?: "everyone") else null,
+            wireIdentity = if (resolvedType == "gated") (metaWireIdentity ?: "visible") else null,
             joinedAt = System.currentTimeMillis(),
             password = if (resolvedType == "password") password else null,
             exposure = exposure,
@@ -3682,11 +3689,11 @@ class ChannelManager(
         scope.launch {
             try {
                 val info = bridge.call("gateInfo", JSONObject().put("gate", gate))
-                val mode = if (info.optString("wireIdentityName") == "sealed") "members" else "everyone"
+                val mode = if (info.optString("wireIdentityName") == "sealed") "sealed" else "visible"
                 val ro = info.optBoolean("readOnly", false)
                 val cur = _channels.value.find { it.messageStreamId == channel.messageStreamId }
-                if (cur != null && (cur.authorMode != mode || cur.readOnly != ro)) {
-                    val updated = cur.copy(authorMode = mode, readOnly = ro)
+                if (cur != null && (cur.wireIdentity != mode || cur.readOnly != ro)) {
+                    val updated = cur.copy(wireIdentity = mode, readOnly = ro)
                     _channels.value = _channels.value.map {
                         if (it.messageStreamId == updated.messageStreamId) updated else it
                     }
@@ -3827,9 +3834,9 @@ class ChannelManager(
                         .takeIf { Regex("^0x[0-9a-f]{40}$").matches(it) } ?: return@launch
                     // The author-visibility flag lives in the same metadata
                     // and is immutable — repair it together with the gate.
-                    val mode = if (meta.optInt("m") == 1) "members" else "everyone"
+                    val mode = if (meta.optInt("m") == 1) "sealed" else "visible"
                     _channels.value = _channels.value.map {
-                        if (it.messageStreamId == sid) it.copy(gateAddress = g, authorMode = mode) else it
+                        if (it.messageStreamId == sid) it.copy(gateAddress = g, wireIdentity = mode) else it
                     }
                     store.save(_channels.value)
                     if (_current.value?.messageStreamId == sid) {
@@ -4008,7 +4015,7 @@ class ChannelManager(
                         }
                     }
                     if (!stillCurrent(generation)) return@launch
-                    launch { rotateForPendingBans(channel) }
+                    launch { rotateForLostAccess(channel) }
                 }
                 val loads = launch {
                     listOf(
@@ -4967,7 +4974,7 @@ class ChannelManager(
             // Fail-closed on both halves: no publish key or no wallet means
             // NO publish, never a fallback to the clone (which would put the
             // account on the wire).
-            val membersOnly = channel.authorMode == "members" && !isAdminStream
+            val membersOnly = channel.wireIdentity == "sealed" && !isAdminStream
             var sharedKeyHex: String? = null
             if (membersOnly) {
                 var pub = epochKeys.publishKeyFor(channel.messageStreamId)
@@ -5216,7 +5223,7 @@ class ChannelManager(
             if (content is JSONObject && com.pombo.android.core.EpochKeyCrypto.isEpochEnvelope(content)) {
                 val ch = channelByStream(streamId)
                 if (ch != null && isEpochChannel(ch)) {
-                    val membersOnly = ch.type == "gated" && ch.authorMode == "members"
+                    val membersOnly = ch.type == "gated" && ch.wireIdentity == "sealed"
                     // Everyone-mode gated: the on-wire publisher is the CLONE —
                     // the seeder/leecher identity the media controller needs is
                     // the envelope signer, never the transport publisher.
@@ -5306,7 +5313,7 @@ class ChannelManager(
                 // hash from an AUTHORED announce — the piece carries the
                 // shared address as its identity, and the assembly path
                 // validates bytes by hash exactly as before.
-                val author = if (channel.authorMode == "members") {
+                val author = if (channel.wireIdentity == "sealed") {
                     meta.optString("publisherId").lowercase().ifEmpty { null }
                 } else if (gated) {
                     gatedAuthor(channel, streamId, meta) ?: return@launch
@@ -5479,13 +5486,24 @@ class ChannelManager(
             // nothing). A sealed message without a valid wrapper has no
             // author and drops; lapsed members cut live, exactly like the
             // Everyone mode cuts them on the envelope signer.
-            if (channel.authorMode == "members") {
+            if (channel.wireIdentity == "sealed") {
                 val opened = com.pombo.android.core.Authorship.open(channel.messageStreamId, data)
                     ?: return
                 if (!historical && !liveGateAccessAllows(channel, opened.author)) return
                 innerAuthor = opened.author
                 data = opened.payload
             }
+        }
+        // Timestamp forgery clamps (§3.6): the payload timestamp is what the
+        // UI orders and pages by, and the publisher writes it freely. Reject a
+        // payload dated ahead of the wall clock or ahead of its own signed
+        // envelope beyond clock skew. One-sided on purpose: a payload OLDER
+        // than its envelope is a legitimate republish.
+        val payloadTs = data.optLong("timestamp", 0L)
+        if (payloadTs > 0) {
+            val envTs = meta.optLong("timestamp", 0L)
+            if (payloadTs > System.currentTimeMillis() + TIMESTAMP_TOLERANCE_MS) return
+            if (envTs > 0 && payloadTs > envTs + TIMESTAMP_TOLERANCE_MS) return
         }
         // Single gate for every write below — messages, images, reactions and
         // overrides all funnel through here, from both the resend and the live
@@ -5934,6 +5952,9 @@ class ChannelManager(
         const val PREVIEW_PRESENCE_INTERVAL_MS = 20_000L
         /** Web config.js subscriptions.adminPollIntervalMs. */
         const val ADMIN_POLL_INTERVAL_MS = 30_000L
+        /** Allowed clock skew of a payload timestamp ahead of now / of its
+         *  signed envelope (web config gate.timestampSkewMs). One-sided: a
+         *  payload older than its envelope is a legitimate republish. */
         const val TIMESTAMP_TOLERANCE_MS = 5 * 60_000L
         /** Web isRecentMessage: only messages under 30s old get the replay check. */
         const val RECENT_MESSAGE_MS = 30_000L

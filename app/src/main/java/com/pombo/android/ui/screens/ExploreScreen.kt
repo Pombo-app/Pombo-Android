@@ -531,7 +531,7 @@ private fun ExploreCard(
         // corner at the same height — one row of card height instead of two,
         // and no orphaned lone badge. Subscribe = recurring (accent-tinted
         // verb); Hold = mere possession, "in your wallet" = "you pay nothing".
-        if (ch.gateVerb != null || tags.isNotEmpty() || ch.authorMode != null) {
+        if (ch.gateVerb != null || tags.isNotEmpty() || ch.wireIdentity != null) {
             Spacer(Modifier.height(6.dp))
             Box(Modifier.fillMaxWidth()) {
                 ch.gateVerb?.let { verb ->
@@ -558,7 +558,7 @@ private fun ExploreCard(
                         )
                     }
                 }
-                if (tags.isNotEmpty() || ch.authorMode != null) {
+                if (tags.isNotEmpty() || ch.wireIdentity != null) {
                     // Audience icon (never identity — both modes guarantee
                     // authorship to participants) rides centered above the
                     // LAST tag, in the card-metadata corner.
@@ -579,11 +579,11 @@ private fun ExploreCard(
                         }
                         tags.dropLast(1).forEach { tagText(it) }
                         Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                            ch.authorMode?.let { mode ->
+                            ch.wireIdentity?.let { mode ->
                                 Icon(
-                                    if (mode == "members") Icons.Outlined.People else Icons.Outlined.Public,
-                                    contentDescription = if (mode == "members")
-                                        "Authors visible to members only" else "Author on the wire",
+                                    if (mode == "sealed") Icons.Outlined.People else Icons.Outlined.Public,
+                                    contentDescription = if (mode == "sealed")
+                                        "Sealed — authors readable by members only" else "Visible — every message signed by its author",
                                     tint = Color.White.copy(alpha = 0.50f),
                                     modifier = Modifier.size(16.dp)
                                 )

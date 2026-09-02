@@ -73,7 +73,7 @@ class ImageAssemblyTest {
         .put("finalMime", mime)
         .put("finalSizeBytes", declaredSize)
         .put("assembledSha256", assembledSha)
-        .put("timestamp", 1_800_000_000_000L)
+        .put("timestamp", 1_750_000_000_000L)
 
     private fun chunk(imageId: String = "img-1", index: Int, bytes: ByteArray, v: Int = 2) =
         JSONObject().put("type", "image_chunk").put("v", v)

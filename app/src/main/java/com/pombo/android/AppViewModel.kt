@@ -1028,6 +1028,14 @@ class AppViewModel(app: Application) : AndroidViewModel(app), PomboBridge.Listen
     suspend fun streamPermissions(): List<com.pombo.android.core.GraphApi.StreamPermission> =
         manager.streamPermissions()
 
+    /** Admin-only: manual epoch rotation — free, unlike the re-key below. */
+    fun rotateEpochNow(onDone: () -> Unit = {}) = viewModelScope.launch {
+        runWithToast("Rotating channel key…", "Channel key rotated", "Failed to rotate channel key") {
+            manager.rotateEpochManual()
+        }
+        onDone()
+    }
+
     /** Admin-only: replaces the shared publish key of a Members-only channel. */
     fun rekeyPublishKey(onDone: () -> Unit = {}) = viewModelScope.launch {
         chainAction(
@@ -2523,7 +2531,7 @@ class AppViewModel(app: Application) : AndroidViewModel(app), PomboBridge.Listen
                 gateMinBalance = spec.gateMinBalance,
                 gatePrice = spec.gatePrice,
                 gateDuration = spec.gateDurationSeconds,
-                authorMode = spec.authorMode
+                wireIdentity = spec.wireIdentity
             ) {
                 step += 1
                 val label = when {
@@ -2589,7 +2597,7 @@ class AppViewModel(app: Application) : AndroidViewModel(app), PomboBridge.Listen
         /** Renewing from inside the channel: pay is always offered, no "Enter". */
         val renewal: Boolean = false,
         /** Author visibility ('members' | 'everyone'), when locally known. */
-        val authorMode: String? = null,
+        val wireIdentity: String? = null,
         val retry: suspend () -> Unit
     )
 
@@ -2619,10 +2627,10 @@ class AppViewModel(app: Application) : AndroidViewModel(app), PomboBridge.Listen
         try {
             // Author visibility comes from stream metadata, which the gate
             // contract knows nothing about — resolve it from local caches.
-            val authorMode = manager.channels.value
-                .firstOrNull { it.gateAddress.equals(gateAddress, ignoreCase = true) }?.authorMode
-                ?: _explore.value.firstOrNull { it.gateAddress.equals(gateAddress, ignoreCase = true) }?.authorMode
-            _gateEntry.value = GateEntry(manager.gateEntryInfo(gateAddress), channelName, renewal, authorMode, retry)
+            val wireIdentity = manager.channels.value
+                .firstOrNull { it.gateAddress.equals(gateAddress, ignoreCase = true) }?.wireIdentity
+                ?: _explore.value.firstOrNull { it.gateAddress.equals(gateAddress, ignoreCase = true) }?.wireIdentity
+            _gateEntry.value = GateEntry(manager.gateEntryInfo(gateAddress), channelName, renewal, wireIdentity, retry)
         } catch (e: Exception) {
             toast(
                 "Could not read the gate contract: ${com.pombo.android.core.ChainErrors.friendly(e)}",
@@ -2760,7 +2768,7 @@ class AppViewModel(app: Application) : AndroidViewModel(app), PomboBridge.Listen
                         lastSenderAddress = cached?.senderAddress.orEmpty(),
                         readOnly = info.readOnly,
                         gateAddress = info.gateAddress,
-                        authorMode = info.authorMode
+                        wireIdentity = info.wireIdentity
                     )
                 }
                 _exploreLoading.value = false

@@ -43,7 +43,7 @@ class FileAnnounceTest {
         fileName: String = "notes.txt"
     ) = JSONObject()
         .put("type", "file_announce").put("id", id)
-        .put("timestamp", 1_800_000_000_000L)
+        .put("timestamp", 1_750_000_000_000L)
         .put("metadata", JSONObject()
             .put("fileId", fileId)
             .put("fileName", fileName)
@@ -59,7 +59,7 @@ class FileAnnounceTest {
         fileName: String = "report.pdf"
     ) = JSONObject()
         .put("type", "storage_file_announce").put("id", id)
-        .put("timestamp", 1_800_000_000_000L)
+        .put("timestamp", 1_750_000_000_000L)
         .put("metadata", JSONObject()
             .put("transferId", transferId)
             .put("fileName", fileName)

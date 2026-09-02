@@ -384,11 +384,11 @@ internal fun GateEntryDialog(vm: AppViewModel, entry: AppViewModel.GateEntry) {
 
             // Author visibility is a privacy promise the user must see before
             // paying or entering (web: gate-entry-authors).
-            entry.authorMode?.let { mode ->
+            entry.wireIdentity?.let { mode ->
                 Spacer(Modifier.height(10.dp))
-                val members = mode == "members"
+                val members = mode == "sealed"
                 Text(
-                    if (members) "Authors visible to members only"
+                    if (members) "Sealed identity — authors readable by members only"
                     else "Every message is signed by its author on the wire",
                     color = if (members) Color.White.copy(alpha = 0.40f)
                     else Color(0xFFFBBF24).copy(alpha = 0.70f),
@@ -1135,7 +1135,7 @@ data class NewChannel(
     val gatePrice: String? = null,
     val gateDurationSeconds: Long? = null,
     /** Author visibility ('members' | 'everyone'), IMMUTABLE post-creation. */
-    val authorMode: String = "members"
+    val wireIdentity: String = "sealed"
 )
 
 /** Quick-pick token chips (N-D): presets + Custom. */
@@ -1244,7 +1244,7 @@ internal fun CreateChannelDialog(vm: AppViewModel, onDismiss: () -> Unit, onCrea
         storageProvider = storageProvider,
         customStorageAddress = customStorage.trim().ifBlank { null },
         storageDays = storageDays.toInt(),
-        authorMode = if (authorEveryone) "everyone" else "members"
+        wireIdentity = if (authorEveryone) "visible" else "sealed"
     )
 
     // Low-balance confirm fires AFTER async gate resolution — remember the
@@ -1693,7 +1693,7 @@ internal fun CreateChannelDialog(vm: AppViewModel, onDismiss: () -> Unit, onCrea
                     }
                     Text(
                         if (authorEveryone)
-                            "Storage is protected from pollution. Every message exposes its author's account."
+                            "Every message exposes its author's account, attributable by anyone, forever. Removed members' messages are rejected by readers, but can still reach storage."
                         else
                             "Full author privacy. Removed members can pollute storage until you reset the key with a paid on-chain action.",
                         color = Color.White.copy(alpha = 0.30f), fontSize = 12.sp,
@@ -1710,7 +1710,7 @@ internal fun CreateChannelDialog(vm: AppViewModel, onDismiss: () -> Unit, onCrea
                 // honoured (ChannelModalsUI.js:184-190).
                 if (kind != ChannelKind.CLOSED) {
                     ToggleRow(
-                        label = "VISIBLE",
+                        label = "LISTED",
                         hint = "Channel appears in Explore",
                         checked = visible,
                         onToggle = { visible = !visible }

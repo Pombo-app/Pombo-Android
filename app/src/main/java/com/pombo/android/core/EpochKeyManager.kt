@@ -103,7 +103,13 @@ class EpochKeyManager(
      * a read-only channel) — stops it requesting a wrap nobody may answer.
      * Unknown role keeps asking; the responders refuse, which is harmless.
      */
-    private val pubKeyBlockedForSelf: (messageStreamId: String) -> Boolean = { false }
+    private val pubKeyBlockedForSelf: (messageStreamId: String) -> Boolean = { false },
+    /**
+     * True while this channel is open as a non-persisted preview. Peeking
+     * requests keys like a member (live-holding gates answer), but must not
+     * publish a MEMBER_HELLO — the roster feeds the members panel.
+     */
+    private val isPreviewChannel: (messageStreamId: String) -> Boolean = { false }
 ) {
     data class Entry(val data: JSONObject, val publisherId: String?, val timestamp: Long)
 
@@ -1473,6 +1479,7 @@ class EpochKeyManager(
      * keeps the roster private: the -4 resend is publicly readable over HTTP.
      */
     private suspend fun maybePublishHello(messageStreamId: String, keysStreamId: String, keyId: String) {
+        if (isPreviewChannel(messageStreamId)) return
         val account = myAddress()?.lowercase() ?: return
         var keyHex = ""
         var epoch = 0
@@ -1677,7 +1684,13 @@ class EpochKeyManager(
         s: ChannelState, kid: String, kidEpoch: Int, live: Boolean, timestamp: Long
     ): Boolean {
         val current = s.announces[s.currentEpoch] ?: return true  // no anchor — cannot judge
-        if (kid == current.keyId) return true                     // current epoch always fine
+        if (kid == current.keyId) {
+            // Current epoch — but a history timestamp from before the epoch
+            // existed is backdating under the current key (§3.6): the kid in
+            // force then was an older one.
+            if (live || timestamp <= 0L) return true
+            return timestamp >= current.validFrom - KID_FRESHNESS_TOLERANCE_MS
+        }
         if (live) {
             // Previous epoch tolerated briefly after a rotation (messages in
             // flight, slow adopters); anything older is stale-key spam.

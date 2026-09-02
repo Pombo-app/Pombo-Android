@@ -179,38 +179,57 @@ internal class Moderation(private val manager: ChannelManager) {
         gateMemberFlags().filter { it.banned }.map { it.address }
 
     /**
-     * Rotate the epoch for bans this device never rotated for.
+     * Rotate the epoch for anyone who LOST access since the last sweep —
+     * bans made while the admin was away, expired PAID subscriptions, sold
+     * tokens/NFTs, Closed revokes (§6.2).
      *
-     * Only the channel admin can announce an epoch, so a moderator's ban cuts
-     * key distribution immediately but leaves the banned member holding the
-     * current key until an admin shows up. Comparing the gate's banned set
-     * with the one we last rotated for closes that window on the admin's next
-     * open, whoever did the banning and whenever. No event scan: free RPCs cap
-     * eth_getLogs at 10k blocks, and the flags read is one we already make.
+     * Only the channel admin can announce an epoch, so a cut elsewhere leaves
+     * the ex-member holding the current key until an admin shows up. The
+     * flags read is the one the members panel already makes; comparing it
+     * with the previous sweep's snapshot closes the window on the admin's
+     * next open. No event scan: free RPCs cap eth_getLogs at 10k blocks.
+     *
+     * Two triggers, deliberately different: a ban rotates even without a
+     * snapshot (explicit intent); anything else only when the address was in
+     * the last snapshot WITH access. A candidate who never had access
+     * (refused requester) never triggers.
      */
-    internal suspend fun rotateForPendingBans(channel: Channel) {
+    internal suspend fun rotateForLostAccess(channel: Channel) {
         if (channel.type != "gated" || channel.gateAddress == null) return
         val me = myAddress()?.lowercase() ?: return
         if (me != channel.messageStreamId.substringBefore('/').lowercase()) return
 
-        val banned = try { gateBannedMembers().map { it.lowercase() } }
-            catch (e: Exception) { return }
-        if (banned.isEmpty()) return
-        val covered = channel.rotatedForBanned.map { it.lowercase() }.toSet()
-        if (banned.all { it in covered }) return
+        val flags = try { gateMemberFlags() } catch (e: Exception) { return }
+        if (flags.isEmpty()) return   // unreadable gate — judge nothing
+
+        val withAccess = flags.filter { it.access }.map { it.address.lowercase() }.toSet()
+        val noAccessNow = flags.filter { !it.access && !it.isOwner }.map { it.address.lowercase() }
+        val bannedNow = flags.filter { it.banned }.map { it.address.lowercase() }
+        val previously = channel.accessSnapshot.map { it.lowercase() }.toSet()
+
+        // Regained access clears the cover, so losing it AGAIN rotates again.
+        val covered = channel.rotatedForNoAccess.map { it.lowercase() }
+            .filterNot { it in withAccess }.toSet()
+
+        val pending = (noAccessNow.filter { it in previously } + bannedNow)
+            .distinct().filterNot { it in covered }
 
         val keysId = channel.keysStreamId.ifEmpty { StreamConstants.deriveKeysId(channel.messageStreamId) }
         try {
-            epochKeys.rotateEpoch(channel.messageStreamId, keysId)
-            val updated = channel.copy(rotatedForBanned = banned)
+            if (pending.isNotEmpty()) {
+                epochKeys.rotateEpoch(channel.messageStreamId, keysId)
+                Log.i(TAG, "Rotated the epoch for lost access (${pending.size} address(es))")
+            }
+            val updated = channel.copy(
+                rotatedForNoAccess = (covered + pending).toList(),
+                accessSnapshot = withAccess.toList())
             _channels.value = _channels.value.map {
                 if (it.messageStreamId == updated.messageStreamId) updated else it
             }
             store.save(_channels.value)
             if (_current.value?.messageStreamId == updated.messageStreamId) _current.value = updated
-            Log.i(TAG, "Rotated the epoch for bans made while the admin was away")
         } catch (e: Exception) {
-            Log.w(TAG, "Deferred rotation for pending bans failed (will retry next open): ${e.message}")
+            Log.w(TAG, "Deferred rotation for lost access failed (will retry next open): ${e.message}")
         }
     }
 
@@ -530,6 +549,18 @@ internal class Moderation(private val manager: ChannelManager) {
     }
 
     /**
+     * Manual epoch rotation (§3.5): issues a new channel key now. Free — no
+     * transaction — unlike [rekeyPublishKey]. Admin only: nobody else's
+     * announce is accepted on -4.
+     */
+    suspend fun rotateEpochManual() {
+        val channel = _current.value?.takeIf { it.type == "gated" }
+            ?: throw IllegalStateException("No gated channel open")
+        val keysId = channel.keysStreamId.ifEmpty { StreamConstants.deriveKeysId(channel.messageStreamId) }
+        epochKeys.rotateEpoch(channel.messageStreamId, keysId)
+    }
+
+    /**
      * Replaces the shared publish key of a Members-only channel: grants the
      * new key's address and revokes the old one on `-1`/`-2` (one transaction
      * per stream), then announces the new key on `-4`. Members pick it up
@@ -537,7 +568,7 @@ internal class Moderation(private val manager: ChannelManager) {
      */
     suspend fun rekeyPublishKey(): Int {
         val channel = _current.value ?: throw IllegalStateException("No channel open")
-        check(channel.type == "gated" && channel.authorMode == "members") {
+        check(channel.type == "gated" && channel.wireIdentity == "sealed") {
             "the publish key only exists on Members-only channels"
         }
         val keysId = channel.keysStreamId.ifEmpty { StreamConstants.deriveKeysId(channel.messageStreamId) }
@@ -909,7 +940,7 @@ internal class Moderation(private val manager: ChannelManager) {
                 .put("gate", gate).put("user", addr), 180_000)
             gateManageCache.clear()
             val keysId = channel.keysStreamId.ifEmpty { StreamConstants.deriveKeysId(channel.messageStreamId) }
-            var rotated = channel.rotatedForBanned
+            var rotated = channel.rotatedForNoAccess
             try {
                 epochKeys.rotateEpoch(channel.messageStreamId, keysId)
                 // Covered: the deferred pass must not rotate again for this one.
@@ -919,7 +950,7 @@ internal class Moderation(private val manager: ChannelManager) {
             }
             val updated = channel.copy(
                 members = channel.members.filterNot { it.equals(addr, ignoreCase = true) },
-                rotatedForBanned = rotated,
+                rotatedForNoAccess = rotated,
                 knownBanned = (channel.knownBanned + addr.lowercase()).distinct()
             )
             _channels.value = _channels.value.map { if (it.messageStreamId == updated.messageStreamId) updated else it }

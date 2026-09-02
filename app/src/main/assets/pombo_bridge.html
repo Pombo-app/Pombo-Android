@@ -988,11 +988,16 @@ const api = {
         if (!client) throw new Error('client not connected');
         const stream = await client.getStream(a.streamId);
         if (!stream) throw new Error('Stream not found');
+        // The description also carries the gate ('g') and wire identity ('m'):
+        // writing over a failed read would strip the gate on-chain, so an
+        // unreadable description aborts the update instead of merging into {}.
         let meta = {};
         try {
             const desc = await stream.getDescription();
             meta = desc ? JSON.parse(desc) : {};
-        } catch (e) { meta = {}; }
+        } catch (e) {
+            throw new Error('Channel metadata could not be read; rename aborted to avoid losing the gate');
+        }
         if (typeof a.name === 'string') meta.n = a.name;
         if (typeof a.description === 'string') meta.d = a.description;
         await stream.setDescription(JSON.stringify(meta));
