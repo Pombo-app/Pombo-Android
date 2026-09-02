@@ -2015,6 +2015,12 @@ class ChannelManager(
                 val entry = arr.optJSONObject(i) ?: continue
                 val content = decrypted.getOrNull(i) as? JSONObject ?: continue
                 val ts = entry.optJSONObject("meta")?.optLong("timestamp") ?: 0L
+                // Same §3.6 clamp the ingest funnel applies — this resend does
+                // not pass through it, and a dropped message must not surface
+                // through the preview line either.
+                val pTs = content.optLong("timestamp", 0L)
+                if (pTs > 0 && (pTs > System.currentTimeMillis() + TIMESTAMP_TOLERANCE_MS ||
+                        (ts > 0 && pTs > ts + TIMESTAMP_TOLERANCE_MS))) continue
                 // account = proof ? recovered wallet : publisherId — covers all
                 // three eras: new messages (proof), legacy (publisherId = the
                 // wallet) and reactions (no sender field at all). The legacy
@@ -2089,6 +2095,12 @@ class ChannelManager(
                 // a window full of reactions cannot make the next scan reread
                 // the same entries forever (web does the same).
                 if (ts > maxTs) maxTs = ts
+
+                // §3.6 clamp — a message the ingest funnel would drop must not
+                // count for the preview or the unread badge.
+                val pTs = content.optLong("timestamp", 0L)
+                if (pTs > 0 && (pTs > System.currentTimeMillis() + TIMESTAMP_TOLERANCE_MS ||
+                        (ts > 0 && pTs > ts + TIMESTAMP_TOLERANCE_MS))) continue
 
                 // Same rule as fetchLatestPreview: identity from the proof-
                 // resolved account, publisherId fallback for the legacy eras.
