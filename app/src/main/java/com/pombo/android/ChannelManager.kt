@@ -4960,7 +4960,13 @@ class ChannelManager(
         if (isAdminStream && !isEpochChannel(channel)) {
             return publishContent(streamId, partition, payload, password)
         }
-        if (channel != null && channel.readOnly && streamId == channel.messageStreamId) {
+        // Non-gated read-only: the owner publishes -1 under the account, whose
+        // stream grant is the write restriction. A GATED read-only channel must
+        // NOT take this shortcut — it would skip the epoch layer and go out
+        // under the SDK's own group key, which members cannot open; there the
+        // restriction is the gate's read-only filter, on the epoch path below.
+        if (channel != null && channel.readOnly && !isEpochChannel(channel) &&
+            streamId == channel.messageStreamId) {
             return publishContent(streamId, partition, payload, password)
         }
         // GATED channels (N-A/N-C): encrypt with the channel's epoch key and
