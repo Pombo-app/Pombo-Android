@@ -1736,12 +1736,13 @@ internal fun CreateChannelDialog(vm: AppViewModel, onDismiss: () -> Unit, onCrea
                     Spacer(Modifier.height(16.dp))
                 }
 
-                // Read-only: grants public subscribe WITHOUT publish. Missing
-                // this meant every Android-created channel granted public
-                // publish, with no way to make a broadcast channel.
+                // Read-only. Public/password: public subscribe WITHOUT
+                // publish. Gated: an immutable flag on the gate — the
+                // contract refuses everyone but the owner and moderators at
+                // ingest, and the shared publish key is only handed to them.
                 ToggleRow(
                     label = "READ-ONLY",
-                    hint = "Only you can post; everyone else can read",
+                    hint = "Only you and your moderators can post; everyone else reads",
                     checked = readOnly,
                     onToggle = { readOnly = !readOnly }
                 )

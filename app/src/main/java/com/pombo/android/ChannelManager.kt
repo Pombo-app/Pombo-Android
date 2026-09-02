@@ -266,6 +266,22 @@ class ChannelManager(
                 true
             }
         },
+        mayHoldPublishKey = { messageStreamId, requester ->
+            val channel = channelByStream(messageStreamId)
+            val gate = channel?.takeIf { it.type == "gated" }?.gateAddress
+            if (gate == null) true
+            else try {
+                val info = bridge.call("gateInfo", JSONObject().put("gate", gate))
+                if (!info.optBoolean("readOnly", false)) true
+                else info.optString("owner").equals(requester, ignoreCase = true) ||
+                    gateOwnerOrModerator(gate, requester)
+            } catch (e: Exception) {
+                // Unreadable gate fails CLOSED for the write capability
+                Log.w(TAG, "publish-key role check failed — withholding it: ${e.message}")
+                false
+            }
+        },
+        pubKeyBlockedForSelf = { messageStreamId -> messageStreamId in pubKeyBlocked },
         myPrivateKey = myPrivateKey,
         publishRoster = { keysStreamId, data ->
             val channel = channelByStream(keysStreamId) ?: throw IllegalStateException(
@@ -1062,8 +1078,7 @@ class ChannelManager(
         val moderator: Boolean,
         val access: Boolean,
         val banned: Boolean,
-        val everMember: Boolean,
-        val erased: Boolean,
+        val allowed: Boolean,
         val paidUntil: Long
     )
 
@@ -1507,12 +1522,17 @@ class ChannelManager(
 
         // Gated (N-C): the gate clone comes FIRST — its address goes into the
         // -1 metadata and receives every stream grant. One factory tx; the
-        // creator becomes the gate owner and is everMember from block one.
-        // N-D: the mode and its params come from the caller — the UI already
-        // validated them against PomboGate.initialize's per-mode rules (a bad
-        // combination reverts InvalidParams after the deploy gas was spent).
+        // creator becomes the gate owner. The identity mode and the read-only
+        // flag are immutable fields of the clone — the contract is the
+        // authority on both; the metadata flags written below are cached
+        // copies. N-D: the mode and its params come from the caller — the UI
+        // already validated them against PomboGate.initialize's per-mode rules
+        // (a bad combination reverts InvalidParams after the deploy gas was
+        // spent).
         val gateAddress: String? = if (type == "gated") {
             val createArgs = JSONObject().put("mode", gateMode)
+                .put("wireIdentity", if (authorMode == "members") 1 else 0)
+                .put("readOnly", readOnly)
             gateToken?.let { createArgs.put("token", it) }
             gateMinBalance?.let { createArgs.put("minBalance", it) }
             gatePrice?.let { createArgs.put("price", it) }
@@ -1874,6 +1894,7 @@ class ChannelManager(
 
         // Gated (N-C): stream permissions belong to the gate clone, never to
         // members — the join gate is the CONTRACT. One cached eth_call.
+        var gateReadOnly = false
         if (gateAddress != null) {
             type = "gated"
             val me = myAddress() ?: throw IllegalStateException("No identity")
@@ -1883,6 +1904,17 @@ class ChannelManager(
                 // Typed for the UI (N-D): the gate entry screen reads the mode
                 // on-chain and offers pay() instead of a toast.
                 throw GateAccessDenied(gateAddress)
+            }
+            // The contract is the authority on the identity mode and the
+            // read-only flag; the metadata `m`/`r` are mutable copies. It has
+            // to be right BEFORE the first publish — joining a Sealed channel
+            // as Visible would put the account on the wire.
+            try {
+                val info = bridge.call("gateInfo", JSONObject().put("gate", gateAddress))
+                metaAuthorMode = if (info.optString("wireIdentityName") == "sealed") "members" else "everyone"
+                gateReadOnly = info.optBoolean("readOnly", false)
+            } catch (e: Exception) {
+                Log.w(TAG, "gateInfo unreadable at join — keeping the metadata flags: ${e.message}")
             }
             canPublish = true
             canSubscribe = true
@@ -1916,7 +1948,7 @@ class ChannelManager(
             exposure = exposure,
             description = descriptionMeta,
             classification = classification,
-            readOnly = !canPublish && canSubscribe,
+            readOnly = if (resolvedType == "gated") gateReadOnly else !canPublish && canSubscribe,
             writeOnly = canPublish && !canSubscribe
         )
         addChannel(channel)
@@ -3629,7 +3661,67 @@ class ChannelManager(
     fun openChannel(messageStreamId: String) {
         val channel = _channels.value.find { it.messageStreamId == messageStreamId } ?: return
         unreadStore.clear(messageStreamId)
+        reconcileGateAuthority(channel)
         openInternal(channel, preview = false)
+    }
+
+    /**
+     * The CONTRACT is the authority on the identity mode and the read-only
+     * flag (v3 immutable fields); the -1 metadata copies are mutable and even
+     * erasable by a failed rename. Reconciled once per session, best-effort.
+     * On read-only channels it also settles whether THIS account may hold the
+     * shared publish key, so a plain member stops requesting it.
+     */
+    private val gateAuthorityChecked = java.util.Collections.synchronizedSet(HashSet<String>())
+    internal val pubKeyBlocked = java.util.Collections.synchronizedSet(HashSet<String>())
+
+    internal fun reconcileGateAuthority(channel: Channel) {
+        if (channel.type != "gated") return
+        val gate = channel.gateAddress ?: return
+        if (!gateAuthorityChecked.add(channel.messageStreamId)) return
+        scope.launch {
+            try {
+                val info = bridge.call("gateInfo", JSONObject().put("gate", gate))
+                val mode = if (info.optString("wireIdentityName") == "sealed") "members" else "everyone"
+                val ro = info.optBoolean("readOnly", false)
+                val cur = _channels.value.find { it.messageStreamId == channel.messageStreamId }
+                if (cur != null && (cur.authorMode != mode || cur.readOnly != ro)) {
+                    val updated = cur.copy(authorMode = mode, readOnly = ro)
+                    _channels.value = _channels.value.map {
+                        if (it.messageStreamId == updated.messageStreamId) updated else it
+                    }
+                    store.save(_channels.value)
+                    if (_current.value?.messageStreamId == updated.messageStreamId) _current.value = updated
+                    Log.i(TAG, "Gate authority corrected the local record: " +
+                        "${channel.messageStreamId.takeLast(20)} → $mode${if (ro) " (read-only)" else ""}")
+                }
+                if (ro) {
+                    val me = myAddress()?.lowercase() ?: return@launch
+                    val mayWrite = info.optString("owner").equals(me, ignoreCase = true) ||
+                        gateOwnerOrModerator(gate, me)
+                    if (mayWrite) pubKeyBlocked.remove(channel.messageStreamId)
+                    else pubKeyBlocked.add(channel.messageStreamId)
+                }
+            } catch (e: Exception) {
+                gateAuthorityChecked.remove(channel.messageStreamId)
+                Log.w(TAG, "Gate authority read failed for ${channel.messageStreamId.takeLast(20)}: ${e.message}")
+            }
+        }
+    }
+
+    /** One states() read: is this address the gate's owner or a moderator? */
+    private suspend fun gateOwnerOrModerator(gate: String, address: String): Boolean {
+        val res = bridge.call("gateMembers", JSONObject()
+            .put("gate", gate)
+            .put("candidates", org.json.JSONArray(listOf(address.lowercase()))), 30_000)
+        val arr = res.optJSONArray("members") ?: return false
+        for (i in 0 until arr.length()) {
+            val m = arr.optJSONObject(i) ?: continue
+            if (m.optString("address").equals(address, ignoreCase = true)) {
+                return m.optBoolean("isOwner") || m.optBoolean("moderator")
+            }
+        }
+        return false
     }
 
     /**

@@ -114,8 +114,18 @@ internal class Moderation(private val manager: ChannelManager) {
         // knownBanned: the ban drops them from `members` and the roster stops
         // carrying them, so without it a banned address falls out of the
         // candidate set and Moderation loses the entry it exists to show.
+        // On Closed gates the contract's own enumeration completes the set —
+        // candidates no longer depend on what this client happened to see.
+        val onChain = try {
+            val info = bridge.call("gateInfo", JSONObject().put("gate", gate))
+            if (info.optInt("mode", -1) == GATE_MODE_NONE) {
+                val res = bridge.call("gateListMembers", JSONObject().put("gate", gate), 60_000)
+                val arr = res.optJSONArray("members")
+                (0 until (arr?.length() ?: 0)).mapNotNull { arr?.optString(it)?.ifEmpty { null } }
+            } else emptyList()
+        } catch (e: Exception) { emptyList() }
         val candidates = (channel.members + channel.knownBanned +
-            epochKeys.seenRequesters(channel.messageStreamId) + roster)
+            epochKeys.seenRequesters(channel.messageStreamId) + roster + onChain)
             .map { it.lowercase() }.distinct()
         return try {
             val res = bridge.call("gateMembers", JSONObject()
@@ -132,8 +142,7 @@ internal class Moderation(private val manager: ChannelManager) {
                     moderator = m.optBoolean("moderator"),
                     access = m.optBoolean("access"),
                     banned = m.optBoolean("banned"),
-                    everMember = m.optBoolean("everMember"),
-                    erased = m.optBoolean("erased"),
+                    allowed = m.optBoolean("allowed"),
                     paidUntil = m.optLong("paidUntil", 0L)
                 ))
             }
@@ -417,9 +426,9 @@ internal class Moderation(private val manager: ChannelManager) {
             throw IllegalStateException("Address is already a member")
         }
 
-        // Gated (N-C): membership is ONE gate transaction — allow() marks the
-        // address allowlisted + everMember. No stream grants: access is proven
-        // per-message via ERC-1271.
+        // Gated (N-C): membership is ONE gate transaction — allow() on the
+        // Closed gate. No stream grants: access is proven per-message via
+        // ERC-1271.
         if (channel.type == "gated") {
             val gate = channel.gateAddress
                 ?: throw IllegalStateException("Gate address unknown (repair pending)")
@@ -467,11 +476,12 @@ internal class Moderation(private val manager: ChannelManager) {
         }
 
         // Gated: removing takes the address off the allowlist WITHOUT the ban
-        // mark, so re-adding later is a plain allow(). The rotation below cuts
-        // their reads, and the contract's sticky isValidSignature keeps their
-        // history readable for everyone else (Q10). Only Closed gates have an
-        // allowlist: elsewhere membership is the asset or the subscription, and
-        // Ban is the only way to cut it.
+        // mark, so re-adding later is a plain allow(). The single gate cuts
+        // their transport at ingest, the rotation below cuts their reads, and
+        // their history stays readable in Pombo clients because reads validate
+        // at ingest and never revalidate. Only Closed gates have an allowlist:
+        // elsewhere membership is the asset or the subscription, and Ban is
+        // the only way to cut it.
         if (channel.type == "gated") {
             val gate = channel.gateAddress
                 ?: throw IllegalStateException("Gate address unknown (repair pending)")
@@ -883,7 +893,8 @@ internal class Moderation(private val manager: ChannelManager) {
      * CLIENT is the ADMIN_STATE ban: every client hides the author's messages,
      * free and reversible, and only the creator may publish it. PROTOCOL is
      * the gate ban: `checkAccess` goes false, so no responder hands out keys,
-     * and the epoch rotation that follows cuts reads from here on. Costs gas.
+     * the single gate cuts their transport at ingest, and the epoch rotation
+     * that follows cuts reads from here on. Costs gas.
      */
     suspend fun banMemberLevels(address: String, client: Boolean, protocol: Boolean) {
         val channel = _current.value ?: throw IllegalStateException("No channel open")
@@ -895,7 +906,7 @@ internal class Moderation(private val manager: ChannelManager) {
             val gate = channel.gateAddress
                 ?: throw IllegalStateException("Only gated channels have a protocol-level ban")
             bridge.call("gateBan", JSONObject()
-                .put("gate", gate).put("user", addr).put("erase", false), 180_000)
+                .put("gate", gate).put("user", addr), 180_000)
             gateManageCache.clear()
             val keysId = channel.keysStreamId.ifEmpty { StreamConstants.deriveKeysId(channel.messageStreamId) }
             var rotated = channel.rotatedForBanned

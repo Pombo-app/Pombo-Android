@@ -1005,9 +1005,9 @@ internal fun BanMemberDialog(
             Spacer(Modifier.height(14.dp))
 
             BanLevelRow(
-                title = "Client enforcement",
+                title = "Hide their messages",
                 detail = if (canClientBan)
-                    "Hides their messages for everyone. Free and reversible."
+                    "Their messages disappear for everyone. Free and reversible."
                 else "Only the channel creator can publish this.",
                 checked = client && canClientBan,
                 enabled = canClientBan
@@ -1016,9 +1016,9 @@ internal fun BanMemberDialog(
             Spacer(Modifier.height(10.dp))
 
             BanLevelRow(
-                title = "Protocol enforcement",
+                title = "Cut their access",
                 detail = if (gated)
-                    "Cuts their access on the gate and rotates the channel key. One transaction."
+                    "They can no longer write or receive keys; the channel key rotates. One transaction."
                 else "Only gated channels have a gate to ban on.",
                 checked = protocol && gated,
                 enabled = gated

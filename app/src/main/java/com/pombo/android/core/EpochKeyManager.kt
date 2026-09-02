@@ -89,7 +89,21 @@ class EpochKeyManager(
      * joiner needs (and what answers hand out). Ungated / Everyone channels
      * return false.
      */
-    private val sharedPublishFor: suspend (messageStreamId: String) -> Boolean = { false }
+    private val sharedPublishFor: suspend (messageStreamId: String) -> Boolean = { false },
+    /**
+     * Read-only channels: may this requester hold the shared publish key?
+     * There the key IS the write capability, so it only goes to the owner
+     * and the moderators; everyone else reads with the epoch keys alone.
+     * Default true — non-read-only channels hand it to every member.
+     */
+    private val mayHoldPublishKey: suspend (messageStreamId: String, requester: String) -> Boolean =
+        { _, _ -> true },
+    /**
+     * True when THIS account may never hold the publish key (plain member of
+     * a read-only channel) — stops it requesting a wrap nobody may answer.
+     * Unknown role keeps asking; the responders refuse, which is harmless.
+     */
+    private val pubKeyBlockedForSelf: (messageStreamId: String) -> Boolean = { false }
 ) {
     data class Entry(val data: JSONObject, val publisherId: String?, val timestamp: Long)
 
@@ -446,7 +460,7 @@ class EpochKeyManager(
             haveKeys = s.epochs.isNotEmpty()
             toBootstrap = s.announces.isEmpty() && isOwnAdmin(messageStreamId)
             toRequest = s.announces.isNotEmpty()
-                && (missingEpochsLocked(s).isNotEmpty() || needsPubKeyLocked(s))
+                && (missingEpochsLocked(s).isNotEmpty() || needsPubKeyLocked(messageStreamId, s))
             if (!toBootstrap && isOwnAdmin(messageStreamId)) {
                 val cur = s.announces[s.currentEpoch]
                 if (cur != null && s.epochs.containsKey(cur.keyId)) {
@@ -654,9 +668,12 @@ class EpochKeyManager(
     }
 
     /** Caller holds the lock. A Members-only channel is not writable until
-     *  the announced publish key (at its announced rev) is held. */
-    private fun needsPubKeyLocked(s: ChannelState): Boolean =
-        s.pubAnnounce != null && s.pubKey?.keyId != s.pubAnnounce?.keyId
+     *  the announced publish key (at its announced rev) is held. A plain
+     *  member of a read-only channel never qualifies for it, so once the
+     *  role is known they stop asking for a wrap nobody may answer. */
+    private fun needsPubKeyLocked(messageStreamId: String, s: ChannelState): Boolean =
+        !pubKeyBlockedForSelf(messageStreamId) &&
+            s.pubAnnounce != null && s.pubKey?.keyId != s.pubAnnounce?.keyId
 
     /**
      * Validate and apply a publish-key announce (Members-only channels).
@@ -922,7 +939,7 @@ class EpochKeyManager(
                     if (!s.loaded) { loadPersisted(messageStreamId, s); s.loaded = true }
                     val changed = applyPubAnnounceLocked(messageStreamId, s, data, publisherId, timestamp)
                     if (changed) persist(messageStreamId, s)
-                    changed && needsPubKeyLocked(s)
+                    changed && needsPubKeyLocked(messageStreamId, s)
                 }
                 if (needRequest) sendKeyRequest(messageStreamId, keysStreamId)
             }
@@ -1100,8 +1117,11 @@ class EpochKeyManager(
         }
 
         // Members-only: the shared publish key rides along with the epochs —
-        // a joiner needs both before the channel is writable for them.
-        val pub = if (sharedPublishFor(messageStreamId)) {
+        // a joiner needs both before the channel is writable for them. In a
+        // read-only channel that key IS the write capability, so it only goes
+        // to the owner and the moderators (fail-closed in the wiring).
+        val pub = if (sharedPublishFor(messageStreamId)
+            && mayHoldPublishKey(messageStreamId, requester)) {
             mutex.withLock {
                 val s = getState(messageStreamId)
                 val held = s.pubKey
@@ -1264,7 +1284,7 @@ class EpochKeyManager(
                 REQUEST_RETRY_FAST_MS else REQUEST_MIN_INTERVAL_MS
             if (pending != null && System.currentTimeMillis() - pending.sentAt < interval) return
             val missing = missingEpochsLocked(s)
-            if (missing.isEmpty() && !needsPubKeyLocked(s)) return
+            if (missing.isEmpty() && !needsPubKeyLocked(messageStreamId, s)) return
             val (priv, pub) = EpochKeyCrypto.generateRequestKeypair()
             val requestId = PomboCrypto.randomHex(16)
             s.pendingRequest = PendingRequest(requestId, priv, pub, System.currentTimeMillis())
@@ -1304,7 +1324,7 @@ class EpochKeyManager(
     suspend fun retryRequestIfWaiting(messageStreamId: String, keysStreamId: String): Boolean {
         val waiting = mutex.withLock {
             val s = state[messageStreamId] ?: return false
-            missingEpochsLocked(s).isNotEmpty() || needsPubKeyLocked(s)
+            missingEpochsLocked(s).isNotEmpty() || needsPubKeyLocked(messageStreamId, s)
         }
         if (waiting) sendKeyRequest(messageStreamId, keysStreamId)
         return waiting

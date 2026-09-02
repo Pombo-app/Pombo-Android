@@ -930,17 +930,21 @@ fun ChatScreen(vm: AppViewModel) {
             }
         }
 
-        // A read-only channel grants public subscribe but not publish, so a
-        // send here fails at the network layer with nothing shown to the user.
-        // The web disables the field and swaps the placeholder
-        // (PreviewModeUI.js:390-392); we only ever rendered a label.
-        // Expired subscription cuts the composer too: the transport would
-        // still accept the publish (sticky membership), but honest receivers
-        // drop it at ingest — writing into that void is a trap, not a feature.
+        // A read-only channel only lets its writers post: the owner always,
+        // and on gated channels the moderators too — the same condition the
+        // gate's isValidSignature applies at ingest, so the composer never
+        // promises a publish the network would refuse.
+        // Expired subscription cuts the composer too: honest receivers drop
+        // the message at ingest — writing into that void is a trap.
         val subExpired = paidStatus?.let {
             it.paidUntil * 1000L <= System.currentTimeMillis() && !it.accessNow
         } == true
-        val canPost = (!ch.readOnly || ch.createdBy?.equals(myAddr, ignoreCase = true) == true) &&
+        var readOnlyWriter by remember(ch.messageStreamId) { mutableStateOf(false) }
+        LaunchedEffect(ch.messageStreamId, ch.readOnly) {
+            readOnlyWriter = ch.readOnly && ch.type == "gated" && vm.canManageGate()
+        }
+        val canPost = (!ch.readOnly || readOnlyWriter ||
+            ch.createdBy?.equals(myAddr, ignoreCase = true) == true) &&
             !subExpired
         ChatComposer(
             input = composerInput,
