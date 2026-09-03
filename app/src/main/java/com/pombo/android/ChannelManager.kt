@@ -852,6 +852,9 @@ class ChannelManager(
     private var presenceJob: Job?
         get() = presence.presenceJob
         set(value) { presence.presenceJob = value }
+    /** Member catch-up sweep for the open channel. */
+    private var memberCatchUpJob: Job? = null
+
     private var adminPollJob: Job?
         get() = admin.adminPollJob
         set(value) { admin.adminPollJob = value }
@@ -2459,6 +2462,57 @@ class ChannelManager(
     suspend fun pinMessage(messageId: String, pin: Boolean) = admin.pinMessage(messageId, pin)
 
     suspend fun banMember(address: String, ban: Boolean = true) = admin.banMember(address, ban)
+
+    /**
+     * Member catch-up on a gated channel: a periodic RAW resend of the keys
+     * stream and of the message stream while the channel is open.
+     *
+     * A member's delivery has two soft spots the owner's does not. Their
+     * KEY_REQUEST is dropped by the responders' live subscription — the SDK
+     * validates on the subscribing edge, and a read-only channel's contract
+     * refuses a member's signature — so keys land only when a responder
+     * sweeps; and a live subscription on a thin mesh can silently deliver
+     * less than the stream holds, the same reason every resend here is raw.
+     *
+     * Pure catch-up: everything replays through the ordinary ingest, which
+     * dedupes by message id.
+     */
+    private fun startMemberCatchUp(channel: Channel, generation: Int) {
+        memberCatchUpJob?.cancel()
+        if (channel.type != "gated" || channel.gateAddress == null) return
+        val me = myAddress()?.lowercase() ?: return
+        val owner = (channel.createdBy ?: channel.messageStreamId.substringBefore('/')).lowercase()
+        if (me == owner) return
+        memberCatchUpJob = scope.launch {
+            while (isActive) {
+                delay(MEMBER_CATCHUP_INTERVAL_MS)
+                if (!stillCurrent(generation)) return@launch
+                val keysId = channel.keysStreamId.ifEmpty {
+                    StreamConstants.deriveKeysId(channel.messageStreamId)
+                }
+                try {
+                    epochKeys.ensureChannelKeys(
+                        channel.messageStreamId, keysId,
+                        keysRetentionDays(channel),
+                        allowMint = false, memberCount = channel.members.size)
+                } catch (e: Exception) {
+                    Log.d(TAG, "member catch-up: key sweep failed: ${e.message}")
+                }
+                if (!stillCurrent(generation)) return@launch
+                val page = fetchHistoryPage(
+                    channel, StreamConstants.P_MESSAGES, MEMBER_CATCHUP_COUNT, 20_000, 30_000)
+                    ?: continue
+                if (!stillCurrent(generation)) return@launch
+                for (i in 0 until page.entries.length()) {
+                    val entry = page.entries.optJSONObject(i) ?: continue
+                    val meta = entry.optJSONObject("meta") ?: JSONObject()
+                    handleContent(
+                        channel, page.contents[i], meta,
+                        historical = true, generation = generation)
+                }
+            }
+        }
+    }
 
     /**
      * The roster's names for the open channel. Read once per open: it is a
@@ -4178,6 +4232,9 @@ class ChannelManager(
                 // no live subscription, so after the on-open load this poller
                 // is what catches anything the admin_invalidate signal missed.
                 startAdminPoller(channel, generation)
+                // A member's keys and messages need a raw sweep the owner
+                // does not — see [startMemberCatchUp].
+                startMemberCatchUp(channel, generation)
                 // TTL-aware owner republish of the -3 artifacts (web
                 // _ttlRepublishOnOpen; docs/TTL_REPUBLISH_PLAN.md). Runs after
                 // loadAdminState so adminRevs/adminTs and the moderation flows
@@ -4296,6 +4353,7 @@ class ChannelManager(
         val generation = ++switchGeneration
         presenceJob?.cancel(); presenceJob = null
         adminPollJob?.cancel(); adminPollJob = null
+        memberCatchUpJob?.cancel(); memberCatchUpJob = null
         _current.value = null
         _isPreview.value = false
         unsubscribeAll(channel)
@@ -6224,6 +6282,9 @@ class ChannelManager(
         const val PREVIEW_PRESENCE_INTERVAL_MS = 20_000L
         /** Web config.js subscriptions.adminPollIntervalMs. */
         const val ADMIN_POLL_INTERVAL_MS = 30_000L
+        /** Web config.js subscriptions.memberCatchUp*. */
+        const val MEMBER_CATCHUP_INTERVAL_MS = 30_000L
+        const val MEMBER_CATCHUP_COUNT = 30
         /** Allowed clock skew of a payload timestamp ahead of now / of its
          *  signed envelope (web config gate.timestampSkewMs). One-sided: a
          *  payload older than its envelope is a legitimate republish. */
