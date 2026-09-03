@@ -433,6 +433,23 @@ const api = {
         }
     },
 
+    // The single authenticity check every RAW read goes through on NON-gated
+    // streams: the envelope must be signed by the key it claims as publisher.
+    // It replaces the SDK validation that `raw` turns off — without it a raw
+    // reader would accept an envelope carrying someone else's publisherId,
+    // which is authorship forgery wherever the publisher IS the author.
+    // Gated streams never use it: there the publisher is the clone for
+    // everyone and the author is the recovered signer itself.
+    _envelopeIsAuthentic(message) {
+        const signer = api._recoverEnvelopeSigner(message);
+        if (!signer) return false;
+        const sm = (message && message.streamMessage) ? message.streamMessage : message;
+        const publisherId = (message && message.publisherId != null)
+            ? message.publisherId
+            : (sm && sm.messageId ? sm.messageId.publisherId : null);
+        return !!publisherId && String(publisherId).toLowerCase() === signer;
+    },
+
     // Streams whose publish rights are on-chain and owner/member-bound must
     // never see an ephemeral publisher: the admin stream (-3: ADMIN_STATE,
     // CHANNEL_IMAGE, PASSWORD_CHALLENGE) is refused HERE, loudly — a clever
@@ -879,21 +896,26 @@ const api = {
     // History via storage-node resend (last N) — returns everything in an array.
     // With `password`, sealed rows are opened during the drain (see
     // _sealedOpener) and come back as parsed objects.
-    // With `raw`, the SDK skips its validation pipeline: stored envelopes are
-    // NOT re-checked against the present gate state (which would erase
-    // ex-members' history) — the Kotlin side establishes authorship from
-    // meta.signer instead, so `raw` must always travel with `recoverSigner`.
+    //
+    // ALWAYS raw: the SDK skips its validation pipeline, so stored envelopes
+    // are not re-checked against the present gate state (which would erase
+    // ex-members' history) and a half-connected node cannot stall the read.
+    // What replaces that validation depends on the caller: gated paths ask
+    // for `recoverSigner` and establish authorship from meta.signer; every
+    // other path gets the envelope-authenticity check here, without which a
+    // raw read would accept an envelope carrying someone else's publisherId.
     async resend(a) {
         if (!client) throw new Error('client not connected');
         const pwKey = a.password ? await api._pwKey(a.password) : null;
         const stream = await client.resend(
             { streamId: a.streamId, partition: a.partition },
-            a.raw ? { last: a.last || 50, raw: true } : { last: a.last || 50 }
+            { last: a.last || 50, raw: true }
         );
         const out = [];
         const opener = api._sealedOpener(pwKey);
         const t0 = Date.now();
         const partial = await api._drainResend(stream, function (msg) {
+            if (!a.recoverSigner && !api._envelopeIsAuthentic(msg)) return;
             const rec = {
                 content: msg.content,
                 meta: {
@@ -924,15 +946,15 @@ const api = {
     async resendRange(a) {
         if (!client) throw new Error('client not connected');
         const pwKey = a.password ? await api._pwKey(a.password) : null;
+        // Always raw, same contract as `resend` above.
         const stream = await client.resend(
             { streamId: a.streamId, partition: a.partition },
-            a.raw
-                ? { from: { timestamp: 0 }, to: { timestamp: a.before }, raw: true }
-                : { from: { timestamp: 0 }, to: { timestamp: a.before } }
+            { from: { timestamp: 0 }, to: { timestamp: a.before }, raw: true }
         );
         const all = [];
         const opener = api._sealedOpener(pwKey);
         const partial = await api._drainResend(stream, function (msg) {
+            if (!a.recoverSigner && !api._envelopeIsAuthentic(msg)) return;
             const rec = {
                 content: msg.content,
                 meta: {
@@ -962,12 +984,16 @@ const api = {
         if (!client) throw new Error('client not connected');
         const windowStart = Math.max(0, a.before - a.windowMs);
         const windowEnd = a.before - 1;
+        // Raw — DM inboxes are never gated, so every entry must pass the
+        // envelope check below (the sealed DM adds its own proof downstream;
+        // this is the replay defence the SDK validation used to give).
         const stream = await client.resend(
             { streamId: a.streamId, partition: a.partition },
-            { from: { timestamp: windowStart }, to: { timestamp: windowEnd } }
+            { from: { timestamp: windowStart }, to: { timestamp: windowEnd }, raw: true }
         );
         const out = [];
         const partial = await api._drainResend(stream, function (msg) {
+            if (!api._envelopeIsAuthentic(msg)) return;
             const rec = {
                 content: msg.content,
                 meta: {
@@ -1329,9 +1355,12 @@ const api = {
     //   -> { rows: [{ timestamp, publisherId, data: b64(sealed [iv][ct]) }] }
     async resendStorageChunksDm(a) {
         if (!client) throw new Error('client not connected');
+        // Raw, no envelope guard: chunk windows are self-verifying downstream
+        // (per-file seal plus the assembled digest), and the native HTTP path
+        // used by password/public downloads never validated either.
         const stream = await client.resend(
             { streamId: a.streamId, partition: a.partition },
-            { from: { timestamp: a.fromTs }, to: { timestamp: a.toTs } }
+            { from: { timestamp: a.fromTs }, to: { timestamp: a.toTs }, raw: true }
         );
         const rows = [];
         await api._drainResend(stream, function (msg) {
