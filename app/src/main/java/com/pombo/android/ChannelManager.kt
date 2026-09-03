@@ -477,9 +477,13 @@ class ChannelManager(
                     // Members-only: pieces travel under the SHARED key — the
                     // clone path would stamp the sender's account onto them.
                     if (channel.wireIdentity == "sealed") {
-                        val pub = epochKeys.publishKeyFor(channel.messageStreamId)
+                        // The -2 is participation, so it rides the
+                        // INTERACTIONS key — media coordination keeps working
+                        // for a member who may not post.
+                        val pub = epochKeys.interactionsKeyFor(channel.messageStreamId)
+                            ?: epochKeys.publishKeyFor(channel.messageStreamId)
                             ?: throw IllegalStateException(
-                                "No publish key for ${channel.messageStreamId} — cannot send media on a Members-only channel")
+                                "No interactions key for ${channel.messageStreamId} — cannot send media on a Members-only channel")
                         bridge.publishBinary(
                             ephemeralStreamId,
                             StreamConstants.EPH_MEDIA_DATA,
@@ -1556,9 +1560,12 @@ class ChannelManager(
         // SHARED publish key now so its address rides the permission batch.
         val sharedPub = if (type == "gated" && wireIdentity == "sealed")
             epochKeys.mintPublishKey() else null
-        // The interactions key (-5) is minted by its own step; the permission
-        // batch below already accepts it so the wiring lands in one place.
-        val interactionsPub: com.pombo.android.core.EpochKeyManager.PubKey? = null
+        // The second shared key: same mechanics, wider distribution. Every
+        // member holds it, read-only included — it carries the -5 (reactions)
+        // and the -2 (presence), so participating never depends on being
+        // allowed to post.
+        val interactionsPub = if (type == "gated" && wireIdentity == "sealed")
+            epochKeys.mintInteractionsKey() else null
 
         val base = "${addr.lowercase()}/${PomboCrypto.randomHex(8)}"
         val messageStreamId = "$base${StreamConstants.SUFFIX_MESSAGE}"
@@ -1789,6 +1796,7 @@ class ChannelManager(
         )
         addChannel(channel)
         sharedPub?.let { epochKeys.adoptPublishKey(messageStreamId, it) }
+        interactionsPub?.let { epochKeys.adoptInteractionsKey(messageStreamId, it) }
         return channel
     }
 
@@ -5048,9 +5056,17 @@ class ChannelManager(
             // NO publish, never a fallback to the clone (which would put the
             // account on the wire).
             val membersOnly = channel.wireIdentity == "sealed" && !isAdminStream
+            // Which shared key carries this depends on the STREAM, not on the
+            // author's role: the -1 is where you publish (content key, which a
+            // read-only channel withholds from members) and the -2/-5 is where
+            // you participate (interactions key, held by every member).
+            val participates = streamId != channel.messageStreamId
             var sharedKeyHex: String? = null
             if (membersOnly) {
-                var pub = epochKeys.publishKeyFor(channel.messageStreamId)
+                var pub = if (participates) {
+                    epochKeys.interactionsKeyFor(channel.messageStreamId)
+                        ?: epochKeys.publishKeyFor(channel.messageStreamId)
+                } else epochKeys.publishKeyFor(channel.messageStreamId)
                 if (pub == null) {
                     // A member can hold the epoch key (reads decrypt fine)
                     // while the PUB_WRAP never arrived — the epoch-gated
@@ -5071,7 +5087,10 @@ class ChannelManager(
                     } catch (e: Exception) {
                         Log.w(TAG, "publish-key recovery failed", e)
                     }
-                    pub = epochKeys.publishKeyFor(channel.messageStreamId)
+                    pub = if (participates) {
+                        epochKeys.interactionsKeyFor(channel.messageStreamId)
+                            ?: epochKeys.publishKeyFor(channel.messageStreamId)
+                    } else epochKeys.publishKeyFor(channel.messageStreamId)
                 }
                 if (pub == null) throw IllegalStateException(
                     "No publish key for ${channel.messageStreamId} — cannot publish on a Members-only channel (waiting for PUB_WRAP)")
