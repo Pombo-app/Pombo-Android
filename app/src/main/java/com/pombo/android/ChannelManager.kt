@@ -4210,6 +4210,15 @@ class ChannelManager(
                 if (isEpochChannel(channel) && channel.keysStreamId.isNotEmpty()) {
                     subscribeQuiet(channel.keysStreamId, StreamConstants.P_KEY_EXCHANGE)
                 }
+                // Interactions (-5): reactions, which gated channels moved off
+                // the -1 so a read-only channel can still have them.
+                if (channel.type == "gated") {
+                    subscribeQuiet(
+                        channel.interactionsStreamId.ifEmpty {
+                            StreamConstants.deriveInteractionsId(channel.messageStreamId)
+                        },
+                        StreamConstants.P_REACTIONS)
+                }
                 android.util.Log.d("PomboPerf",
                     "subscribes ${channel.name}: ${System.currentTimeMillis() - tSub}ms")
                 // Cancelled mid-transition: undo our own subscribes, since the
@@ -4531,11 +4540,14 @@ class ChannelManager(
         partition: Int,
         last: Int,
         budgetMs: Int,
-        timeoutMs: Long
+        timeoutMs: Long,
+        /** Which stream to read; defaults to the channel's -1. Reactions on a
+         *  gated channel come from the -5 instead. */
+        streamId: String = channel.messageStreamId
     ): HistoryPage? = try {
         val t0 = System.currentTimeMillis()
         val args = JSONObject()
-            .put("streamId", channel.messageStreamId)
+            .put("streamId", streamId)
             .put("partition", partition)
             .put("last", last)
             .put("budgetMs", budgetMs)
@@ -4582,6 +4594,7 @@ class ChannelManager(
      * original order means the common case never has to rely on that.
      */
     private suspend fun loadHistory(channel: Channel, generation: Int) {
+        var reactionsPage: HistoryPage? = null
         val (content, overrides) = coroutineScope {
             val c = async {
                 fetchHistoryPage(
@@ -4592,7 +4605,19 @@ class ChannelManager(
             val o = async {
                 fetchHistoryPage(channel, StreamConstants.P_CONTROL, 50, 20_000, 30_000)
             }
-            c.await() to o.await()
+            // Reactions moved to the -5 on gated channels — without this read
+            // a reopened channel would render messages with no reactions.
+            val r = if (channel.type == "gated") async {
+                fetchHistoryPage(
+                    channel, StreamConstants.P_REACTIONS,
+                    StreamConstants.INITIAL_MESSAGES, 20_000, 30_000,
+                    streamId = channel.interactionsStreamId.ifEmpty {
+                        StreamConstants.deriveInteractionsId(channel.messageStreamId)
+                    })
+            } else null
+            val pair = c.await() to o.await()
+            reactionsPage = r?.await()
+            pair
         }
         // The resends can take tens of seconds on a slow network — long enough
         // for several channel switches. Without this the whole of A's history
@@ -4622,6 +4647,16 @@ class ChannelManager(
                 val meta = entry.optJSONObject("meta") ?: JSONObject()
                 handleContent(
                     channel, overrides.contents[i], meta,
+                    historical = true, generation = generation
+                )
+            }
+        }
+        reactionsPage?.let { page ->
+            for (i in 0 until page.entries.length()) {
+                val entry = page.entries.optJSONObject(i) ?: continue
+                val meta = entry.optJSONObject("meta") ?: JSONObject()
+                handleContent(
+                    channel, page.contents[i], meta,
                     historical = true, generation = generation
                 )
             }
@@ -4855,7 +4890,17 @@ class ChannelManager(
         // stream accepts public publishes, so the emoji and the message it
         // points at were readable by anyone. Seal it like every other DM
         // payload (web sendReaction takes the same branch).
-        publishForChannel(channel, channel.messageStreamId, StreamConstants.P_MESSAGES, reaction)
+        // Gated channels react on the -5: it is where members participate,
+        // so a read-only channel still has reactions and the -1 goes back to
+        // being conversation only. Everywhere else the -1/P0 stays.
+        if (channel.type == "gated") {
+            val interactionsId = channel.interactionsStreamId.ifEmpty {
+                StreamConstants.deriveInteractionsId(channel.messageStreamId)
+            }
+            publishForChannel(channel, interactionsId, StreamConstants.P_REACTIONS, reaction)
+        } else {
+            publishForChannel(channel, channel.messageStreamId, StreamConstants.P_MESSAGES, reaction)
+        }
         // A DM reaction goes to the PEER's inbox and never comes back from any
         // resend; a write-only channel is never resubscribed at all. The local
         // record is the only copy (web addSentReaction), and it is a sync
@@ -5173,7 +5218,11 @@ class ChannelManager(
                 // clone, so the admin's own KEY_ANNOUNCE is rejected as
                 // non-admin and its wraps are discarded.
                 (it.type == "gated" &&
-                    StreamConstants.deriveKeysId(it.messageStreamId) == streamId)
+                    (StreamConstants.deriveKeysId(it.messageStreamId) == streamId ||
+                        // The -5 must resolve too, or reactions arriving there
+                        // would find no channel and be dropped at the funnel.
+                        it.interactionsStreamId == streamId ||
+                        StreamConstants.deriveInteractionsId(it.messageStreamId) == streamId))
         }
         // Preview channels live only in _current, never in _channels — the
         // gated paths (epoch ingest, clone transport, gate checks) must still
