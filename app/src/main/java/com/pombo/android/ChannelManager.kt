@@ -1690,8 +1690,18 @@ class ChannelManager(
                     put(JSONObject().put("public", true)
                         .put("permissions", JSONArray(listOf("subscribe"))))
                 } else JSONArray().put(cloneSubOnly)
+                // The -2 is where everyone PARTICIPATES — presence, typing,
+                // media coordination — so it carries the interactions key
+                // beside the content one. Without that grant a read-only
+                // member is invisible, and so is everyone else: the transport
+                // rejects the key those paths actually use.
+                val ephemeralPerms = if (interactionsPub != null) JSONArray().apply {
+                    for (i in 0 until contentPerms.length()) put(contentPerms.get(i))
+                    put(JSONObject().put("userId", interactionsPub.address)
+                        .put("permissions", JSONArray(listOf("publish"))))
+                } else contentPerms
                 setPermissionsRetry(messageStreamId, contentPerms); onProgress()
-                setPermissionsRetry(ephemeralStreamId, contentPerms); onProgress()
+                setPermissionsRetry(ephemeralStreamId, ephemeralPerms); onProgress()
                 setPermissionsRetry(adminStreamId, adminPerms); onProgress()
                 setPermissionsRetry(keysStreamId, clonePerms); onProgress()
                 // -5 carries the interactions key in Sealed (every member
@@ -6443,6 +6453,9 @@ class ChannelManager(
             if (channel.adminStreamId.isNotEmpty()) add(channel.adminStreamId)
             if (channel.type == "gated") {
                 add(channel.keysStreamId.ifEmpty { StreamConstants.deriveKeysId(channel.messageStreamId) })
+                // Reactions live here, and they have to survive a reopen —
+                // which is why they moved off the storage-less -2.
+                add(channel.interactionsStreamId.ifEmpty { StreamConstants.deriveInteractionsId(channel.messageStreamId) })
             }
         }
 
