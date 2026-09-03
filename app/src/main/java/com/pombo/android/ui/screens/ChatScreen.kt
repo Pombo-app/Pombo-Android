@@ -224,6 +224,7 @@ fun ChatScreen(vm: AppViewModel) {
         // created the channel — see ChannelManager.canModerate. Channel Details
         // reads the same flag, so both surfaces agree on what this account can do.
         val canModerate by vm.canModerate.collectAsState()
+        val moderatesGate by vm.moderatesGate.collectAsState()
         val myAddr = vm.address.collectAsState().value
 
         if (showInfo) ChannelSettingsSheet(vm, ch, canModerate) { showInfo = false }
@@ -240,7 +241,9 @@ fun ChatScreen(vm: AppViewModel) {
         // only revoking on-chain publish, so everything the member had already
         // posted stayed on screen — the moderation action looked like it had
         // done nothing to the existing conversation.
-        val banned by vm.bannedMembers.collectAsState()
+        // A ban carries the epoch it starts from, so what its author wrote
+        // before it stays: silencing someone is not erasing their year.
+        val banned by vm.banSince.collectAsState()
         // Both of these are remembered on their real inputs. The filter used to
         // run unmemoized, allocating a new list on every recomposition — which
         // meant the `remember(visible)` key below never matched and the whole
@@ -249,7 +252,12 @@ fun ChatScreen(vm: AppViewModel) {
         // here than in the PWA.
         val visible = remember(messages, hidden, banned, loadingInitial) {
             if (loadingInitial) emptyList()
-            else messages.filter { it.id !in hidden && it.sender.lowercase() !in banned }
+            else messages.filter { msg ->
+                if (msg.id in hidden) return@filter false
+                val lower = msg.sender.lowercase()
+                if (lower !in banned) return@filter true
+                !com.pombo.android.core.ModComposition.banHides(banned[lower], msg.epoch)
+            }
         }
         val groups = remember(visible) { buildMessageGroups(visible) }
         // Only one message shows its action triggers at a time (web: .message-active).
@@ -683,7 +691,11 @@ fun ChatScreen(vm: AppViewModel) {
                         onBan = { addr, client, protocol -> vm.banMemberLevels(addr, client, protocol) },
                         banGated = ch.type == "gated",
                         canClientBan = myAddr?.lowercase() ==
+                            (ch.createdBy ?: ch.messageStreamId.substringBefore('/')).lowercase() ||
+                            moderatesGate,
+                        canProtocolBan = ch.type == "gated" && myAddr?.lowercase() ==
                             (ch.createdBy ?: ch.messageStreamId.substringBefore('/')).lowercase(),
+                        moderatesGate = moderatesGate,
                         onAddContact = { addr -> vm.addContact(addr, null) },
                         onSendDm = { addr -> vm.startDm(addr) },
                         onRemoveContact = { addr -> vm.removeContact(addr) },

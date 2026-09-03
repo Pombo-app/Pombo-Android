@@ -169,6 +169,8 @@ class AppViewModel(app: Application) : AndroidViewModel(app), PomboBridge.Listen
     val pins get() = manager.pins
     val hiddenIds get() = manager.hiddenIds
     val bannedMembers get() = manager.bannedMembers
+    val banSince get() = manager.banSince
+    val moderatesGate get() = manager.moderatesGate
 
     /** Per-channel unread badge counts (web updateUnreadCount). */
     val unreadCounts get() = unreadStore.counts
@@ -1281,6 +1283,13 @@ class AppViewModel(app: Application) : AndroidViewModel(app), PomboBridge.Listen
     fun banMember(address: String, ban: Boolean = true) = moderationAction(
         if (ban) "User banned" else "User unbanned"
     ) { manager.banMember(address, ban) }
+
+    /** How many moderator deltas the owner has not confirmed yet. */
+    fun pendingModActions(): Int = manager.pendingModActions()
+
+    fun absorbModActions() = moderationAction("Moderator actions confirmed") {
+        manager.absorbModActions()
+    }
 
     /**
      * Ban with the levels the modal offers. The protocol level is a

@@ -103,7 +103,9 @@ data class UiMessage(
      */
     val file: com.pombo.android.core.MediaController.FileMetadata? = null,
     /** Persistent File Sharing announce (wire type `storage_file_announce`). */
-    val storageFile: com.pombo.android.core.StorageMedia.StorageFileMetadata? = null
+    val storageFile: com.pombo.android.core.StorageMedia.StorageFileMetadata? = null,
+    /** Epoch the message was written under (gated channels), from its kid. */
+    val epoch: Int? = null
 )
 
 /**
@@ -115,7 +117,7 @@ class ChannelManager(
     internal val store: ChannelStore,
     internal val scope: CoroutineScope,
     internal val myAddress: () -> String?,
-    private val myPrivateKey: () -> String?,
+    internal val myPrivateKey: () -> String?,
     internal val myUsername: () -> String?,
     /** Persistent caches so cold starts paint before the network answers. */
     internal val imageStore: com.pombo.android.core.ChannelImageStore,
@@ -689,6 +691,9 @@ class ChannelManager(
     val hiddenIds: StateFlow<Set<String>> = _hiddenIds.asStateFlow()
     private val _bannedMembers get() = admin._bannedMembers
     val bannedMembers: StateFlow<Set<String>> = _bannedMembers.asStateFlow()
+    private val _banSince get() = admin._banSince
+    /** address -> epoch each ban starts from; null hides everything. */
+    val banSince: StateFlow<Map<String, Int?>> = _banSince.asStateFlow()
 
     private val adminRevs get() = admin.adminRevs
     private val adminTs get() = admin.adminTs
@@ -2260,7 +2265,9 @@ class ChannelManager(
         val canPublish: Boolean = false,
         val canGrant: Boolean = false,
         val canEdit: Boolean = false,
-        val canDelete: Boolean = false
+        val canDelete: Boolean = false,
+        /** Moderates the gate without holding any stream permission. */
+        val moderatesGate: Boolean = false
     )
 
     private val _perms get() = admin._perms
@@ -2269,6 +2276,15 @@ class ChannelManager(
     /** Convenience for the moderation surfaces, which all key off DELETE. */
     val canModerate: StateFlow<Boolean> = _perms
         .map { it.canDelete }
+        .stateIn(scope, SharingStarted.Eagerly, false)
+
+    /**
+     * Kept apart from [canModerate]: a moderator hides and bans, but the
+     * surfaces that flow from DELETE — storage, renaming, the danger zone —
+     * stay the owner's.
+     */
+    val moderatesGate: StateFlow<Boolean> = _perms
+        .map { it.moderatesGate }
         .stateIn(scope, SharingStarted.Eagerly, false)
 
     private fun refreshModerationPermission(channel: Channel, preview: Boolean) =
@@ -2438,6 +2454,11 @@ class ChannelManager(
     suspend fun pinMessage(messageId: String, pin: Boolean) = admin.pinMessage(messageId, pin)
 
     suspend fun banMember(address: String, ban: Boolean = true) = admin.banMember(address, ban)
+
+    /** Moderator deltas the owner has not confirmed yet. */
+    fun pendingModActions(): Int = admin.pendingModActions()
+
+    suspend fun absorbModActions() = admin.absorbModActions()
 
     suspend fun banMemberLevels(address: String, client: Boolean, protocol: Boolean) =
         admin.banMemberLevels(address, client, protocol)
@@ -4168,6 +4189,7 @@ class ChannelManager(
             _pins.value = emptyList()
             _hiddenIds.value = emptySet()
             _bannedMembers.value = emptySet()
+            admin.clearDeltas()
             val generation = ++switchGeneration
             oldestTimestamp = 0L
             synchronized(this) { pendingOverrides.clear(); deletedIds.clear() }
@@ -4218,6 +4240,10 @@ class ChannelManager(
                             StreamConstants.deriveInteractionsId(channel.messageStreamId)
                         },
                         StreamConstants.P_REACTIONS)
+                    // Moderation (-1/P2): the moderators' signed deltas. Only
+                    // gated channels have moderators, so nowhere else does
+                    // this partition carry anything.
+                    subscribeQuiet(channel.messageStreamId, StreamConstants.P_MODERATION)
                 }
                 android.util.Log.d("PomboPerf",
                     "subscribes ${channel.name}: ${System.currentTimeMillis() - tSub}ms")
@@ -4287,6 +4313,14 @@ class ChannelManager(
         if (isEpochChannel(channel) && channel.keysStreamId.isNotEmpty()) {
             unsubscribeQuiet(channel.keysStreamId, StreamConstants.P_KEY_EXCHANGE)
         }
+        if (channel.type == "gated") {
+            unsubscribeQuiet(
+                channel.interactionsStreamId.ifEmpty {
+                    StreamConstants.deriveInteractionsId(channel.messageStreamId)
+                },
+                StreamConstants.P_REACTIONS)
+            unsubscribeQuiet(channel.messageStreamId, StreamConstants.P_MODERATION)
+        }
         if (media.hasActiveTransfers(channel.messageStreamId)) {
             Log.i(TAG, "keeping media partitions alive for ${channel.messageStreamId}")
         } else {
@@ -4311,6 +4345,14 @@ class ChannelManager(
                 subscribeQuiet(channel.ephemeralStreamId, StreamConstants.EPH_CONTROL)
                 if (isEpochChannel(channel) && channel.keysStreamId.isNotEmpty()) {
                     subscribeQuiet(channel.keysStreamId, StreamConstants.P_KEY_EXCHANGE)
+                }
+                if (channel.type == "gated") {
+                    subscribeQuiet(
+                        channel.interactionsStreamId.ifEmpty {
+                            StreamConstants.deriveInteractionsId(channel.messageStreamId)
+                        },
+                        StreamConstants.P_REACTIONS)
+                    subscribeQuiet(channel.messageStreamId, StreamConstants.P_MODERATION)
                 }
             }
             // Every stream with a live transfer, not just this channel's: the
@@ -4595,6 +4637,7 @@ class ChannelManager(
      */
     private suspend fun loadHistory(channel: Channel, generation: Int) {
         var reactionsPage: HistoryPage? = null
+        var moderationPage: HistoryPage? = null
         val (content, overrides) = coroutineScope {
             val c = async {
                 fetchHistoryPage(
@@ -4615,8 +4658,15 @@ class ChannelManager(
                         StreamConstants.deriveInteractionsId(channel.messageStreamId)
                     })
             } else null
+            // Moderator deltas (-1/P2): what a moderator did while the owner
+            // was away has to be there on open, not only when it happens.
+            val m = if (channel.type == "gated") async {
+                fetchHistoryPage(
+                    channel, StreamConstants.P_MODERATION, 300, 20_000, 30_000)
+            } else null
             val pair = c.await() to o.await()
             reactionsPage = r?.await()
+            moderationPage = m?.await()
             pair
         }
         // The resends can take tens of seconds on a slow network — long enough
@@ -4647,6 +4697,16 @@ class ChannelManager(
                 val meta = entry.optJSONObject("meta") ?: JSONObject()
                 handleContent(
                     channel, overrides.contents[i], meta,
+                    historical = true, generation = generation
+                )
+            }
+        }
+        moderationPage?.let { page ->
+            for (i in 0 until page.entries.length()) {
+                val entry = page.entries.optJSONObject(i) ?: continue
+                val meta = entry.optJSONObject("meta") ?: JSONObject()
+                handleContent(
+                    channel, page.contents[i], meta,
                     historical = true, generation = generation
                 )
             }
@@ -5421,7 +5481,13 @@ class ChannelManager(
         val content = try { JSONTokener(contentRaw).nextValue() } catch (e: Exception) { return }
         val isMsgStream = streamId == channel.messageStreamId
         val isEphStream = streamId == channel.ephemeralStreamId
-        if (!isMsgStream && !isEphStream) return
+        // The -5 carries this channel's reactions, so it belongs here as much
+        // as the -1 and the -2 do.
+        val isIntStream = channel.type == "gated" && streamId == (
+            channel.interactionsStreamId.ifEmpty {
+                StreamConstants.deriveInteractionsId(channel.messageStreamId)
+            })
+        if (!isMsgStream && !isEphStream && !isIntStream) return
         scope.launch {
             handleContent(
                 channel, content, meta, historical = false,
@@ -5611,6 +5677,11 @@ class ChannelManager(
         var innerAuthor: String? = null
         if (com.pombo.android.core.EpochKeyCrypto.isEpochEnvelope(data)) {
             if (!isEpochChannel(channel)) return
+            // The epoch this was written under, read off the kid that travels
+            // in the clear: moderation hides a banned author from their ban
+            // onward, and unlike the payload timestamp this is not theirs to
+            // choose.
+            val kidEpoch = data.optString("k").substringBefore('.').toIntOrNull()
             val keysId = channel.keysStreamId.ifEmpty {
                 StreamConstants.deriveKeysId(channel.messageStreamId)
             }
@@ -5634,6 +5705,7 @@ class ChannelManager(
                 innerAuthor = opened.author
                 data = opened.payload
             }
+            if (kidEpoch != null) data.put("_epoch", kidEpoch)
         }
         // Timestamp forgery clamps: the payload timestamp is what the
         // UI orders and pages by, and the publisher writes it freely. Reject a
@@ -5699,6 +5771,13 @@ class ChannelManager(
             signer
         } else meta.optString("publisherId")
         val account = attachAccount(data, author)
+
+        // A moderator's delta: self-contained and verified by its own
+        // signature, so it never depends on who carried it.
+        if (data.optString("t") == com.pombo.android.core.ModAction.TYPE) {
+            admin.ingestModAction(channel, data)
+            return
+        }
 
         // Read-only is enforced by READERS in Visible channels: the contract
         // deliberately validates a member's signature (their reactions,
@@ -5867,6 +5946,7 @@ class ChannelManager(
             mine = mine,
             ensName = ensStore.cachedName(sender),
             ensAvatar = ensStore.cachedAvatar(sender),
+            epoch = data.optInt("_epoch", -1).takeIf { it >= 0 },
             replyTo = data.optJSONObject("replyTo")?.let {
                 val rid = it.optString("id")
                 if (rid.isEmpty()) null else ReplyRef(

@@ -16,6 +16,8 @@ import com.pombo.android.ChannelManager.GateEntryInfo
 import com.pombo.android.ChannelManager.GateMemberFlags
 import com.pombo.android.ChannelManager.MemberRow
 import com.pombo.android.ChannelManager.Pin
+import com.pombo.android.core.ModAction
+import com.pombo.android.core.ModComposition
 import com.pombo.android.core.PomboCrypto
 import com.pombo.android.core.StreamConstants
 import com.pombo.android.data.Channel
@@ -69,8 +71,24 @@ internal class Moderation(private val manager: ChannelManager) {
     }
 
     internal val _pins = MutableStateFlow<List<Pin>>(emptyList())
+
+    // What the UI renders: the owner's snapshot with the moderators' pending
+    // deltas already folded in. The snapshot itself is kept apart because a
+    // publish must build on the owner's own word, never on the composition.
     internal val _hiddenIds = MutableStateFlow<Set<String>>(emptySet())
     internal val _bannedMembers = MutableStateFlow<Set<String>>(emptySet())
+    /** address -> epoch the ban starts from; null hides everything. */
+    internal val _banSince = MutableStateFlow<Map<String, Int?>>(emptyMap())
+
+    private var snapHidden: Set<String> = emptySet()
+    private var snapBanned: Map<String, Int?> = emptyMap()
+    private var absorbedThrough: Long = 0L
+
+    /** Deltas held for the OPEN channel, keyed to drop duplicates. */
+    internal val deltas = LinkedHashMap<String, JSONObject>()
+    /** Signers already answered by the gate, and which of them moderate. */
+    private val deltaSignersAsked = HashSet<String>()
+    private val deltaModerators = HashSet<String>()
     /**
      * Last ADMIN_STATE revision applied, keyed by admin stream — NOT a single
      * counter. Revisions are per channel, so one shared field let a late
@@ -680,7 +698,16 @@ internal class Moderation(private val manager: ChannelManager) {
                     canPublish = r.optBoolean("canPublish", false),
                     canGrant = r.optBoolean("canGrant", false),
                     canEdit = r.optBoolean("canEdit", false),
-                    canDelete = r.optBoolean("canDelete", false)
+                    canDelete = r.optBoolean("canDelete", false),
+                    // A moderator holds nothing on the stream, so this is a
+                    // separate read against the gate.
+                    moderatesGate = channel.gateAddress?.let { gate ->
+                        try {
+                            bridge.call("gateIsModerator", JSONObject()
+                                .put("gate", gate).put("user", me), 30_000)
+                                .optBoolean("moderator", false)
+                        } catch (e: Exception) { false }
+                    } ?: false
                 )
             } catch (e: Exception) {
                 // Fail closed: offering actions we cannot perform is worse than
@@ -812,13 +839,111 @@ internal class Moderation(private val manager: ChannelManager) {
         adminTs[channel.adminStreamId] = ts
         val state = data.optJSONObject("state") ?: return
         state.optJSONArray("hiddenMessageIds")?.let { arr ->
-            _hiddenIds.value = (0 until arr.length()).mapNotNull { arr.optString(it).ifEmpty { null } }.toSet()
+            snapHidden = (0 until arr.length()).mapNotNull { arr.optString(it).ifEmpty { null } }.toSet()
         }
         state.optJSONArray("bannedMembers")?.let { arr ->
-            _bannedMembers.value = (0 until arr.length()).mapNotNull { arr.optString(it).lowercase().ifEmpty { null } }.toSet()
+            snapBanned = ModComposition.bannedFromJson(arr)
         }
+        absorbedThrough = state.optLong("absorbedThrough", 0L)
         state.optJSONArray("pins")?.let { _pins.value = pinsFromJson(it) }
+        recompose()
     }
+
+    /** Fold the held deltas onto the snapshot and publish the result to the UI. */
+    internal fun recompose() {
+        val effective = ModComposition.compose(
+            snapHidden, snapBanned, absorbedThrough,
+            deltas.values.toList(), deltaModerators)
+        _hiddenIds.value = effective.hiddenMessageIds
+        _bannedMembers.value = effective.bannedMembers.keys
+        _banSince.value = effective.bannedMembers
+    }
+
+    /**
+     * A MOD_ACTION arrived, live or from history. The signature is checked
+     * here; whether the signer still moderates is asked once per signer and
+     * recomposes when it answers, so an unknown signer simply does not count
+     * until the gate says otherwise.
+     */
+    internal fun ingestModAction(channel: Channel, payload: JSONObject?): Boolean {
+        val signer = ModAction.verify(channel.messageStreamId, payload) ?: return false
+        val d = payload!!
+        val key = "${d.optLong("ts")}|$signer|${d.optString("op")}|${d.optString("target")}"
+        if (deltas.containsKey(key)) return false
+        deltas[key] = JSONObject(d.toString()).put("mod", signer)
+        resolveDeltaModerator(channel, signer)
+        recompose()
+        return true
+    }
+
+    private fun resolveDeltaModerator(channel: Channel, signer: String) {
+        val gate = channel.gateAddress ?: return
+        if (channelOwner(channel) == signer) {
+            deltaModerators.add(signer)
+            return
+        }
+        if (!deltaSignersAsked.add(signer)) return
+        scope.launch {
+            val isMod = try {
+                bridge.call("gateIsModerator", JSONObject()
+                    .put("gate", gate).put("user", signer), 30_000)
+                    .optBoolean("moderator", false)
+            } catch (e: Exception) {
+                deltaSignersAsked.remove(signer)
+                return@launch
+            }
+            if (!isMod) return@launch
+            deltaModerators.add(signer)
+            if (_current.value?.messageStreamId == channel.messageStreamId) recompose()
+        }
+    }
+
+    /** Drop what belongs to the channel being left. */
+    internal fun clearDeltas() {
+        deltas.clear()
+        deltaSignersAsked.clear()
+        deltaModerators.clear()
+        snapHidden = emptySet()
+        snapBanned = emptyMap()
+        absorbedThrough = 0L
+        _banSince.value = emptyMap()
+    }
+
+    /**
+     * Publish a delta as a moderator. The owner never takes this path: their
+     * snapshot is stronger and needs nobody's ratification.
+     */
+    suspend fun publishModAction(op: String, target: String, sinceEpoch: Int? = null) {
+        val channel = _current.value ?: throw IllegalStateException("No channel open")
+        val priv = manager.myPrivateKey()
+            ?: throw IllegalStateException("No wallet available to sign the moderation action")
+        val payload = ModAction.build(channel.messageStreamId, op, target, priv, sinceEpoch)
+        // Applied locally first, like a sent message: the moderator sees their
+        // own action without waiting for the round trip.
+        ingestModAction(channel, payload)
+        publishForChannel(
+            channel, channel.messageStreamId, StreamConstants.P_MODERATION, payload)
+    }
+
+    /**
+     * Owner only: turn the moderators' deltas into the owner's own snapshot.
+     * `absorbedThrough` advances only to what was actually read, so a delta
+     * still in flight is never silently reverted.
+     */
+    suspend fun absorbModActions() {
+        val channel = _current.value ?: throw IllegalStateException("No channel open")
+        if (!amOwner(channel)) throw IllegalStateException("Only the channel admin can confirm")
+        if (deltas.isEmpty()) return
+        val through = deltas.values.maxOf { it.optLong("ts") }
+        snapHidden = _hiddenIds.value
+        snapBanned = _banSince.value
+        absorbedThrough = through
+        publishAdminState(channel)
+        recompose()
+    }
+
+    /** How many moderator actions are waiting for the owner's confirmation. */
+    fun pendingModActions(): Int = deltas.size
 
     /** Publishes the full ADMIN_STATE with an incremented rev (owner only). */
     internal suspend fun publishAdminState(channel: Channel) {
@@ -832,10 +957,13 @@ internal class Moderation(private val manager: ChannelManager) {
             runCatching { loadAdminState(channel, switchGeneration) }
         }
         val rev = (adminRevs[channel.adminStreamId] ?: 0) + 1
+        // The owner's own word, never the composition: publishing the
+        // composed view would silently ratify deltas they never looked at.
         val state = JSONObject()
-            .put("bannedMembers", JSONArray(_bannedMembers.value.toList()))
-            .put("hiddenMessageIds", JSONArray(_hiddenIds.value.toList()))
+            .put("bannedMembers", ModComposition.bannedToJson(snapBanned))
+            .put("hiddenMessageIds", JSONArray(snapHidden.toList()))
             .put("pins", pinsToJson(_pins.value))
+            .put("absorbedThrough", absorbedThrough)
         val msg = JSONObject()
             .put("type", "ADMIN_STATE").put("rev", rev)
             .put("ts", System.currentTimeMillis()).put("createdBy", addr)
@@ -884,10 +1012,38 @@ internal class Moderation(private val manager: ChannelManager) {
         }
     }
 
+    /**
+     * Publish an owner snapshot with the given change already applied, rolling
+     * the local state back when the publish fails. Same contract as [moderate],
+     * for the fields that live outside a flow.
+     */
+    private suspend fun moderateSnapshot(channel: Channel, apply: () -> Unit) {
+        val prevHidden = snapHidden
+        val prevBanned = snapBanned
+        apply()
+        recompose()
+        try {
+            publishAdminState(channel)
+        } catch (e: Exception) {
+            snapHidden = prevHidden
+            snapBanned = prevBanned
+            recompose()
+            throw e
+        }
+    }
+
     suspend fun hideMessage(messageId: String, hide: Boolean) {
         val channel = _current.value ?: throw IllegalStateException("No channel open")
-        if (!amOwner(channel)) throw IllegalStateException("Only the channel admin can moderate")
-        moderate(channel, _hiddenIds, if (hide) _hiddenIds.value + messageId else _hiddenIds.value - messageId)
+        // A moderator has no permission on the admin stream, so their hide
+        // travels as a signed delta instead of the owner's snapshot.
+        if (!amOwner(channel)) {
+            if (!isModeratorHere()) throw IllegalStateException("Only the channel admin can moderate")
+            publishModAction(if (hide) "hide" else "unhide", messageId)
+            return
+        }
+        moderateSnapshot(channel) {
+            snapHidden = if (hide) snapHidden + messageId else snapHidden - messageId
+        }
     }
 
     suspend fun pinMessage(messageId: String, pin: Boolean) {
@@ -910,13 +1066,25 @@ internal class Moderation(private val manager: ChannelManager) {
 
     suspend fun banMember(address: String, ban: Boolean = true) {
         val channel = _current.value ?: throw IllegalStateException("No channel open")
-        if (!amOwner(channel)) throw IllegalStateException("Only the channel admin can moderate")
         val addr = address.lowercase()
-        moderate(
-            channel, _bannedMembers,
-            if (ban) _bannedMembers.value + addr else _bannedMembers.value - addr
-        )
+        // Stamped with the epoch in force, so the ban silences the author from
+        // here on instead of erasing what they wrote before it.
+        val since = if (ban) epochKeys.currentEpoch(channel.messageStreamId) else null
+        if (!amOwner(channel)) {
+            if (!isModeratorHere()) throw IllegalStateException("Only the channel admin can moderate")
+            publishModAction(if (ban) "ban" else "unban", addr, since)
+            return
+        }
+        moderateSnapshot(channel) {
+            snapBanned = if (ban) snapBanned + (addr to since) else snapBanned - addr
+        }
+        // A ban the owner lifts must beat a moderator's delta that still
+        // asserts it, and a delta is only ever overruled by absorption.
+        if (!ban && deltas.isNotEmpty()) runCatching { absorbModActions() }
     }
+
+    /** Does this account moderate the open channel's gate (cached read)? */
+    private fun isModeratorHere(): Boolean = _perms.value.moderatesGate
 
     /**
      * The two enforcement levels behind one Ban action.

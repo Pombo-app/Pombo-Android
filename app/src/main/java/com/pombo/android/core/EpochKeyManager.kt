@@ -1537,6 +1537,14 @@ class EpochKeyManager(
     }
 
     /**
+     * The epoch in force, as a number. Moderation stamps a ban with it so the
+     * ban applies from that epoch onward and leaves earlier messages alone.
+     */
+    suspend fun currentEpoch(messageStreamId: String): Int? = mutex.withLock {
+        state[messageStreamId]?.currentEpoch?.takeIf { it > 0 }
+    }
+
+    /**
      * Admin escape valve: replaces the shared publish key when a former
      * member keeps writing with the old one. Chain first — an announced key
      * the network rejects would strand every member, while a granted key

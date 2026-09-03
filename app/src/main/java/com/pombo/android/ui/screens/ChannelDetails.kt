@@ -987,11 +987,13 @@ internal fun BanMemberDialog(
     label: String,
     gated: Boolean,
     canClientBan: Boolean,
+    /** The gate's ban is the owner's alone — a moderator only hides. */
+    canProtocolBan: Boolean = gated,
     onDismiss: () -> Unit,
     onConfirm: (client: Boolean, protocol: Boolean) -> Unit
 ) {
     var client by remember { mutableStateOf(canClientBan) }
-    var protocol by remember { mutableStateOf(gated) }
+    var protocol by remember { mutableStateOf(gated && canProtocolBan) }
     val red = PomboColors.Danger
 
     androidx.compose.ui.window.Dialog(onDismissRequest = onDismiss) {
@@ -1017,11 +1019,14 @@ internal fun BanMemberDialog(
 
             BanLevelRow(
                 title = "Cut their access",
-                detail = if (gated)
-                    "They can no longer write or receive keys; the channel key rotates. One transaction."
-                else "Only gated channels have a gate to ban on.",
-                checked = protocol && gated,
-                enabled = gated
+                detail = when {
+                    gated && canProtocolBan ->
+                        "They can no longer write or receive keys; the channel key rotates. One transaction."
+                    gated -> "Only the channel creator can cut access."
+                    else -> "Only gated channels have a gate to ban on."
+                },
+                checked = protocol && gated && canProtocolBan,
+                enabled = gated && canProtocolBan
             ) { protocol = it }
 
             Spacer(Modifier.height(18.dp))
@@ -1034,7 +1039,7 @@ internal fun BanMemberDialog(
                     contentAlignment = Alignment.Center
                 ) { Text("Cancel", color = Color.White.copy(alpha = 0.60f), fontSize = 14.sp) }
                 Spacer(Modifier.width(10.dp))
-                val armed = (client && canClientBan) || (protocol && gated)
+                val armed = (client && canClientBan) || (protocol && gated && canProtocolBan)
                 Box(
                     Modifier.weight(1f)
                         .background(
@@ -1682,6 +1687,40 @@ private fun ChannelModerationPanel(vm: AppViewModel, channel: Channel, canModera
     val myAddr by vm.address.collectAsState()
     val isChannelAdmin = myAddr?.lowercase() ==
         (channel.createdBy ?: channel.messageStreamId.substringBefore('/')).lowercase()
+
+    // Until the owner confirms them, the moderators' actions hold only while
+    // they hold the role — confirming makes them the owner's own word.
+    val pendingMod = vm.pendingModActions()
+    if (isChannelAdmin && channel.type == "gated" && pendingMod > 0) {
+        var confirming by remember { mutableStateOf(false) }
+        Spacer(Modifier.height(20.dp))
+        Box(Modifier.fillMaxWidth().height(1.dp).background(Color.White.copy(alpha = 0.05f)))
+        Spacer(Modifier.height(20.dp))
+        SectionLabel("Confirm Moderator Actions")
+        Spacer(Modifier.height(6.dp))
+        Text(
+            "$pendingMod action(s) by your moderators are in effect but not yet yours. " +
+                "Confirming makes them permanent, even if you dismiss the moderator later. " +
+                "Free — no transaction.",
+            color = Color.White.copy(alpha = 0.40f), fontSize = 12.sp
+        )
+        Spacer(Modifier.height(10.dp))
+        Box(
+            Modifier.fillMaxWidth()
+                .background(Color.White.copy(alpha = 0.06f), RoundedCornerShape(12.dp))
+                .clickableNoRipple {
+                    if (!confirming) { confirming = true; vm.absorbModActions(); reloadKey++ }
+                }
+                .padding(vertical = 12.dp),
+            contentAlignment = Alignment.Center
+        ) {
+            Text(
+                if (confirming) "Confirming…" else "Confirm Moderator Actions",
+                color = Color.White.copy(alpha = 0.80f), fontSize = 14.sp
+            )
+        }
+    }
+
     if (isChannelAdmin && channel.type == "gated") {
         Spacer(Modifier.height(20.dp))
         Box(Modifier.fillMaxWidth().height(1.dp).background(Color.White.copy(alpha = 0.05f)))

@@ -381,6 +381,10 @@ internal fun MessageGroup(
     banGated: Boolean = false,
     /** Only the creator may publish the client-level ban. */
     canClientBan: Boolean = false,
+    /** The gate's ban is the owner's alone. */
+    canProtocolBan: Boolean = banGated,
+    /** Moderates the gate: hides and bans, without the owner's surfaces. */
+    moderatesGate: Boolean = false,
     onAddContact: (String) -> Unit,
     onSendDm: (String) -> Unit,
     onRemoveContact: (String) -> Unit = {},
@@ -533,6 +537,8 @@ internal fun MessageGroup(
                     onBan = { client, protocol -> onBan(msg.sender, client, protocol) },
                     banGated = banGated,
                     canClientBan = canClientBan,
+                    canProtocolBan = canProtocolBan,
+                    moderatesGate = moderatesGate,
                     onAddContact = { onAddContact(msg.sender) },
                     onSendDm = { onSendDm(msg.sender) },
                     onRemoveContact = { onRemoveContact(msg.sender) },
@@ -578,6 +584,8 @@ private fun MessageBubble(
     onBan: (Boolean, Boolean) -> Unit = { _, _ -> },
     banGated: Boolean = false,
     canClientBan: Boolean = false,
+    canProtocolBan: Boolean = banGated,
+    moderatesGate: Boolean = false,
     onAddContact: () -> Unit = {},
     onSendDm: () -> Unit = {},
     onRemoveContact: () -> Unit = {},
@@ -946,7 +954,7 @@ private fun MessageBubble(
                         // Web: showEdit = isSelf && dataset.type === 'text' — files
                         // and images are excluded too, not just images.
                         val showEdit = msg.mine && !msg.isImage && msg.file == null && msg.storageFile == null
-                        val showOwnerDelete = msg.mine && !canModerate
+                        val showOwnerDelete = msg.mine && !canModerate && !moderatesGate
                         if (showEdit || showOwnerDelete) {
                             com.pombo.android.ui.ContextMenuDivider()
                             if (showEdit) com.pombo.android.ui.ContextMenuItem(
@@ -963,10 +971,14 @@ private fun MessageBubble(
                         // channel creator, who cannot be banned
                         // (web _toggleAdminItems, MessageContextMenuUI.js:262-269).
                         val isCreator = channelCreator?.equals(msg.sender, ignoreCase = true) == true
-                        val showBan = canModerate && !msg.mine && !isCreator
-                        if (canModerate) {
+                        // A moderator holds no stream permission — their
+                        // authority is on the gate — so hide and ban are
+                        // theirs too, while pinning stays the owner's.
+                        val canHide = canModerate || moderatesGate
+                        val showBan = canHide && !msg.mine && !isCreator
+                        if (canHide) {
                             com.pombo.android.ui.ContextMenuDivider()
-                            com.pombo.android.ui.ContextMenuItem(
+                            if (canModerate) com.pombo.android.ui.ContextMenuItem(
                                 if (isPinned) "Unpin Message" else "Pin Message",
                                 Icons.Filled.PushPin,
                                 iconTint = Color(0xFFFBBF24)   // text-amber-400
@@ -1030,6 +1042,7 @@ private fun MessageBubble(
             label = "${msg.sender.take(6)}…${msg.sender.takeLast(4)}",
             gated = banGated,
             canClientBan = canClientBan,
+            canProtocolBan = canProtocolBan,
             onDismiss = { confirmBan = false },
             onConfirm = { client, protocol -> confirmBan = false; onBan(client, protocol) }
         )
