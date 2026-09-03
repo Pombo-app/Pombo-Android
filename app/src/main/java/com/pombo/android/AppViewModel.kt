@@ -170,6 +170,7 @@ class AppViewModel(app: Application) : AndroidViewModel(app), PomboBridge.Listen
     val hiddenIds get() = manager.hiddenIds
     val bannedMembers get() = manager.bannedMembers
     val banSince get() = manager.banSince
+    val rosterNames get() = manager.rosterNames
     val moderatesGate get() = manager.moderatesGate
 
     /** Per-channel unread badge counts (web updateUnreadCount). */
@@ -2175,6 +2176,9 @@ class AppViewModel(app: Application) : AndroidViewModel(app), PomboBridge.Listen
         _username.value = v
         toast("Name saved", com.pombo.android.ui.ToastKind.SUCCESS)
         sliceTouched("username")
+        // Gated channels carry the name in the roster hello, so a rename has
+        // to be announced or it waits for the next rotation.
+        viewModelScope.launch { manager.republishHelloForRename() }
     }
 
     fun disconnect() {

@@ -385,6 +385,8 @@ internal fun MessageGroup(
     canProtocolBan: Boolean = banGated,
     /** Moderates the gate: hides and bans, without the owner's surfaces. */
     moderatesGate: Boolean = false,
+    /** The whole name chain, resolved by the caller (roster included). */
+    displayName: ((UiMessage) -> String)? = null,
     onAddContact: (String) -> Unit,
     onSendDm: (String) -> Unit,
     onRemoveContact: (String) -> Unit = {},
@@ -539,6 +541,7 @@ internal fun MessageGroup(
                     canClientBan = canClientBan,
                     canProtocolBan = canProtocolBan,
                     moderatesGate = moderatesGate,
+                    displayName = displayName,
                     onAddContact = { onAddContact(msg.sender) },
                     onSendDm = { onSendDm(msg.sender) },
                     onRemoveContact = { onRemoveContact(msg.sender) },
@@ -586,6 +589,7 @@ private fun MessageBubble(
     canClientBan: Boolean = false,
     canProtocolBan: Boolean = banGated,
     moderatesGate: Boolean = false,
+    displayName: ((UiMessage) -> String)? = null,
     onAddContact: () -> Unit = {},
     onSendDm: () -> Unit = {},
     onRemoveContact: () -> Unit = {},
@@ -757,9 +761,8 @@ private fun MessageBubble(
                                 Spacer(Modifier.width(3.dp))
                             }
                             Text(
-                                // Web precedence (ChatAreaUI): ENS name wins over the
-                                // self-declared username, then the short address.
-                                msg.ensName ?: msg.senderName ?: shortAddress(msg.sender),
+                                displayName?.invoke(msg)
+                                    ?: (msg.ensName ?: msg.senderName ?: shortAddress(msg.sender)),
                                 color = addressColor(msg.sender),
                                 fontSize = 12.sp,
                                 fontWeight = FontWeight.SemiBold

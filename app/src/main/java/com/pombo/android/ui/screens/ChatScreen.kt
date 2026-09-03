@@ -225,6 +225,7 @@ fun ChatScreen(vm: AppViewModel) {
         // reads the same flag, so both surfaces agree on what this account can do.
         val canModerate by vm.canModerate.collectAsState()
         val moderatesGate by vm.moderatesGate.collectAsState()
+        val rosterNames by vm.rosterNames.collectAsState()
         val myAddr = vm.address.collectAsState().value
 
         if (showInfo) ChannelSettingsSheet(vm, ch, canModerate) { showInfo = false }
@@ -678,6 +679,23 @@ fun ChatScreen(vm: AppViewModel) {
                         activeId = activeId,
                         onActivate = { id -> activeId = if (activeId == id) null else id },
                         isContact = { addr -> contacts.any { it.address.equals(addr, ignoreCase = true) } },
+                        displayName = { m ->
+                            // ENS > contact nickname > roster name > senderName >
+                            // address. The roster name and senderName are the same
+                            // kind of claim, so between those two the most recent
+                            // wins; the roster is what names a member who never
+                            // wrote in the channel.
+                            val nickname = contacts.firstOrNull {
+                                it.address.equals(m.sender, ignoreCase = true)
+                            }?.nickname?.takeIf { it.isNotBlank() }
+                            val announced = rosterNames[m.sender.lowercase()]
+                            m.ensName ?: nickname ?: when {
+                                announced != null && m.senderName != null ->
+                                    if (announced.second >= m.timestamp) announced.first else m.senderName
+                                announced != null -> announced.first
+                                else -> m.senderName ?: shortAddress(m.sender)
+                            }
+                        },
                         onReact = { id, emoji, add -> vm.toggleReaction(id, emoji, add) },
                         onReply = { m -> editTarget = null; replyTarget = m; activeId = null },
                         onEdit = { m ->

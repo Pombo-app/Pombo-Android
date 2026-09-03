@@ -67,6 +67,8 @@ class EpochKeyManager(
      * disables the v2 path — everything degrades to v1.
      */
     private val myPrivateKey: () -> String? = { null },
+    /** Display name announced in the hello, so a silent member still has one. */
+    private val myUsername: () -> String? = { null },
     /** Publish to the -4 roster partition (P1). No-op wiring = roster off. */
     private val publishRoster: suspend (keysStreamId: String, data: JSONObject) -> Unit =
         { _, _ -> },
@@ -113,7 +115,11 @@ class EpochKeyManager(
 ) {
     data class Entry(val data: JSONObject, val publisherId: String?, val timestamp: Long)
 
-    data class RosterMember(val account: String, val spk: String?, val ts: Long)
+    data class RosterMember(
+        val account: String, val spk: String?, val ts: Long,
+        /** Display name the member announced, or null if they never did. */
+        val name: String? = null
+    )
 
     private class EpochEntry(val keyHex: String, val keyHash: String, val epoch: Int)
     private class Announce(
@@ -160,6 +166,9 @@ class EpochKeyManager(
         val pendingRequests = LinkedHashMap<String, PendingId>()
         /** Epochs we already published a MEMBER_HELLO for — persisted. */
         val helloEpochs = LinkedHashSet<Int>()
+        /** Name the last hello carried, and when — the next one chains it. */
+        var helloName: String? = null
+        var helloTs: Long = 0L
         /** -4 partition-count probe result; null = not probed yet. */
         var rosterPartitions: Int? = null
         /** (at, members) — rosterMembers result cache. */
@@ -211,6 +220,37 @@ class EpochKeyManager(
     private val mutex = Mutex()
 
     companion object {
+        /**
+         * Fold one verified hello into the roster being built. Dedupe is by
+         * account: `ts` and `spk` come from the newest hello, while the NAME
+         * comes from the newest hello that actually carried one — a later
+         * name-less hello must not erase a name someone announced.
+         */
+        internal fun mergeHello(
+            members: MutableMap<String, RosterMember>,
+            nameTs: MutableMap<String, Long>,
+            account: String,
+            hello: JSONObject,
+            envelopeTs: Long
+        ) {
+            val ts = hello.optLong("ts", envelopeTs)
+            val spk = hello.optString("spk").ifEmpty { null }
+            val name = hello.optString("name").trim().ifEmpty { null }?.take(64)
+            val prev = members[account]
+            if (prev == null) {
+                members[account] = RosterMember(account, spk, ts, name)
+                if (name != null) nameTs[account] = ts
+                return
+            }
+            var merged = prev
+            if (ts > prev.ts) merged = merged.copy(spk = spk, ts = ts)
+            if (name != null && ts >= (nameTs[account] ?: 0L)) {
+                merged = merged.copy(name = name)
+                nameTs[account] = ts
+            }
+            members[account] = merged
+        }
+
         private const val TAG = "PomboEpochKeys"
         private const val REQUEST_MIN_INTERVAL_MS = 60_000L
         /**
@@ -306,6 +346,8 @@ class EpochKeyManager(
                 }
             }
         }
+        persisted.optString("helloName").ifEmpty { null }?.let { s.helloName = it }
+        persisted.optLong("helloTs", 0L).takeIf { it > 0L }?.let { s.helloTs = it }
         persisted.optJSONArray("helloEpochs")?.let { arr ->
             for (i in 0 until arr.length()) {
                 val epoch = arr.optInt(i, 0)
@@ -370,6 +412,7 @@ class EpochKeyManager(
         val out = JSONObject()
             .put("epochs", epochs).put("announces", announces).put("currentEpoch", s.currentEpoch)
             .put("pendingRequests", pendingRequests).put("helloEpochs", helloEpochs)
+            .put("helloName", s.helloName ?: JSONObject.NULL).put("helloTs", s.helloTs)
         s.pubKey?.let {
             out.put("pubKey", JSONObject()
                 .put("keyId", it.keyId).put("keyHex", it.keyHex)
@@ -1632,30 +1675,43 @@ class EpochKeyManager(
     }
 
     /**
-     * One MEMBER_HELLO per epoch, sealed with that epoch's key and published
-     * on first adoption — never for past epochs (a backfilled hello would
-     * fake presence in a window the member did not live). The seal is what
-     * keeps the roster private: the -4 resend is publicly readable over HTTP.
+     * A MEMBER_HELLO per (epoch, name), sealed with that epoch's key and
+     * published on first adoption — never for past epochs (a backfilled hello
+     * would fake presence in a window the member did not live). The seal is
+     * what keeps the roster private: the -4 resend is publicly readable over
+     * HTTP.
+     *
+     * The name travels so a member who never wrote still has one. The old
+     * hello stays — the -4 is append-only and only the node's TTL deletes —
+     * but substitution is infeasible: the roster only accepts a hello whose
+     * envelope signer equals the declared account. `prev` chains the previous
+     * hello's timestamp, an auditable trail for free.
      */
     private suspend fun maybePublishHello(messageStreamId: String, keysStreamId: String, keyId: String) {
         if (isPreviewChannel(messageStreamId)) return
         val account = myAddress()?.lowercase() ?: return
+        val name = myDisplayName()
         var keyHex = ""
         var epoch = 0
+        var previous = 0L
         val eligible = mutex.withLock {
             val s = state[messageStreamId] ?: return
             val entry = s.epochs[keyId] ?: return
             epoch = entry.epoch
             keyHex = entry.keyHex
-            epoch == s.currentEpoch && epoch !in s.helloEpochs
+            previous = s.helloTs
+            epoch == s.currentEpoch && (epoch !in s.helloEpochs || s.helloName != name)
         }
         if (!eligible) return
         if (!rosterCapable(messageStreamId, keysStreamId)) return
 
+        val ts = System.currentTimeMillis()
         val hello = JSONObject()
             .put("t", StreamConstants.MEMBER_HELLO)
             .put("account", account)
-            .put("ts", System.currentTimeMillis())
+            .put("ts", ts)
+        if (name != null) hello.put("name", name)
+        if (previous > 0L) hello.put("prev", previous)
         myPrivateKey()?.let {
             try { hello.put("spk", EthereumSigner.compressedPublicKey(it)) } catch (e: Exception) { }
         }
@@ -1664,10 +1720,38 @@ class EpochKeyManager(
         mutex.withLock {
             state[messageStreamId]?.let { s ->
                 s.helloEpochs.add(epoch)
+                s.helloName = name
+                s.helloTs = ts
+                s.rosterCache = null
                 persist(messageStreamId, s)
             }
         }
         Log.d(TAG, "member hello published for epoch $epoch on ${keysStreamId.takeLast(30)}")
+    }
+
+    /** The display name that travels in the hello, or null. */
+    private fun myDisplayName(): String? =
+        myUsername()?.trim()?.takeIf { it.isNotEmpty() }?.take(64)
+
+    /**
+     * The name changed: republish the hello on the channels where this account
+     * is already in the roster. Without it a rename waited for the next
+     * rotation, which on a quiet channel is a week.
+     */
+    suspend fun republishHelloForRename(channels: List<Pair<String, String>>) {
+        val name = myDisplayName()
+        for ((messageStreamId, keysStreamId) in channels) {
+            val keyId = mutex.withLock {
+                val s = state[messageStreamId] ?: return@withLock null
+                if (s.currentEpoch == 0 || s.helloName == name) return@withLock null
+                s.announces[s.currentEpoch]?.keyId?.takeIf { s.epochs.containsKey(it) }
+            } ?: continue
+            try {
+                maybePublishHello(messageStreamId, keysStreamId, keyId)
+            } catch (e: Exception) {
+                Log.d(TAG, "hello republish failed: ${e.message}")
+            }
+        }
     }
 
     /**
@@ -1691,6 +1775,7 @@ class EpochKeyManager(
         }
         val entries = try { resendRoster(keysStreamId) } catch (e: Exception) { emptyList() }
         val members = LinkedHashMap<String, RosterMember>()
+        val nameTs = HashMap<String, Long>()
         for (entry in entries) {
             if (!EpochKeyCrypto.isEpochEnvelope(entry.data)) continue
             val hello = tryDecrypt(
@@ -1701,11 +1786,7 @@ class EpochKeyManager(
             val account = hello.optString("account").lowercase()
             if (!ADDR_RE.matches(account)) continue
             if (account != entry.publisherId?.lowercase()) continue
-            val ts = hello.optLong("ts", entry.timestamp)
-            val prev = members[account]
-            if (prev == null || ts > prev.ts) {
-                members[account] = RosterMember(account, hello.optString("spk").ifEmpty { null }, ts)
-            }
+            mergeHello(members, nameTs, account, hello, entry.timestamp)
         }
         val list = members.values.toList()
         mutex.withLock {

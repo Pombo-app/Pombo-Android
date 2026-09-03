@@ -291,6 +291,7 @@ class ChannelManager(
             _channels.value.none { it.messageStreamId == messageStreamId }
         },
         myPrivateKey = myPrivateKey,
+        myUsername = myUsername,
         publishRoster = { keysStreamId, data ->
             val channel = channelByStream(keysStreamId) ?: throw IllegalStateException(
                 "Unknown channel for $keysStreamId — cannot publish roster")
@@ -691,6 +692,10 @@ class ChannelManager(
     val hiddenIds: StateFlow<Set<String>> = _hiddenIds.asStateFlow()
     private val _bannedMembers get() = admin._bannedMembers
     val bannedMembers: StateFlow<Set<String>> = _bannedMembers.asStateFlow()
+    /** account -> (name, when they announced it), from the -4 roster. */
+    private val _rosterNames = MutableStateFlow<Map<String, Pair<String, Long>>>(emptyMap())
+    val rosterNames: StateFlow<Map<String, Pair<String, Long>>> = _rosterNames.asStateFlow()
+
     private val _banSince get() = admin._banSince
     /** address -> epoch each ban starts from; null hides everything. */
     val banSince: StateFlow<Map<String, Int?>> = _banSince.asStateFlow()
@@ -2455,6 +2460,32 @@ class ChannelManager(
 
     suspend fun banMember(address: String, ban: Boolean = true) = admin.banMember(address, ban)
 
+    /**
+     * The roster's names for the open channel. Read once per open: it is a
+     * resend, and the names only change when someone renames.
+     */
+    private suspend fun loadRosterNames(channel: Channel, generation: Int) {
+        val keysId = channel.keysStreamId.ifEmpty {
+            StreamConstants.deriveKeysId(channel.messageStreamId)
+        }
+        val members = try {
+            epochKeys.rosterMembers(channel.messageStreamId, keysId)
+        } catch (e: Exception) { return }
+        if (!stillCurrent(generation)) return
+        _rosterNames.value = members.mapNotNull { m ->
+            m.name?.let { m.account to (it to m.ts) }
+        }.toMap()
+    }
+
+    /** A rename has to reach the roster of every gated channel we hold. */
+    suspend fun republishHelloForRename() {
+        val gated = _channels.value.filter { it.type == "gated" }.map {
+            it.messageStreamId to it.keysStreamId.ifEmpty {
+                StreamConstants.deriveKeysId(it.messageStreamId)
+            }
+        }
+        epochKeys.republishHelloForRename(gated)
+    }
     /** Moderator deltas the owner has not confirmed yet. */
     fun pendingModActions(): Int = admin.pendingModActions()
 
@@ -4189,6 +4220,7 @@ class ChannelManager(
             _pins.value = emptyList()
             _hiddenIds.value = emptySet()
             _bannedMembers.value = emptySet()
+            _rosterNames.value = emptyMap()
             admin.clearDeltas()
             val generation = ++switchGeneration
             oldestTimestamp = 0L
@@ -4244,6 +4276,7 @@ class ChannelManager(
                     // gated channels have moderators, so nowhere else does
                     // this partition carry anything.
                     subscribeQuiet(channel.messageStreamId, StreamConstants.P_MODERATION)
+                    scope.launch { loadRosterNames(channel, generation) }
                 }
                 android.util.Log.d("PomboPerf",
                     "subscribes ${channel.name}: ${System.currentTimeMillis() - tSub}ms")
