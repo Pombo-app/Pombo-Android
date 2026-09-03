@@ -418,13 +418,13 @@ class AppViewModel(app: Application) : AndroidViewModel(app), PomboBridge.Listen
      * per device on purpose — serving keys is a duty of the device the owner
      * chose, not of the account.
      */
-    fun setKeyResponder(channel: Channel, on: Boolean) = viewModelScope.launch {
+    fun setKeyResponder(channel: Channel, on: Boolean, quiet: Boolean = false) = viewModelScope.launch {
         val others = settingsStore.keyResponderChannels
             .filterNot { it.messageStreamId == channel.messageStreamId }
         if (on) {
             val tag = try { manager.keyResponderTag(channel) } catch (e: Exception) { "" }
             if (tag.isEmpty()) {
-                toast("Could not derive the channel tag", com.pombo.android.ui.ToastKind.WARNING)
+                if (!quiet) toast("Could not derive the channel tag", com.pombo.android.ui.ToastKind.WARNING)
                 return@launch
             }
             settingsStore.keyResponderChannels = others + com.pombo.android.data.KeyResponderEntry(
@@ -435,14 +435,31 @@ class AppViewModel(app: Application) : AndroidViewModel(app), PomboBridge.Listen
                 channel.gateAddress ?: "",
                 tag
             )
-            toast("Key responder on — this device answers key requests", com.pombo.android.ui.ToastKind.INFO)
+            if (!quiet) toast("Key responder on — this device answers key requests", com.pombo.android.ui.ToastKind.INFO)
         } else {
             settingsStore.keyResponderChannels = others
-            toast("Key responder off", com.pombo.android.ui.ToastKind.INFO)
+            if (!quiet) toast("Key responder off", com.pombo.android.ui.ToastKind.INFO)
         }
         _keyResponderRev.value++
         syncKeyResponderSchedule()
         startKeyResponderLoop()
+    }
+
+    /**
+     * A gated channel was just created with the key responder on by default;
+     * global push is off, so background wakes cannot reach this device. The
+     * dialog offers to turn push on — declining leaves the responder on the
+     * foreground sweep and the periodic worker alone.
+     */
+    private val _responderPushAsk = MutableStateFlow<Channel?>(null)
+    val responderPushAsk: StateFlow<Channel?> = _responderPushAsk.asStateFlow()
+    fun dismissResponderPushAsk() { _responderPushAsk.value = null }
+    fun acceptResponderPushAsk(channel: Channel) {
+        _responderPushAsk.value = null
+        viewModelScope.launch {
+            setPushEnabled(true).join()
+            if (push.enabled) autoEnableChannelPush(channel)
+        }
     }
 
     private fun syncKeyResponderSchedule() {
@@ -2545,6 +2562,12 @@ class AppViewModel(app: Application) : AndroidViewModel(app), PomboBridge.Listen
             toast("Channel created successfully!", com.pombo.android.ui.ToastKind.SUCCESS)
             manager.openChannel(channel.messageStreamId)
             autoEnableChannelPush(channel)
+            // The creator's device answers key requests by default; without
+            // push the background wake path cannot work, so offer it.
+            if (spec.type == "gated") {
+                setKeyResponder(channel, on = true, quiet = true)
+                if (!push.enabled) _responderPushAsk.value = channel
+            }
         } catch (e: Exception) {
             dismissToast(id)
             toast("Failed to create channel: ${e.message ?: "unknown error"}", com.pombo.android.ui.ToastKind.ERROR, 5000L)

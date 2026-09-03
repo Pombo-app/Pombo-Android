@@ -271,6 +271,33 @@ fun PomboApp(vm: AppViewModel) {
                 onSave = { name, cls -> vm.saveLocalIdentity(ch, name, cls) }
             )
         }
+
+        // Key responder is on by default for a channel this device created;
+        // background wakes need push, which is off — offer to enable it.
+        val responderAsk by vm.responderPushAsk.collectAsState()
+        responderAsk?.let { ch ->
+            androidx.compose.material3.AlertDialog(
+                onDismissRequest = vm::dismissResponderPushAsk,
+                title = { Text("Answer key requests in background?") },
+                text = {
+                    Text(
+                        "This device now answers this channel's key requests " +
+                            "while the app is open. To also answer while in " +
+                            "background, enable push notifications."
+                    )
+                },
+                confirmButton = {
+                    androidx.compose.material3.TextButton(
+                        onClick = { vm.acceptResponderPushAsk(ch) }
+                    ) { Text("Enable push") }
+                },
+                dismissButton = {
+                    androidx.compose.material3.TextButton(
+                        onClick = vm::dismissResponderPushAsk
+                    ) { Text("Not now") }
+                }
+            )
+        }
     }
 }
 
