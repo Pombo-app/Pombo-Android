@@ -1556,12 +1556,18 @@ class ChannelManager(
         // SHARED publish key now so its address rides the permission batch.
         val sharedPub = if (type == "gated" && wireIdentity == "sealed")
             epochKeys.mintPublishKey() else null
+        // The interactions key (-5) is minted by its own step; the permission
+        // batch below already accepts it so the wiring lands in one place.
+        val interactionsPub: com.pombo.android.core.EpochKeyManager.PubKey? = null
 
         val base = "${addr.lowercase()}/${PomboCrypto.randomHex(8)}"
         val messageStreamId = "$base${StreamConstants.SUFFIX_MESSAGE}"
         val ephemeralStreamId = "$base${StreamConstants.SUFFIX_EPHEMERAL}"
         val adminStreamId = "$base${StreamConstants.SUFFIX_ADMIN}"
         val keysStreamId = "$base${StreamConstants.SUFFIX_KEYS}"
+        // Interactions (-5): reactions, where members participate without
+        // publishing on -1 — what lets a read-only channel still have them.
+        val interactionsStreamId = "$base${StreamConstants.SUFFIX_INTERACTIONS}"
         // Closed channels are never discoverable: exposure is forced to
         // 'hidden' — honouring a caller-supplied 'visible' would publish the
         // channel name and description in PLAINTEXT on-chain metadata for a
@@ -1592,6 +1598,7 @@ class ChannelManager(
         val ephMeta = JSONObject().put("a", "pombo").put("v", "1").put("ln", messageStreamId)
         val admMeta = JSONObject().put("a", "pombo").put("v", "1").put("ln", messageStreamId).put("k", "admin")
         val keysMeta = JSONObject().put("a", "pombo").put("v", "1").put("ln", messageStreamId).put("k", "keys")
+        val interMeta = JSONObject().put("a", "pombo").put("v", "1").put("ln", messageStreamId).put("k", "interactions")
 
         // Streams SERIALLY (parallel causes on-chain nonce conflicts) with retries
         createStreamRetry(messageStreamId, msgMeta.toString(), StreamConstants.MSG_PARTITIONS); onProgress()
@@ -1602,6 +1609,7 @@ class ChannelManager(
         // owner-only publish (web streamr.js createStream, N-A).
         if (type == "gated") {
             createStreamRetry(keysStreamId, keysMeta.toString(), StreamConstants.KEYS_PARTITIONS); onProgress()
+            createStreamRetry(interactionsStreamId, interMeta.toString(), StreamConstants.INTERACTIONS_PARTITIONS); onProgress()
         }
 
         val publicRW = JSONArray().put(JSONObject().put("public", true).put("permissions", JSONArray(listOf("subscribe", "publish"))))
@@ -1637,6 +1645,18 @@ class ChannelManager(
                     put(JSONObject().put("userId", sharedPub.address)
                         .put("permissions", JSONArray(listOf("publish"))))
                 } else clonePerms
+                // -5: in Sealed the interactions key publishes (handed to
+                // EVERY member, read-only included — that is what makes
+                // reactions work where messages do not); in Visible the clone
+                // does, like everything else in that mode. The key itself is
+                // minted by the interactions-key work; until then Sealed
+                // falls back to the clone.
+                val interactionPerms = if (interactionsPub != null) JSONArray().apply {
+                    put(JSONObject().put("userId", gateAddress)
+                        .put("permissions", JSONArray(listOf("subscribe"))))
+                    put(JSONObject().put("userId", interactionsPub.address)
+                        .put("permissions", JSONArray(listOf("publish"))))
+                } else clonePerms
                 val cloneSubOnly = JSONObject()
                     .put("userId", gateAddress)
                     .put("permissions", JSONArray(listOf("subscribe")))
@@ -1654,6 +1674,9 @@ class ChannelManager(
                 setPermissionsRetry(ephemeralStreamId, contentPerms); onProgress()
                 setPermissionsRetry(adminStreamId, adminPerms); onProgress()
                 setPermissionsRetry(keysStreamId, clonePerms); onProgress()
+                // -5 carries the interactions key in Sealed (every member
+                // publishes under it) and the clone in Visible.
+                setPermissionsRetry(interactionsStreamId, interactionPerms); onProgress()
                 // Initial members: ONE gate transaction. Failure is non-fatal
                 // (the owner re-adds from the members UI).
                 if (members.isNotEmpty()) {
@@ -1683,6 +1706,7 @@ class ChannelManager(
         var msgDays: Int? = null
         var admDays: Int? = null
         var keyDays: Int? = null
+        var interDays: Int? = null
         try { msgDays = addStorageRetry(messageStreamId, storageNode, storageDays) } catch (e: Exception) {
             storageOk = false
             Log.w(TAG, "Storage on -1 failed; continuing without history: ${e.message}")
@@ -1701,11 +1725,18 @@ class ChannelManager(
                 Log.w(TAG, "Storage on -4 failed; key exchange limited to live members: ${e.message}")
             }
             onProgress()
+            // -5 needs storage too: reactions must persist, which is why
+            // they could not live on the storage-less -2.
+            try { interDays = addStorageRetry(interactionsStreamId, storageNode, storageDays) } catch (e: Exception) {
+                Log.w(TAG, "Storage on -5 failed; reactions will not persist: ${e.message}")
+            }
+            onProgress()
         }
         val missingRetention = listOfNotNull(
             if (storageOk && msgDays == null) "-1" else null,
             if (admDays == null) "-3" else null,
-            if (type == "gated" && keyDays == null) "-4" else null
+            if (type == "gated" && keyDays == null) "-4" else null,
+            if (type == "gated" && interDays == null) "-5" else null
         )
         if (missingRetention.isNotEmpty()) {
             Log.w(TAG, "Retention not applied on ${missingRetention.joinToString(", ")} — " +
@@ -1730,6 +1761,7 @@ class ChannelManager(
             ephemeralStreamId = ephemeralStreamId,
             adminStreamId = adminStreamId,
             keysStreamId = if (type == "gated") keysStreamId else "",
+            interactionsStreamId = if (type == "gated") interactionsStreamId else "",
             name = name,
             type = type,
             createdBy = addr,

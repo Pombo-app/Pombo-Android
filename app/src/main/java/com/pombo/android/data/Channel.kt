@@ -14,6 +14,9 @@ data class Channel(
     val adminStreamId: String,
     /** Keys stream (-4) — gated channels (epoch-key distribution, N-A/N-C). */
     val keysStreamId: String = "",
+    /** Interactions stream (-5) — gated channels: reactions, where members
+     *  participate without publishing on -1 (read-only included). */
+    val interactionsStreamId: String = "",
     val name: String,
     val type: String,                 // 'public' | 'password' | 'native' | 'gated'
     /**
@@ -90,6 +93,7 @@ data class Channel(
         .put("ephemeralStreamId", ephemeralStreamId)
         .put("adminStreamId", adminStreamId)
         .put("keysStreamId", keysStreamId)
+        .put("interactionsStreamId", interactionsStreamId)
         .put("name", name)
         .put("type", type)
         // Same shape as the web ({ address }) — sync merges whole channel
@@ -142,6 +146,7 @@ data class Channel(
                 ephemeralStreamId = o.optString("ephemeralStreamId"),
                 adminStreamId = o.optString("adminStreamId"),
                 keysStreamId = o.optString("keysStreamId"),
+                interactionsStreamId = o.optString("interactionsStreamId"),
                 name = o.optString("name", "channel"),
                 type = o.optString("type", "public"),
                 gateAddress = o.optJSONObject("gate")
