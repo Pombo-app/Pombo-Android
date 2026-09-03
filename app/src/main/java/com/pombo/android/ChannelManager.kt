@@ -3729,6 +3729,29 @@ class ChannelManager(
     }
 
     /** One states() read: is this address the gate's owner or a moderator? */
+    /** Session cache for the read-only reader cut: (gate|address) -> verdict.
+     *  Same TTL class as the access cache — moderator lists change rarely. */
+    private val roWriterCache = HashMap<String, Pair<Boolean, Long>>()
+
+    private suspend fun readOnlyWriterAllowed(channel: Channel, address: String): Boolean {
+        val gate = channel.gateAddress ?: return false
+        val key = "${gate.lowercase()}|${address.lowercase()}"
+        synchronized(roWriterCache) {
+            roWriterCache[key]?.let { (v, at) ->
+                if (System.currentTimeMillis() - at < 10 * 60_000L) return v
+            }
+        }
+        val allowed = try { gateOwnerOrModerator(gate, address) } catch (e: Exception) {
+            // Fail-open for rendering, like the live access cut: an RPC
+            // hiccup must not hide the owner's own posts.
+            return true
+        }
+        synchronized(roWriterCache) {
+            roWriterCache[key] = allowed to System.currentTimeMillis()
+        }
+        return allowed
+    }
+
     private suspend fun gateOwnerOrModerator(gate: String, address: String): Boolean {
         val res = bridge.call("gateMembers", JSONObject()
             .put("gate", gate)
@@ -5576,6 +5599,24 @@ class ChannelManager(
             signer
         } else meta.optString("publisherId")
         val account = attachAccount(data, author)
+
+        // Read-only is enforced by READERS in Visible channels: the contract
+        // deliberately validates a member's signature (their reactions,
+        // presence and key requests must pass), so a member-authored MESSAGE
+        // on the message stream is dropped here instead — reactions stay. In
+        // Sealed the content-key distribution already makes this unreachable.
+        if (channel.readOnly && channel.type == "gated" &&
+            streamId == channel.messageStreamId &&
+            data.optString("type") != "reaction"
+        ) {
+            val writer = account ?: author
+            if (writer.isNullOrEmpty()) return
+            val ownerAddr = channel.createdBy?.lowercase()
+                ?: channel.messageStreamId.substringBefore('/', "").lowercase()
+            if (!writer.equals(ownerAddr, ignoreCase = true) &&
+                !readOnlyWriterAllowed(channel, writer)
+            ) return
+        }
 
         when (data.optString("type")) {
             "text" -> handleText(channel, data, historical)

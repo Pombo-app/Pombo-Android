@@ -1649,7 +1649,7 @@ const api = {
     // publishing at ingest. Reads cached 10 min per (gate,user), FAIL-CLOSED
     // on RPC trouble. Writes are owner/moderator transactions signed by the
     // account wallet. No legacy: pre-v3 gates are unsupported by decision.
-    _GATE_FACTORY: '0x7DeA564Acff815cc34aC79329a83A91244207253', // v3 (single gate), Polygon PoS
+    _GATE_FACTORY: '0x38A42115B96A16079F2b0b31bba2Fa183E3f448F', // v3.1 (readOnly is declarative), Polygon PoS
     _GATE_ABI: [
         'function owner() view returns (address)',
         'function mode() view returns (uint8)',
