@@ -933,8 +933,9 @@ internal class Moderation(private val manager: ChannelManager) {
     suspend fun absorbModActions() {
         val channel = _current.value ?: throw IllegalStateException("No channel open")
         if (!amOwner(channel)) throw IllegalStateException("Only the channel admin can confirm")
-        if (deltas.isEmpty()) return
-        val through = deltas.values.maxOf { it.optLong("ts") }
+        val unabsorbed = deltas.values.filter { it.optLong("ts") > absorbedThrough }
+        if (unabsorbed.isEmpty()) return
+        val through = unabsorbed.maxOf { it.optLong("ts") }
         snapHidden = _hiddenIds.value
         snapBanned = _banSince.value
         absorbedThrough = through
@@ -942,8 +943,14 @@ internal class Moderation(private val manager: ChannelManager) {
         recompose()
     }
 
-    /** How many moderator actions are waiting for the owner's confirmation. */
-    fun pendingModActions(): Int = deltas.size
+    /**
+     * Moderator actions still waiting for the owner. Absorbing deletes
+     * nothing — the -1/P2 is append-only and `absorbedThrough` is what stops a
+     * delta counting — so the surface has to measure the unabsorbed ones, or
+     * it keeps offering work already done.
+     */
+    fun pendingModActions(): Int =
+        deltas.values.count { it.optLong("ts") > absorbedThrough }
 
     /** Publishes the full ADMIN_STATE with an incremented rev (owner only). */
     internal suspend fun publishAdminState(channel: Channel) {
