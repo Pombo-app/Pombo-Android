@@ -271,36 +271,6 @@ fun PomboApp(vm: AppViewModel) {
                 onSave = { name, cls -> vm.saveLocalIdentity(ch, name, cls) }
             )
         }
-
-        // Key responder is on by default for a channel this device created;
-        // background wakes need push, which is off — offer to enable it. The
-        // wake itself is silent by contract, so the copy must not promise a
-        // notification the user will never see.
-        val responderAsk by vm.responderPushAsk.collectAsState()
-        responderAsk?.let { ch ->
-            androidx.compose.material3.AlertDialog(
-                onDismissRequest = vm::dismissResponderPushAsk,
-                title = { Text("Don't leave new members waiting") },
-                text = {
-                    Text(
-                        "This device only hands out channel keys while Pombo " +
-                            "is open. With notifications on, it also wakes in " +
-                            "the background and answers straight away. You " +
-                            "never see a notification when it does."
-                    )
-                },
-                confirmButton = {
-                    androidx.compose.material3.TextButton(
-                        onClick = { vm.acceptResponderPushAsk(ch) }
-                    ) { Text("Turn on") }
-                },
-                dismissButton = {
-                    androidx.compose.material3.TextButton(
-                        onClick = vm::dismissResponderPushAsk
-                    ) { Text("Not now") }
-                }
-            )
-        }
     }
 }
 

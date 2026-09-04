@@ -456,23 +456,6 @@ class AppViewModel(app: Application) : AndroidViewModel(app), PomboBridge.Listen
         startKeyResponderLoop()
     }
 
-    /**
-     * A gated channel was just created with the key responder on by default;
-     * global push is off, so background wakes cannot reach this device. The
-     * dialog offers to turn push on — declining leaves the responder on the
-     * foreground sweep and the periodic worker alone.
-     */
-    private val _responderPushAsk = MutableStateFlow<Channel?>(null)
-    val responderPushAsk: StateFlow<Channel?> = _responderPushAsk.asStateFlow()
-    fun dismissResponderPushAsk() { _responderPushAsk.value = null }
-    fun acceptResponderPushAsk(channel: Channel) {
-        _responderPushAsk.value = null
-        viewModelScope.launch {
-            setPushEnabled(true).join()
-            if (push.enabled) autoEnableChannelPush(channel)
-        }
-    }
-
     private fun syncKeyResponderSchedule() {
         if (settingsStore.keyResponderChannels.isEmpty()) {
             com.pombo.android.push.KeyResponderWorker.cancelPeriodic(getApplication())
@@ -2585,12 +2568,10 @@ class AppViewModel(app: Application) : AndroidViewModel(app), PomboBridge.Listen
             toast("Channel created successfully!", com.pombo.android.ui.ToastKind.SUCCESS)
             manager.openChannel(channel.messageStreamId)
             autoEnableChannelPush(channel)
-            // The creator's device answers key requests by default; without
-            // push the background wake path cannot work, so offer it.
-            if (spec.type == "gated") {
-                setKeyResponder(channel, on = true, quiet = true)
-                if (!push.enabled) _responderPushAsk.value = channel
-            }
+            // The creator's device answers key requests by default, and the
+            // toggle registers its own wake tag, so the background path needs
+            // nothing else from the user.
+            if (spec.type == "gated") setKeyResponder(channel, on = true, quiet = true)
         } catch (e: Exception) {
             dismissToast(id)
             toast("Failed to create channel: ${e.message ?: "unknown error"}", com.pombo.android.ui.ToastKind.ERROR, 5000L)
