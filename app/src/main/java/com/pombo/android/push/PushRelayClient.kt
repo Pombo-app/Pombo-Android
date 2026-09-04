@@ -44,6 +44,45 @@ class PushRelayClient(
         set(v) = prefs.edit().putString("fcm_token", v).apply()
 
     /**
+     * Tags this device wants WAKES for without wanting notifications — the key
+     * responder's channels. Kept apart from the registry on purpose: the relay
+     * fans every wake out to every row under the tag, and the notification
+     * path looks the tag up in the registry, so a row with no registry entry
+     * delivers the silent 'keys' branch and drops everything else.
+     */
+    private var wakeTags: Set<String>
+        get() = prefs.getStringSet("wake_tags", emptySet()) ?: emptySet()
+        set(v) = prefs.edit().putStringSet("wake_tags", HashSet(v)).apply()
+
+    private var wakeTagsDirty: Boolean
+        get() = prefs.getBoolean("wake_tags_dirty", false)
+        set(v) = prefs.edit().putBoolean("wake_tags_dirty", v).apply()
+
+    /**
+     * Register a tag for wakes only. The token is an FCM registration token,
+     * which Android hands out without the notification permission, so this
+     * works with notifications off — the wake it enables never shows anything.
+     */
+    suspend fun registerWakeTag(tag: String) {
+        if (tag.isEmpty()) return
+        // Recorded first: a publish that fails still leaves the tag for the
+        // refresh to retry, instead of vanishing with the exception.
+        wakeTags = wakeTags + tag
+        try {
+            publishRegistration(tag)
+        } catch (e: Exception) {
+            wakeTagsDirty = true
+            throw e
+        }
+    }
+
+    /** Stops refreshing a wake tag; the relay row dies with the token. */
+    fun forgetWakeTag(tag: String) {
+        if (tag.isEmpty()) return
+        wakeTags = wakeTags - tag
+    }
+
+    /**
      * The delivery token. Shaped as `{"fcmToken": "..."}` because the relay
      * stores the subscription opaquely and branches on this field; a browser
      * sends `{endpoint, keys}` instead.
@@ -75,12 +114,14 @@ class PushRelayClient(
     fun disable() {
         enabled = false
         registry.all().forEach { registry.remove(it.streamId) }
-        // The relay has no delete endpoint, but the token can be revoked at
-        // the source (web cancels the browser push subscription the same way):
-        // its rows now hold a dead token, and the relay purges them when a
-        // send fails. Re-enabling fetches a fresh token via needs_reregister.
-        prefs.edit().remove("fcm_token").putBoolean("needs_reregister", true).apply()
-        runCatching { FirebaseMessaging.getInstance().deleteToken() }
+        // Killing the token would also kill the key responder's wakes, which
+        // are not notifications and were never opted out of. With none of
+        // those pending, revoke as before: the relay's rows hold a dead token
+        // and get purged on the next failed send.
+        if (wakeTags.isEmpty()) {
+            prefs.edit().remove("fcm_token").putBoolean("needs_reregister", true).apply()
+            runCatching { FirebaseMessaging.getInstance().deleteToken() }
+        }
     }
 
     /**
@@ -185,21 +226,25 @@ class PushRelayClient(
      * On failure the rotation flag is restored so the next connect retries.
      */
     suspend fun refreshRegistrationsIfDue() {
-        if (!enabled) return
+        val wake = wakeTags
+        if (!enabled && wake.isEmpty()) return
         val rotated = prefs.getBoolean("needs_reregister", false)
+        val dirty = wakeTagsDirty
         val last = prefs.getLong("last_reregister_ts", 0L)
-        if (!rotated && System.currentTimeMillis() - last < REREGISTER_INTERVAL_MS) return
+        if (!rotated && !dirty && System.currentTimeMillis() - last < REREGISTER_INTERVAL_MS) return
         try {
             token()  // rotation → fetches the fresh token (and clears the flag)
-            val entries = registry.all()
-            entries.forEach { publishRegistration(it.tag) }
+            val tags = ((if (enabled) registry.all().map { it.tag } else emptyList()) + wake).distinct()
+            tags.forEach { publishRegistration(it) }
+            wakeTagsDirty = false
             prefs.edit().putLong("last_reregister_ts", System.currentTimeMillis()).apply()
             android.util.Log.d(
                 "PomboPush",
-                "registrations refreshed: ${entries.size} row(s), rotated=$rotated"
+                "registrations refreshed: ${tags.size} row(s), rotated=$rotated, wake=${wake.size}"
             )
         } catch (e: Exception) {
             if (rotated) prefs.edit().putBoolean("needs_reregister", true).apply()
+            if (wake.isNotEmpty()) wakeTagsDirty = true
             android.util.Log.w("PomboPush", "registration refresh failed: ${e.message}")
         }
     }

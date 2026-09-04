@@ -422,8 +422,8 @@ class AppViewModel(app: Application) : AndroidViewModel(app), PomboBridge.Listen
      * chose, not of the account.
      */
     fun setKeyResponder(channel: Channel, on: Boolean, quiet: Boolean = false) = viewModelScope.launch {
-        val others = settingsStore.keyResponderChannels
-            .filterNot { it.messageStreamId == channel.messageStreamId }
+        val previous = settingsStore.keyResponderChannels
+        val others = previous.filterNot { it.messageStreamId == channel.messageStreamId }
         if (on) {
             val tag = try { manager.keyResponderTag(channel) } catch (e: Exception) { "" }
             if (tag.isEmpty()) {
@@ -438,9 +438,17 @@ class AppViewModel(app: Application) : AndroidViewModel(app), PomboBridge.Listen
                 channel.gateAddress ?: "",
                 tag
             )
+            // The relay only wakes tags it holds a row for. Without this the
+            // toggle reads ON and nothing ever wakes unless the channel also
+            // has notifications, which is a different opt-in entirely.
+            runCatching { push.registerWakeTag(tag) }.onFailure {
+                android.util.Log.w("PomboPush", "wake tag registration failed: ${it.message}")
+            }
             if (!quiet) toast("Key responder on — this device answers key requests", com.pombo.android.ui.ToastKind.INFO)
         } else {
             settingsStore.keyResponderChannels = others
+            previous.firstOrNull { it.messageStreamId == channel.messageStreamId }
+                ?.let { push.forgetWakeTag(it.tag) }
             if (!quiet) toast("Key responder off", com.pombo.android.ui.ToastKind.INFO)
         }
         _keyResponderRev.value++
