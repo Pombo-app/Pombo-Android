@@ -26,7 +26,7 @@ object StreamConstants {
     // live). See [STORAGE_FILE] and [storageChunkPartition].
     const val MSG_PARTITIONS = 12       // regular: content + control + moderation + 9 chunk partitions
     const val MSG_DM_PARTITIONS = 13    // inbox DM: msgs + sync + sync_blobs + notifs + 9 chunk partitions
-    const val P_MESSAGES = 0            // text, reactions, images, announcements
+    const val P_MESSAGES = 0            // text, images, announcements (reactions: -5)
     const val P_CONTROL = 1             // edit/delete overrides
     const val P_MODERATION = 2          // MOD_ACTION deltas signed by a moderator (gated)
     const val P_SYNC = 1                // cross-device sync (DM inbox only)

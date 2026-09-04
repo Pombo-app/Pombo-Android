@@ -2101,6 +2101,7 @@ class ChannelManager(
         /** Password channels seal P0 payloads; without it every entry is skipped. */
         password: String? = null
     ): com.pombo.android.core.LatestMessageStore.Preview? {
+        val isDmStream = channelByStream(messageStreamId)?.type == "dm"
         return try {
             // Resends need a live client; without this the call fails instantly
             // on a cold start and the preview silently never appears.
@@ -2145,8 +2146,12 @@ class ChannelManager(
                     "image" -> "[image]"
                     "video_announce" -> "[video]"
                     "file_announce", "storage_file_announce" -> "[file]"
-                    // Removals are not previewable (web filters them upstream).
-                    "reaction" -> if (content.optString("action") == "remove") null
+                    // A reaction is not what was said here last, and on a
+                    // channel with a -5 this window never holds one anyway.
+                    // DMs keep theirs: no -5 there, and the local path is the
+                    // only one that feeds them. Removals are never previewable.
+                    "reaction" -> if (!isDmStream
+                        || content.optString("action") == "remove") null
                         else "reacted with ${content.optString("emoji")}"
                     else -> null
                 } ?: continue
@@ -2224,7 +2229,9 @@ class ChannelManager(
                     "image" -> "[image]"
                     "video_announce" -> "[video]"
                     "file_announce", "storage_file_announce" -> "[file]"
-                    "reaction" -> if (content.optString("action") == "remove") null
+                    // Same rule as the preview above: DMs only.
+                    "reaction" -> if (channel.type != "dm"
+                        || content.optString("action") == "remove") null
                         else "reacted with ${content.optString("emoji")}"
                     else -> null
                 }
