@@ -599,10 +599,9 @@ class EpochKeyManager(
         // pubkey have no age limit (the v2 wrap opens in any later session);
         // without one, only recent requests are alive.
         if (haveKeys) {
-            val me = myAddress()?.lowercase()
             val now = System.currentTimeMillis()
             for (entry in storedRequests) {
-                if (entry.publisherId?.lowercase() == me) continue
+                if (isOwnRequestLocked(messageStreamId, entry.data.optString("requestId"))) continue
                 val spk = entry.data.optString("spk").ifEmpty { null }
                 if (spk == null && now - entry.timestamp > REQUEST_ANSWER_WINDOW_MS) continue
                 val requestId = entry.data.optString("requestId")
@@ -1123,14 +1122,27 @@ class EpochKeyManager(
      * (§7.10, N-B). Anything we hear on -4 already passed the stream's
      * on-chain permission check.
      */
+    /** A request this session sent: answering it would be talking to itself. */
+    private suspend fun isOwnRequestLocked(messageStreamId: String, requestId: String): Boolean {
+        if (requestId.isEmpty()) return false
+        return mutex.withLock {
+            val s = state[messageStreamId] ?: return@withLock false
+            s.pendingRequests.containsKey(requestId) || s.pendingRequest?.requestId == requestId
+        }
+    }
+
     private suspend fun handleRequest(
         messageStreamId: String, keysStreamId: String,
         data: JSONObject, publisherId: String?, memberCount: Int
     ) {
         mutex.withLock { recordRequesterLocked(getState(messageStreamId), publisherId) }
-        if (publisherId?.lowercase() == myAddress()?.lowercase()) return  // our own
         val pubkey = data.optString("pubkey").ifEmpty { return }
         val requestId = data.optString("requestId").ifEmpty { return }
+        // Skip only what THIS session asked for, by requestId. Skipping every
+        // request from our own account left a second device of the same
+        // account unable to ever get the keys: nobody else answers a request
+        // that names an address they can see is not theirs.
+        if (isOwnRequestLocked(messageStreamId, requestId)) return
         val haveKeys = mutex.withLock { getState(messageStreamId).epochs.isNotEmpty() }
         if (!haveKeys) return
         scheduleAnswer(
