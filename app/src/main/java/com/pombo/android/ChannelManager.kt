@@ -182,15 +182,26 @@ class ChannelManager(
                 "Unknown channel for $keysStreamId — cannot publish keys")
             val gate = channel.gateAddress ?: throw IllegalStateException(
                 "Gate address unknown for ${channel.messageStreamId} — cannot publish keys")
+            // Split by CADENCE, not by key type: announces (one per
+            // rotation) keep P0 to themselves, requests and the wraps that
+            // answer them go to P1. Sharing one partition let the churn push
+            // the announces out of the read window, leaving a new device
+            // unable to learn the anchor everything else depends on.
+            val t = data.optString("t")
+            val partition = if (t == StreamConstants.KEY_ANNOUNCE || t == StreamConstants.PUB_ANNOUNCE)
+                StreamConstants.P_KEY_EXCHANGE else StreamConstants.P_REQUESTS
             bridge.call("publishAsGate", JSONObject()
                 .put("streamId", keysStreamId)
-                .put("partition", StreamConstants.P_KEY_EXCHANGE)
+                .put("partition", partition)
                 .put("content", data)
                 .put("gateAddress", gate))
         },
         resendKeys = { keysStreamId ->
             val entries = mutableListOf<com.pombo.android.core.EpochKeyManager.Entry>()
             val gatedChannel = channelByStream(keysStreamId)?.takeIf { it.type == "gated" }
+            // Two partitions, two cadences: P0 holds the announces, P1 the
+            // requests and the wraps that answer them.
+            for (part in listOf(StreamConstants.P_KEY_EXCHANGE, StreamConstants.P_REQUESTS)) {
             try {
                 // Raw: skips the SDK's validation/ordering pipeline. Gap
                 // filling rides the mesh, so on a half-connected node an
@@ -199,7 +210,7 @@ class ChannelManager(
                 // (recoverSigner) — raw always travels with it.
                 val res = bridge.call("resend", JSONObject()
                     .put("streamId", keysStreamId)
-                    .put("partition", StreamConstants.P_KEY_EXCHANGE)
+                    .put("partition", part)
                     .put("last", 1000)
                     .put("raw", gatedChannel != null)
                     .put("recoverSigner", gatedChannel != null), 30_000)
@@ -225,6 +236,7 @@ class ChannelManager(
                 // No storage attached yet / empty stream — an empty list is
                 // the correct cold start ("no announces")
                 Log.d(TAG, "keys resend empty (${e.message})")
+            }
             }
             entries
         },
@@ -4330,6 +4342,7 @@ class ChannelManager(
                 // Keys stream (-4): live epoch-key protocol for gated channels
                 if (isEpochChannel(channel) && channel.keysStreamId.isNotEmpty()) {
                     subscribeQuiet(channel.keysStreamId, StreamConstants.P_KEY_EXCHANGE)
+                    subscribeQuiet(channel.keysStreamId, StreamConstants.P_REQUESTS)
                 }
                 // Interactions (-5): reactions, which gated channels moved off
                 // the -1 so a read-only channel can still have them.
@@ -4413,6 +4426,7 @@ class ChannelManager(
         unsubscribeQuiet(channel.ephemeralStreamId, StreamConstants.EPH_CONTROL)
         if (isEpochChannel(channel) && channel.keysStreamId.isNotEmpty()) {
             unsubscribeQuiet(channel.keysStreamId, StreamConstants.P_KEY_EXCHANGE)
+            unsubscribeQuiet(channel.keysStreamId, StreamConstants.P_REQUESTS)
         }
         if (channel.type == "gated") {
             unsubscribeQuiet(
@@ -4446,6 +4460,7 @@ class ChannelManager(
                 subscribeQuiet(channel.ephemeralStreamId, StreamConstants.EPH_CONTROL)
                 if (isEpochChannel(channel) && channel.keysStreamId.isNotEmpty()) {
                     subscribeQuiet(channel.keysStreamId, StreamConstants.P_KEY_EXCHANGE)
+                    subscribeQuiet(channel.keysStreamId, StreamConstants.P_REQUESTS)
                 }
                 if (channel.type == "gated") {
                     subscribeQuiet(

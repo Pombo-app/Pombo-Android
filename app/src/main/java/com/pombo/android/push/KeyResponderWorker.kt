@@ -80,9 +80,14 @@ class KeyResponderWorker(
                 publishKeys = { keysStreamId, data ->
                     val gate = byKeysStream[keysStreamId]?.gateAddress
                         ?: throw IllegalStateException("Unknown responder channel for $keysStreamId")
+                    // Announces on P0, requests and wraps on P1 — the same
+                    // cadence split the in-app path uses.
+                    val t = data.optString("t")
+                    val partition = if (t == StreamConstants.KEY_ANNOUNCE || t == StreamConstants.PUB_ANNOUNCE)
+                        StreamConstants.P_KEY_EXCHANGE else StreamConstants.P_REQUESTS
                     bridge.call("publishAsGate", JSONObject()
                         .put("streamId", keysStreamId)
-                        .put("partition", StreamConstants.P_KEY_EXCHANGE)
+                        .put("partition", partition)
                         .put("content", data)
                         .put("gateAddress", gate))
                 },
@@ -92,9 +97,12 @@ class KeyResponderWorker(
                     // Raw + recoverSigner, same rationale as the in-app resend:
                     // the ordered pipeline's mesh-side gap-filling stalls on a
                     // half-connected node; authority is the recovered signer.
+                    // Both cadences: P0 for the announces, P1 for the requests
+                    // this worker exists to answer.
+                    for (part in listOf(StreamConstants.P_KEY_EXCHANGE, StreamConstants.P_REQUESTS)) {
                     val res = bridge.call("resend", JSONObject()
                         .put("streamId", keysStreamId)
-                        .put("partition", StreamConstants.P_KEY_EXCHANGE)
+                        .put("partition", part)
                         .put("last", 1000)
                         .put("raw", true)
                         .put("recoverSigner", true), 30_000)
@@ -110,6 +118,7 @@ class KeyResponderWorker(
                         if (signer.isEmpty()) continue
                         out.add(com.pombo.android.core.EpochKeyManager.Entry(
                             content, signer, meta.optLong("timestamp", 0L)))
+                    }
                     }
                     out
                 },
