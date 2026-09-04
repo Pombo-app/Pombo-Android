@@ -800,6 +800,10 @@ const api = {
     async _drainResend(stream, push, deadlineAt, ctx) {
         const iterator = stream[Symbol.asyncIterator]();
         let done = false;
+        // Iteration errors are skipped so one bad row cannot end a read, but
+        // the count travels out: a caller that answers requests must be able
+        // to tell a failed read from an empty one.
+        api._lastDrainErrors = 0;
         while (!done) {
             if (deadlineAt && Date.now() > deadlineAt) {
                 try { if (iterator.return) iterator.return(); } catch (e) { /* best effort */ }
@@ -817,6 +821,7 @@ const api = {
                     // traffic; there is no key recovery any more (P6).
                     continue;
                 }
+                api._lastDrainErrors++;
                 console.warn('resend iteration error: ' +
                     (iterError && iterError.message ? iterError.message : String(iterError)));
                 continue;
@@ -933,7 +938,7 @@ const api = {
         // that found no network wait left to hide behind. A large tail means
         // PBKDF2 is the wall, not the storage node.
         return {
-            messages: out, partial: partial,
+            messages: out, partial: partial, errors: api._lastDrainErrors,
             drainMs: tDrain - t0, decryptMs: Date.now() - tDrain
         };
     },
