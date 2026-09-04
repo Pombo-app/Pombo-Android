@@ -63,8 +63,17 @@ class StorageStreamsTest {
 
     private fun node(
         onMessage: Boolean, onAdmin: Boolean, onKeys: Boolean,
-        hasKeys: Boolean, allStreamsRead: Boolean = true
-    ) = ChannelManager.StorageNode("0xnode", onMessage, onAdmin, onKeys, hasKeys, allStreamsRead)
+        hasKeys: Boolean, allStreamsRead: Boolean = true,
+        onInteractions: Boolean = onKeys
+    ) = ChannelManager.StorageNode(
+        address = "0xnode",
+        onMessage = onMessage,
+        onAdmin = onAdmin,
+        onKeys = onKeys,
+        onInteractions = onInteractions,
+        hasKeys = hasKeys,
+        allStreamsRead = allStreamsRead
+    )
 
     @Test
     fun `a node on every stored stream is complete`() {
@@ -79,6 +88,15 @@ class StorageStreamsTest {
     @Test
     fun `a node missing from the admin stream is partial`() {
         assertTrue(node(onMessage = true, onAdmin = false, onKeys = true, hasKeys = true).partial)
+    }
+
+    /** Reactions live on the -5 and it takes storage like the rest. */
+    @Test
+    fun `a node missing from the interactions stream is partial`() {
+        assertTrue(node(
+            onMessage = true, onAdmin = true, onKeys = true,
+            hasKeys = true, onInteractions = false
+        ).partial)
     }
 
     /** Without a -4, onKeys can never be true and must not read as a gap. */

@@ -62,12 +62,13 @@ data class Channel(
     /**
      * Retention in days per stored stream, as read off-chain. Each stream is
      * configured by its own transaction and any of them can fail alone, so a
-     * single figure cannot speak for all three. [storageDays] is the message
+     * single figure cannot speak for all four. [storageDays] is the message
      * stream (-1); null anywhere means not known, never "the default".
      */
     val storageDays: Int? = null,
     val adminStorageDays: Int? = null,
     val keysStorageDays: Int? = null,
+    val interactionsStorageDays: Int? = null,
     val exposure: String = "hidden",  // 'visible' | 'hidden'
     val description: String = "",
     val language: String = "",
@@ -113,6 +114,7 @@ data class Channel(
         .put("storageDays", storageDays ?: JSONObject.NULL)
         .put("adminStorageDays", adminStorageDays ?: JSONObject.NULL)
         .put("keysStorageDays", keysStorageDays ?: JSONObject.NULL)
+        .put("interactionsStorageDays", interactionsStorageDays ?: JSONObject.NULL)
         .put("exposure", exposure)
         .put("description", description)
         .put("language", language)
@@ -175,6 +177,8 @@ data class Channel(
                 storageDays = if (o.isNull("storageDays")) null else o.optInt("storageDays"),
                 adminStorageDays = if (o.isNull("adminStorageDays")) null else o.optInt("adminStorageDays"),
                 keysStorageDays = if (o.isNull("keysStorageDays")) null else o.optInt("keysStorageDays"),
+                interactionsStorageDays = if (o.isNull("interactionsStorageDays")) null
+                    else o.optInt("interactionsStorageDays"),
                 exposure = o.optString("exposure", "hidden"),
                 description = o.optString("description", ""),
                 language = o.optString("language", ""),

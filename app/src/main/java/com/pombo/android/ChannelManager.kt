@@ -1209,7 +1209,8 @@ class ChannelManager(
         val onMessage: Boolean,
         val onAdmin: Boolean,
         val onKeys: Boolean = false,
-        /** False on channels with no -4, where onKeys can never be true. */
+        val onInteractions: Boolean = false,
+        /** False on channels with no -4/-5, where those can never be true. */
         val hasKeys: Boolean = false,
         /**
          * False when a stream lookup failed. Absence then proves nothing, and
@@ -1219,7 +1220,8 @@ class ChannelManager(
         val allStreamsRead: Boolean = true
     ) {
         val partial: Boolean get() =
-            allStreamsRead && !(onMessage && onAdmin && (!hasKeys || onKeys))
+            allStreamsRead &&
+                !(onMessage && onAdmin && (!hasKeys || (onKeys && onInteractions)))
     }
 
     data class StorageInfo(
@@ -1229,6 +1231,7 @@ class ChannelManager(
         val storageDays: Int?,
         val adminStorageDays: Int? = null,
         val keysStorageDays: Int? = null,
+        val interactionsStorageDays: Int? = null,
         /** False when the stored streams hold different retentions. */
         val retentionInSync: Boolean = true,
         val hasKeysStream: Boolean = false
@@ -1253,7 +1256,9 @@ class ChannelManager(
     }
 
     private suspend fun readStoredStreams(channel: Channel): List<StoredStream> {
-        val kinds = listOf("message", "admin", "keys")
+        // Same order as storedStreams: a kind that falls off this list turns
+        // into "extra" and every per-kind decision downstream stops seeing it.
+        val kinds = listOf("message", "admin", "keys", "interactions")
         return storedStreams(channel).mapIndexed { i, id ->
             val res = streamStorage(id)
             StoredStream(id, kinds.getOrElse(i) { "extra" }, res != null,
@@ -1341,20 +1346,28 @@ class ChannelManager(
             channel.keysStreamId.ifEmpty { StreamConstants.deriveKeysId(channel.messageStreamId) }
         } else ""
 
+        val interactionsStreamId = if (channel.type == "gated") {
+            channel.interactionsStreamId.ifEmpty {
+                StreamConstants.deriveInteractionsId(channel.messageStreamId)
+            }
+        } else ""
+
         val msg = streamStorage(channel.messageStreamId)
         val admin = if (channel.adminStreamId.isNotEmpty()) streamStorage(channel.adminStreamId) else null
         val keys = if (keysStreamId.isNotEmpty()) streamStorage(keysStreamId) else null
+        val inter = if (interactionsStreamId.isNotEmpty()) streamStorage(interactionsStreamId) else null
 
         val (msgNodes, days) = msg ?: (emptyList<String>() to null)
         val (adminNodes, adminDays) = admin ?: (emptyList<String>() to null)
         val (keysNodes, keysDays) = keys ?: (emptyList<String>() to null)
+        val (interNodes, interDays) = inter ?: (emptyList<String>() to null)
 
         val hasKeys = keysStreamId.isNotEmpty()
         // Every stream we are comparing has to have actually answered before
         // a node's absence from one of them means anything.
         val allStreamsRead = msg != null &&
             (channel.adminStreamId.isEmpty() || admin != null) &&
-            (!hasKeys || keys != null)
+            (!hasKeys || (keys != null && inter != null))
         val byAddr = linkedMapOf<String, StorageNode>()
         fun mark(addresses: List<String>, set: (StorageNode) -> StorageNode) {
             addresses.forEach { n ->
@@ -1367,20 +1380,22 @@ class ChannelManager(
         mark(msgNodes) { it.copy(onMessage = true) }
         mark(adminNodes) { it.copy(onAdmin = true) }
         mark(keysNodes) { it.copy(onKeys = true) }
+        mark(interNodes) { it.copy(onInteractions = true) }
 
         val nodes = byAddr.values.toList()
         // A lookup that times out reads as "not known", which is silence the
         // panel cannot distinguish from agreement — so say what came back.
-        Log.i(TAG, "Storage info: retention=[message=$days admin=$adminDays keys=$keysDays] " +
-            "inSync=${retentionInSync(days, adminDays, keysDays)} hasKeys=$hasKeys " +
-            "allRead=$allStreamsRead nodes=${nodes.size}")
+        Log.i(TAG, "Storage info: retention=[message=$days admin=$adminDays keys=$keysDays " +
+            "interactions=$interDays] inSync=${retentionInSync(days, adminDays, keysDays, interDays)} " +
+            "hasKeys=$hasKeys allRead=$allStreamsRead nodes=${nodes.size}")
         return StorageInfo(
             enabled = nodes.isNotEmpty(),
             nodes = nodes,
             storageDays = days,
             adminStorageDays = adminDays,
             keysStorageDays = keysDays,
-            retentionInSync = retentionInSync(days, adminDays, keysDays),
+            interactionsStorageDays = interDays,
+            retentionInSync = retentionInSync(days, adminDays, keysDays, interDays),
             hasKeysStream = hasKeys
         )
     }
@@ -1455,7 +1470,9 @@ class ChannelManager(
         val updated = channel.copy(
             storageDays = if (settled("message")) days else channel.storageDays,
             adminStorageDays = if (settled("admin")) days else channel.adminStorageDays,
-            keysStorageDays = if (settled("keys")) days else channel.keysStorageDays
+            keysStorageDays = if (settled("keys")) days else channel.keysStorageDays,
+            interactionsStorageDays =
+                if (settled("interactions")) days else channel.interactionsStorageDays
         )
         if (updated != channel) {
             _channels.value = _channels.value.map {
@@ -1489,16 +1506,26 @@ class ChannelManager(
         val keysDays = if (keysId.isNotEmpty()) {
             com.pombo.android.core.GraphApi.streamRetention(keysId)
         } else null
+        val interId = if (channel.type == "gated") {
+            channel.interactionsStreamId.ifEmpty {
+                StreamConstants.deriveInteractionsId(channel.messageStreamId)
+            }
+        } else ""
+        val interDays = if (interId.isNotEmpty()) {
+            com.pombo.android.core.GraphApi.streamRetention(interId)
+        } else null
 
         val current = _channels.value.firstOrNull { it.messageStreamId == channel.messageStreamId }
             ?: channel
         val updated = current.copy(
             adminStorageDays = adminDays ?: current.adminStorageDays,
-            keysStorageDays = keysDays ?: current.keysStorageDays
+            keysStorageDays = keysDays ?: current.keysStorageDays,
+            interactionsStorageDays = interDays ?: current.interactionsStorageDays
         )
         // One line per open: the sweep that consumes these is headless and
         // silent, so a wrong value is invisible until the announces are gone.
-        Log.d(TAG, "Stream retentions read=[admin=$adminDays keys=$keysDays] " +
+        Log.d(TAG, "Stream retentions read=[admin=$adminDays keys=$keysDays " +
+            "interactions=$interDays] " +
             "using=[message=${updated.storageDays} admin=${adminRetentionDays(updated)} " +
             "keys=${keysRetentionDays(updated)}]")
         if (updated == current) return current
@@ -1822,6 +1849,7 @@ class ChannelManager(
             storageDays = msgDays,
             adminStorageDays = admDays,
             keysStorageDays = keyDays,
+            interactionsStorageDays = interDays,
             exposure = effectiveExposure,
             description = if (visible) description else "",
             language = if (visible) language else "",
