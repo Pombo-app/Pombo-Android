@@ -89,6 +89,8 @@ internal class Moderation(private val manager: ChannelManager) {
     /** Signers already answered by the gate, and which of them moderate. */
     private val deltaSignersAsked = HashSet<String>()
     private val deltaModerators = HashSet<String>()
+    /** Signers the gate has answered for, either way. */
+    private val deltaSignersSettled = HashSet<String>()
     /**
      * Last ADMIN_STATE revision applied, keyed by admin stream — NOT a single
      * counter. Revisions are per channel, so one shared field let a late
@@ -880,6 +882,7 @@ internal class Moderation(private val manager: ChannelManager) {
         val gate = channel.gateAddress ?: return
         if (channelOwner(channel) == signer) {
             deltaModerators.add(signer)
+            deltaSignersSettled.add(signer)
             return
         }
         if (!deltaSignersAsked.add(signer)) return
@@ -892,6 +895,7 @@ internal class Moderation(private val manager: ChannelManager) {
                 deltaSignersAsked.remove(signer)
                 return@launch
             }
+            deltaSignersSettled.add(signer)
             if (!isMod) return@launch
             deltaModerators.add(signer)
             if (_current.value?.messageStreamId == channel.messageStreamId) recompose()
@@ -903,6 +907,7 @@ internal class Moderation(private val manager: ChannelManager) {
         deltas.clear()
         deltaSignersAsked.clear()
         deltaModerators.clear()
+        deltaSignersSettled.clear()
         snapHidden = emptySet()
         snapBanned = emptyMap()
         absorbedThrough = 0L
@@ -935,6 +940,18 @@ internal class Moderation(private val manager: ChannelManager) {
         if (!amOwner(channel)) throw IllegalStateException("Only the channel admin can confirm")
         val unabsorbed = deltas.values.filter { it.optLong("ts") > absorbedThrough }
         if (unabsorbed.isEmpty()) return
+        // Every pending delta needs a settled verdict on its author first.
+        // Absorbing while the gate has not answered writes absorbedThrough
+        // over a composition that still counts nobody: the ratification
+        // lands, the moderation it was ratifying disappears, and the delta
+        // stops counting for good.
+        val unsettled = unabsorbed.map { it.optString("mod").lowercase() }
+            .distinct().filter { it !in deltaSignersSettled }
+        if (unsettled.isNotEmpty()) {
+            unsettled.forEach { resolveDeltaModerator(channel, it) }
+            throw IllegalStateException(
+                "Still checking who moderates this channel — try again in a moment")
+        }
         val through = unabsorbed.maxOf { it.optLong("ts") }
         snapHidden = _hiddenIds.value
         snapBanned = _banSince.value

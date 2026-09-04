@@ -667,9 +667,10 @@ private fun ChannelMembersPanel(vm: AppViewModel, channel: Channel, canModerate:
     val messages by vm.messages.collectAsState()
     val declaredNames = remember(messages) {
         messages.mapNotNull { m ->
-            m.senderName?.takeIf { it.isNotBlank() }?.let { m.sender.lowercase() to it }
+            m.senderName?.takeIf { it.isNotBlank() }?.let { m.sender.lowercase() to (it to m.timestamp) }
         }.toMap()
     }
+    val rosterNames by vm.rosterNames.collectAsState()
 
     // ── CURRENT MEMBERS ─────────────────────────────────────────────
     Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
@@ -716,7 +717,9 @@ private fun ChannelMembersPanel(vm: AppViewModel, channel: Channel, canModerate:
                 )
                 Spacer(Modifier.width(8.dp))
                 Column(Modifier.weight(1f)) {
-                    MemberLabel(addr, ensName, nicknames[lower], declaredNames[lower])
+                    MemberLabel(
+                        addr, ensName, nicknames[lower], declaredNames[lower]?.first,
+                        rosterNames[lower], declaredNames[lower]?.second ?: 0L)
                     Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.padding(top = 2.dp)) {
                         if (isCreator) MemberBadge("Owner", Color(0xFFEAB308))
                         else if (row.moderator) MemberBadge("Moderator", Color(0xFFA855F7))
@@ -950,9 +953,22 @@ internal fun MemberLabel(
     address: String,
     ensName: String?,
     nickname: String?,
-    declaredName: String?
+    declaredName: String?,
+    /** (name, when they announced it) from the -4 roster, if any. */
+    rosterName: Pair<String, Long>? = null,
+    /** When the declared name was last claimed on a message. */
+    declaredAt: Long = 0L
 ) {
-    val name = ensName ?: nickname ?: declaredName
+    // Same chain the bubbles use: the roster name and the one declared on a
+    // message are the same kind of claim, so the most recent wins. The roster
+    // is what names a member who has never posted here.
+    val announced = when {
+        rosterName != null && declaredName != null ->
+            if (rosterName.second >= declaredAt) rosterName.first else declaredName
+        rosterName != null -> rosterName.first
+        else -> declaredName
+    }
+    val name = ensName ?: nickname ?: announced
     if (name != null) {
         Text(name, color = Color.White.copy(alpha = 0.85f), fontSize = 13.sp, maxLines = 1)
     } else {
@@ -1592,9 +1608,10 @@ private fun ChannelModerationPanel(vm: AppViewModel, channel: Channel, canModera
     val messages by vm.messages.collectAsState()
     val declaredNames = remember(messages) {
         messages.mapNotNull { m ->
-            m.senderName?.takeIf { it.isNotBlank() }?.let { m.sender.lowercase() to it }
+            m.senderName?.takeIf { it.isNotBlank() }?.let { m.sender.lowercase() to (it to m.timestamp) }
         }.toMap()
     }
+    val rosterNames by vm.rosterNames.collectAsState()
 
     LaunchedEffect(channel.messageStreamId, reloadKey) {
         chainBanned = if (channel.type == "gated") vm.gateBannedMembers() else emptyList()
@@ -1632,7 +1649,9 @@ private fun ChannelModerationPanel(vm: AppViewModel, channel: Channel, canModera
                 Avatar(addr, size = 28.dp, cornerRadiusFraction = 0.5, ensAvatarUrl = ensAvatars[addr])
                 Spacer(Modifier.width(10.dp))
                 Column(Modifier.weight(1f)) {
-                    MemberLabel(addr, ensNames[addr], nicknames[addr], declaredNames[addr])
+                    MemberLabel(
+                        addr, ensNames[addr], nicknames[addr], declaredNames[addr]?.first,
+                        rosterNames[addr], declaredNames[addr]?.second ?: 0L)
                     Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.padding(top = 2.dp)) {
                         if (onChain) MemberBadge("Protocol", Color(0xFFF87171))
                         if (onChain && onClient) Spacer(Modifier.width(4.dp))
