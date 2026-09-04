@@ -61,6 +61,7 @@ import androidx.compose.material.icons.outlined.Settings
 import androidx.compose.material.icons.outlined.Notifications
 import androidx.compose.material.icons.filled.Notifications
 import androidx.compose.material.icons.outlined.FileUpload
+import androidx.compose.material.icons.outlined.HelpOutline
 import androidx.compose.material.icons.outlined.Campaign
 import androidx.compose.material.icons.outlined.Key
 import androidx.compose.material.icons.outlined.Lock
@@ -503,6 +504,25 @@ private fun ChannelDetailsMain(
         )
     }
 
+    // IDENTITY ON THE WIRE — the gate's own property, immutable for its life,
+    // so it reads under Access and only on gated channels. Group = members
+    // only, globe = everyone: the audience for authorship, never an identity
+    // glyph. Same copy as the web's Channel Details line.
+    if (channel.type == "gated" && !channel.wireIdentity.isNullOrEmpty()) {
+        val sealedWire = channel.wireIdentity == "sealed"
+        Spacer(Modifier.height(20.dp))
+        SectionLabel("Identity on the wire")
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            val wireTint = Color.White.copy(alpha = 0.70f)
+            Icon(
+                if (sealedWire) Icons.Outlined.People else Icons.Outlined.Public,
+                contentDescription = null, tint = wireTint, modifier = Modifier.size(16.dp)
+            )
+            Spacer(Modifier.width(6.dp))
+            Text(if (sealedWire) "Sealed" else "Visible", color = wireTint, fontSize = 14.sp)
+        }
+    }
+
     // Nav rows — the web's #channel-mobile-unified shows exactly three, gated by
     // channel type and permission (showMembersTab/showModerationTab/showDangerTab):
     //   Members   — native (closed / on-chain) channels only. Membership there
@@ -576,6 +596,35 @@ internal fun SectionLabel(text: String) {
         fontSize = 12.sp, fontWeight = FontWeight.Medium, letterSpacing = 0.8.sp,
         modifier = Modifier.padding(bottom = 6.dp)
     )
+}
+
+/**
+ * A caption that says the effect and the cost, with the long version one tap
+ * away — the web's ⓘ, which on touch has no hover to fall back on.
+ */
+@Composable
+private fun HintText(short: String, detail: String) {
+    var open by remember { mutableStateOf(false) }
+    Row(verticalAlignment = Alignment.Top) {
+        Text(
+            short,
+            color = Color.White.copy(alpha = 0.40f), fontSize = 12.sp, lineHeight = 16.sp,
+            modifier = Modifier.weight(1f)
+        )
+        Spacer(Modifier.width(6.dp))
+        Icon(
+            Icons.Outlined.HelpOutline, contentDescription = "Details",
+            tint = Color.White.copy(alpha = if (open) 0.60f else 0.30f),
+            modifier = Modifier.size(14.dp).clickableNoRipple { open = !open }
+        )
+    }
+    if (open) {
+        Spacer(Modifier.height(4.dp))
+        Text(
+            detail,
+            color = Color.White.copy(alpha = 0.30f), fontSize = 12.sp, lineHeight = 16.sp
+        )
+    }
 }
 
 /** Web: value box — text-sm white/70 on white/5, rounded-lg, px-3 py-2.5. */
@@ -1675,11 +1724,10 @@ private fun ChannelModerationPanel(vm: AppViewModel, channel: Channel, canModera
     }
 
     Spacer(Modifier.height(12.dp))
-    Text(
-        "Client bans hide the author's messages for everyone and cost nothing. " +
-            "Protocol bans cut access on the gate, so the member stops receiving " +
-            "keys, and take a transaction to apply and to lift.",
-        color = Color.White.copy(alpha = 0.40f), fontSize = 12.sp
+    HintText(
+        "Client bans hide messages, free. Protocol bans cut access, one transaction.",
+        "Protocol bans cut access on the gate, so the member stops receiving keys, " +
+            "and take a transaction to apply and to lift."
     )
 
     // Pins/hidden counts kept as a small summary below the banned list — not in
@@ -1746,10 +1794,9 @@ private fun ChannelModerationPanel(vm: AppViewModel, channel: Channel, canModera
         Spacer(Modifier.height(20.dp))
         SectionLabel("Rotate Channel Key")
         Spacer(Modifier.height(6.dp))
-        Text(
-            "Issues a new encryption key now. Anyone without current access stops " +
-                "reading new messages. Free — no transaction.",
-            color = Color.White.copy(alpha = 0.40f), fontSize = 12.sp
+        HintText(
+            "New encryption key now. Free.",
+            "Anyone without current access stops reading new messages."
         )
         Spacer(Modifier.height(10.dp))
         Box(
@@ -1769,11 +1816,10 @@ private fun ChannelModerationPanel(vm: AppViewModel, channel: Channel, canModera
         Spacer(Modifier.height(20.dp))
         SectionLabel("Reset Publish Key")
         Spacer(Modifier.height(6.dp))
-        Text(
-            "Replaces the channel's shared publish key (2 transactions). Former members " +
-                "who kept the old key lose the ability to write. Current members pick up " +
-                "the new key automatically.",
-            color = Color.White.copy(alpha = 0.40f), fontSize = 12.sp
+        HintText(
+            "New shared publish key. 2 transactions.",
+            "Former members who kept the old key lose the ability to write. " +
+                "Current members pick up the new key automatically."
         )
         Spacer(Modifier.height(10.dp))
         val amber = Color(0xFFFBBF24)
