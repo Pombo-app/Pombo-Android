@@ -580,6 +580,12 @@ internal class Moderation(private val manager: ChannelManager) {
         epochKeys.rotateEpoch(channel.messageStreamId, keysId)
     }
 
+    /** When the weekly rotation falls due for the open channel, or null. */
+    suspend fun nextRotationAt(): Long? {
+        val channel = _current.value?.takeIf { it.type == "gated" } ?: return null
+        return epochKeys.nextRotationAt(channel.messageStreamId)
+    }
+
     /**
      * Replaces the shared publish key of a Members-only channel: grants the
      * new key's address and revokes the old one on `-1`/`-2` (one transaction

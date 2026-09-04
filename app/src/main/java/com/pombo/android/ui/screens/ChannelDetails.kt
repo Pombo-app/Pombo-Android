@@ -599,32 +599,30 @@ internal fun SectionLabel(text: String) {
 }
 
 /**
- * A caption that says the effect and the cost, with the long version one tap
- * away — the web's ⓘ, which on touch has no hover to fall back on.
+ * The ⓘ that holds a section's explanation: nothing shows until it is tapped.
+ * The glyph is small on purpose; the box around it is what a finger hits.
  */
 @Composable
-private fun HintText(short: String, detail: String) {
-    var open by remember { mutableStateOf(false) }
-    Row(verticalAlignment = Alignment.Top) {
-        Text(
-            short,
-            color = Color.White.copy(alpha = 0.40f), fontSize = 12.sp, lineHeight = 16.sp,
-            modifier = Modifier.weight(1f)
-        )
-        Spacer(Modifier.width(6.dp))
+private fun HintIcon(open: Boolean, onToggle: () -> Unit) {
+    Box(
+        Modifier.size(24.dp).clickableNoRipple(onToggle),
+        contentAlignment = Alignment.Center
+    ) {
         Icon(
             Icons.Outlined.HelpOutline, contentDescription = "Details",
             tint = Color.White.copy(alpha = if (open) 0.60f else 0.30f),
-            modifier = Modifier.size(14.dp).clickableNoRipple { open = !open }
+            modifier = Modifier.size(14.dp)
         )
     }
-    if (open) {
-        Spacer(Modifier.height(4.dp))
-        Text(
-            detail,
-            color = Color.White.copy(alpha = 0.30f), fontSize = 12.sp, lineHeight = 16.sp
-        )
-    }
+}
+
+/** The explanation itself, once the ⓘ opens it. */
+@Composable
+private fun HintBody(text: String) {
+    Text(
+        text,
+        color = Color.White.copy(alpha = 0.40f), fontSize = 12.sp, lineHeight = 16.sp
+    )
 }
 
 /** Web: value box — text-sm white/70 on white/5, rounded-lg, px-3 py-2.5. */
@@ -1674,13 +1672,24 @@ private fun ChannelModerationPanel(vm: AppViewModel, channel: Channel, canModera
     val allBanned = remember(banned, chainSet) {
         (banned.map { it.lowercase() } + chainSet).distinct().sorted()
     }
+    var banHint by remember { mutableStateOf(false) }
     Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
         Text(
             "BANNED MEMBERS", color = Color.White.copy(alpha = 0.40f),
-            fontSize = 12.sp, fontWeight = FontWeight.Medium, letterSpacing = 0.8.sp,
-            modifier = Modifier.weight(1f)
+            fontSize = 12.sp, fontWeight = FontWeight.Medium, letterSpacing = 0.8.sp
         )
+        Spacer(Modifier.width(6.dp))
+        HintIcon(banHint) { banHint = !banHint }
+        Spacer(Modifier.weight(1f))
         Text("${allBanned.size}", color = Color.White.copy(alpha = 0.40f), fontSize = 12.sp)
+    }
+    if (banHint) {
+        Spacer(Modifier.height(8.dp))
+        HintBody(
+            "Client bans hide the author's messages for everyone and cost nothing. " +
+                "Protocol bans cut access on the gate, so the member stops receiving " +
+                "keys, and take a transaction to apply and to lift."
+        )
     }
     Spacer(Modifier.height(10.dp))
 
@@ -1722,13 +1731,6 @@ private fun ChannelModerationPanel(vm: AppViewModel, channel: Channel, canModera
             }
         }
     }
-
-    Spacer(Modifier.height(12.dp))
-    HintText(
-        "Client bans hide messages, free. Protocol bans cut access, one transaction.",
-        "Protocol bans cut access on the gate, so the member stops receiving keys, " +
-            "and take a transaction to apply and to lift."
-    )
 
     // Pins/hidden counts kept as a small summary below the banned list — not in
     // the web, but a harmless at-a-glance of the rest of the moderation state.
@@ -1789,78 +1791,123 @@ private fun ChannelModerationPanel(vm: AppViewModel, channel: Channel, canModera
     }
 
     if (isChannelAdmin && channel.type == "gated") {
+        var rotateHint by remember { mutableStateOf(false) }
+        var rotateDue by remember(channel.messageStreamId) { mutableStateOf<Long?>(null) }
+        LaunchedEffect(channel.messageStreamId, reloadKey) { rotateDue = vm.nextRotationAt() }
         Spacer(Modifier.height(20.dp))
         Box(Modifier.fillMaxWidth().height(1.dp).background(Color.White.copy(alpha = 0.05f)))
         Spacer(Modifier.height(20.dp))
-        SectionLabel("Rotate Channel Key")
-        Spacer(Modifier.height(6.dp))
-        HintText(
-            "New encryption key now. Free.",
-            "Anyone without current access stops reading new messages."
-        )
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Text(
+                "ROTATE CHANNEL KEY", color = Color.White.copy(alpha = 0.80f),
+                fontSize = 12.sp, fontWeight = FontWeight.Medium, letterSpacing = 0.8.sp
+            )
+            Spacer(Modifier.width(6.dp))
+            HintIcon(rotateHint) { rotateHint = !rotateHint }
+        }
+        if (rotateHint) {
+            Spacer(Modifier.height(8.dp))
+            HintBody(
+                "Issues a new encryption key now. Anyone without current access stops " +
+                    "reading new messages. Free — no transaction."
+            )
+        }
+        rotateDue?.let { due ->
+            val msLeft = due - System.currentTimeMillis()
+            Spacer(Modifier.height(6.dp))
+            Text(
+                if (msLeft > 0) "Next auto-rotate: ${com.pombo.android.core.GateFormat.formatRemaining(msLeft)}"
+                else "Next auto-rotate: due",
+                color = Color.White.copy(alpha = 0.40f), fontSize = 13.sp
+            )
+        }
         Spacer(Modifier.height(10.dp))
         Box(
             Modifier
                 .fillMaxWidth()
                 .background(Color.White.copy(alpha = 0.05f), RoundedCornerShape(12.dp))
                 .border(1.dp, Color.White.copy(alpha = 0.10f), RoundedCornerShape(12.dp))
-                .clickableNoRipple { vm.rotateEpochNow() }
+                .clickableNoRipple { vm.rotateEpochNow { reloadKey++ } }
                 .padding(vertical = 12.dp),
             contentAlignment = Alignment.Center
-        ) { Text("Rotate Channel Key", color = Color.White.copy(alpha = 0.80f), fontSize = 13.sp) }
+        ) { Text("Rotate Now", color = Color.White.copy(alpha = 0.80f), fontSize = 13.sp) }
     }
 
-    if (canModerate && channel.type == "gated" && channel.wireIdentity == "sealed") {
-        Spacer(Modifier.height(20.dp))
-        Box(Modifier.fillMaxWidth().height(1.dp).background(Color.White.copy(alpha = 0.05f)))
-        Spacer(Modifier.height(20.dp))
-        SectionLabel("Reset Publish Key")
-        Spacer(Modifier.height(6.dp))
-        HintText(
-            "New shared publish key. 2 transactions.",
-            "Former members who kept the old key lose the ability to write. " +
-                "Current members pick up the new key automatically."
-        )
-        Spacer(Modifier.height(10.dp))
-        val amber = Color(0xFFFBBF24)
-        Box(
-            Modifier
-                .fillMaxWidth()
-                .background(amber.copy(alpha = 0.10f), RoundedCornerShape(12.dp))
-                .border(1.dp, amber.copy(alpha = 0.20f), RoundedCornerShape(12.dp))
-                .clickableNoRipple { vm.rekeyPublishKey() }
-                .padding(vertical = 12.dp),
-            contentAlignment = Alignment.Center
-        ) { Text("Reset Publish Key", color = amber, fontSize = 13.sp) }
-    }
-
-    // ── STREAM GRANTEES ──────────────────────────────────────────────
-    // The technical view: who holds a grant on the streams themselves. On a
-    // gated channel that is the clone and the storage node, never the members,
-    // whose access is proven per-message against the contract.
+    // ── ADVANCED ─────────────────────────────────────────────────────
+    // The grantees and the re-key: neither belongs in a routine visit, so
+    // they live folded at the bottom, the same place the web keeps them.
     if (canModerate && channel.type == "gated") {
+        var advancedOpen by remember { mutableStateOf(false) }
         Spacer(Modifier.height(20.dp))
         Box(Modifier.fillMaxWidth().height(1.dp).background(Color.White.copy(alpha = 0.05f)))
-        Spacer(Modifier.height(20.dp))
-        Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
-            Text(
-                "STREAM GRANTEES", color = Color.White.copy(alpha = 0.40f),
-                fontSize = 12.sp, fontWeight = FontWeight.Medium, letterSpacing = 0.8.sp,
-                modifier = Modifier.weight(1f)
-            )
-            RefreshButton { reloadKey++ }
-        }
-        Spacer(Modifier.height(10.dp))
-        if (permissions.isEmpty()) {
-            Text("Owner only (private)", color = Color.White.copy(alpha = 0.30f), fontSize = 13.sp)
-        } else {
-            LaunchedEffect(permissions) {
-                permissions.forEach { if (!it.isPublic) vm.ensureEns(it.userAddress) }
+        Spacer(Modifier.height(16.dp))
+        Text(
+            if (advancedOpen) "▾ Advanced" else "▸ Advanced",
+            color = Color.White.copy(alpha = 0.40f), fontSize = 13.sp,
+            modifier = Modifier.fillMaxWidth()
+                .clickableNoRipple { advancedOpen = !advancedOpen }
+                .padding(vertical = 4.dp)
+        )
+        if (advancedOpen) {
+            // The technical view: who holds a grant on the streams themselves.
+            // On a gated channel that is the clone and the storage node, never
+            // the members, whose access is proven per-message against the
+            // contract.
+            Spacer(Modifier.height(16.dp))
+            Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                Text(
+                    "STREAM GRANTEES", color = Color.White.copy(alpha = 0.40f),
+                    fontSize = 12.sp, fontWeight = FontWeight.Medium, letterSpacing = 0.8.sp,
+                    modifier = Modifier.weight(1f)
+                )
+                RefreshButton { reloadKey++ }
             }
-            val creatorAddr = (channel.createdBy ?: channel.messageStreamId.substringBefore('/')).lowercase()
-            permissions.forEach { p -> StreamPermissionRow(p, creatorAddr, ensNames) }
-            Spacer(Modifier.height(8.dp))
-            PermissionLegend()
+            Spacer(Modifier.height(10.dp))
+            if (permissions.isEmpty()) {
+                Text("Owner only (private)", color = Color.White.copy(alpha = 0.30f), fontSize = 13.sp)
+            } else {
+                LaunchedEffect(permissions) {
+                    permissions.forEach { if (!it.isPublic) vm.ensureEns(it.userAddress) }
+                }
+                val creatorAddr = (channel.createdBy ?: channel.messageStreamId.substringBefore('/')).lowercase()
+                permissions.forEach { p -> StreamPermissionRow(p, creatorAddr, ensNames) }
+                Spacer(Modifier.height(8.dp))
+                PermissionLegend()
+            }
+
+            if (channel.wireIdentity == "sealed") {
+                var rekeyHint by remember { mutableStateOf(false) }
+                Spacer(Modifier.height(20.dp))
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Text(
+                        "RESET PUBLISH KEY", color = Color.White.copy(alpha = 0.80f),
+                        fontSize = 12.sp, fontWeight = FontWeight.Medium, letterSpacing = 0.8.sp
+                    )
+                    Spacer(Modifier.width(6.dp))
+                    HintIcon(rekeyHint) { rekeyHint = !rekeyHint }
+                }
+                if (rekeyHint) {
+                    Spacer(Modifier.height(8.dp))
+                    HintBody(
+                        "Last resort, for cutting off an ex-member who is flooding storage. " +
+                            "Two transactions. Ex-members who kept the old key lose the ability " +
+                            "to write and current members pick up the new one automatically, but " +
+                            "revoking the old key also stops every message published before the " +
+                            "reset from verifying for anyone reading this channel outside Pombo."
+                    )
+                }
+                Spacer(Modifier.height(10.dp))
+                val amber = Color(0xFFFBBF24)
+                Box(
+                    Modifier
+                        .fillMaxWidth()
+                        .background(amber.copy(alpha = 0.10f), RoundedCornerShape(12.dp))
+                        .border(1.dp, amber.copy(alpha = 0.20f), RoundedCornerShape(12.dp))
+                        .clickableNoRipple { vm.rekeyPublishKey() }
+                        .padding(vertical = 12.dp),
+                    contentAlignment = Alignment.Center
+                ) { Text("Reset Publish Key", color = amber, fontSize = 13.sp) }
+            }
         }
     }
 

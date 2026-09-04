@@ -1049,6 +1049,8 @@ class AppViewModel(app: Application) : AndroidViewModel(app), PomboBridge.Listen
         manager.streamPermissions()
 
     /** Admin-only: manual epoch rotation — free, unlike the re-key below. */
+    suspend fun nextRotationAt(): Long? = manager.nextRotationAt()
+
     fun rotateEpochNow(onDone: () -> Unit = {}) = viewModelScope.launch {
         runWithToast("Rotating channel key…", "Channel key rotated", "Failed to rotate channel key") {
             manager.rotateEpochManual()

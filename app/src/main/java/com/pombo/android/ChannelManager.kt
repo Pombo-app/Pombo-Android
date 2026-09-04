@@ -1179,6 +1179,8 @@ class ChannelManager(
     suspend fun rekeyPublishKey(): Int = admin.rekeyPublishKey()
     suspend fun rotateEpochManual() = admin.rotateEpochManual()
 
+    suspend fun nextRotationAt(): Long? = admin.nextRotationAt()
+
     suspend fun streamPermissions(): List<com.pombo.android.core.GraphApi.StreamPermission> = admin.streamPermissions()
 
     suspend fun setMemberGrant(address: String, canGrant: Boolean) =

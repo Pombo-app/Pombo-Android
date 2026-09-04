@@ -1605,6 +1605,16 @@ class EpochKeyManager(
     }
 
     /**
+     * When the scheduled rotation is due, in epoch millis. A due date in the
+     * past is honest: the timer only runs while the admin's app does, so an
+     * absent admin leaves the epoch standing until the next channel open.
+     */
+    suspend fun nextRotationAt(messageStreamId: String): Long? = mutex.withLock {
+        val s = state[messageStreamId] ?: return@withLock null
+        s.announces[s.currentEpoch]?.validFrom?.let { it + ROTATION_INTERVAL_MS }
+    }
+
+    /**
      * Admin escape valve: replaces the shared publish key when a former
      * member keeps writing with the old one. Chain first — an announced key
      * the network rejects would strand every member, while a granted key
