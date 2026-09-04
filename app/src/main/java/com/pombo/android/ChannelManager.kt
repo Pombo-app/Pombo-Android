@@ -4573,6 +4573,13 @@ class ChannelManager(
             channel?.adminStreamId,
             channel?.takeIf { isEpochChannel(it) }?.let {
                 it.keysStreamId.ifEmpty { StreamConstants.deriveKeysId(messageStreamId) }
+            },
+            // The -5 goes too, or the reactions and their paid storage stay
+            // standing after the channel is gone.
+            channel?.takeIf { it.type == "gated" }?.let {
+                it.interactionsStreamId.ifEmpty {
+                    StreamConstants.deriveInteractionsId(messageStreamId)
+                }
             }
         ).distinct()
         val failed = mutableListOf<String>()
