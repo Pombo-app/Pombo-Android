@@ -1460,7 +1460,11 @@ class EpochKeyManager(
                 REQUEST_RETRY_FAST_MS else REQUEST_MIN_INTERVAL_MS
             if (pending != null && System.currentTimeMillis() - pending.sentAt < interval) return
             val missing = missingEpochsLocked(s)
-            if (missing.isEmpty() && !needsPubKeyLocked(messageStreamId, s)) return
+            // The interactions key counts too: a device can hold every epoch
+            // key and the publish key and still be unable to react, because the
+            // -5 grants publish to the interactions key alone.
+            if (missing.isEmpty() && !needsPubKeyLocked(messageStreamId, s)
+                && !needsInteractionsKeyLocked(s)) return
             val (priv, pub) = EpochKeyCrypto.generateRequestKeypair()
             val requestId = PomboCrypto.randomHex(16)
             s.pendingRequest = PendingRequest(requestId, priv, pub, System.currentTimeMillis())
@@ -1500,7 +1504,8 @@ class EpochKeyManager(
     suspend fun retryRequestIfWaiting(messageStreamId: String, keysStreamId: String): Boolean {
         val waiting = mutex.withLock {
             val s = state[messageStreamId] ?: return false
-            missingEpochsLocked(s).isNotEmpty() || needsPubKeyLocked(messageStreamId, s)
+            missingEpochsLocked(s).isNotEmpty() || needsPubKeyLocked(messageStreamId, s) ||
+                needsInteractionsKeyLocked(s)
         }
         if (waiting) sendKeyRequest(messageStreamId, keysStreamId)
         return waiting

@@ -5269,9 +5269,18 @@ class ChannelManager(
             val participates = streamId != channel.messageStreamId
             var sharedKeyHex: String? = null
             if (membersOnly) {
+                // The -5 grants publish to the interactions key ALONE, so
+                // there is no falling back to the content key there: the
+                // network would drop the message and the reaction would
+                // vanish with no error. The -2 still accepts both, which is
+                // what keeps channels created before the split working.
+                val interactionsOnly = streamId == channel.interactionsStreamId.ifEmpty {
+                    StreamConstants.deriveInteractionsId(channel.messageStreamId)
+                }
                 var pub = if (participates) {
                     epochKeys.interactionsKeyFor(channel.messageStreamId)
-                        ?: epochKeys.publishKeyFor(channel.messageStreamId)
+                        ?: if (interactionsOnly) null
+                        else epochKeys.publishKeyFor(channel.messageStreamId)
                 } else epochKeys.publishKeyFor(channel.messageStreamId)
                 if (pub == null) {
                     // A member can hold the epoch key (reads decrypt fine)

@@ -29,9 +29,9 @@ class StorageStreamsTest {
     // ===== storedStreams =====
 
     @Test
-    fun `a gated channel stores the message, admin and keys streams`() {
+    fun `a gated channel stores the message, admin, keys and interactions streams`() {
         assertEquals(
-            listOf("0xowner/test-1", "0xowner/test-3", "0xowner/test-4"),
+            listOf("0xowner/test-1", "0xowner/test-3", "0xowner/test-4", "0xowner/test-5"),
             ChannelManager.storedStreams(channel("gated"))
         )
     }
@@ -55,7 +55,7 @@ class StorageStreamsTest {
     fun `the keys stream is derived when the record does not carry it`() {
         assertEquals(
             "0xowner/test-4",
-            ChannelManager.storedStreams(channel("gated", keysStreamId = "")).last()
+            ChannelManager.storedStreams(channel("gated", keysStreamId = ""))[2]
         )
     }
 
