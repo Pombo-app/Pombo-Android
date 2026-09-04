@@ -50,6 +50,13 @@ object GasEstimator {
     private const val GAS_ADD_STORAGE_NODE = 165_000L
     private const val GAS_SET_STORAGE_DAY_COUNT = 50_000L
 
+    /**
+     * Gate deployment (factory clone plus initialize), measured with
+     * eth_estimateGas on Polygon: 217k for a Closed gate, 183k for a token
+     * gate. The higher one, so the figure is never short.
+     */
+    private const val GAS_CREATE_GATE = 220_000L
+
     private const val CACHE_DURATION_MS = 60_000L
     @Volatile private var cachedGasPrice: BigInteger? = null
     @Volatile private var cacheTime = 0L
@@ -148,12 +155,15 @@ object GasEstimator {
                 2 * GAS_ADD_STORAGE_NODE +
                 2 * GAS_SET_STORAGE_DAY_COUNT
         )
-        // Gated adds the keys stream (-4, with storage) — N-A epoch keys.
+        // Gated: the gate contract plus five streams (-1, -2, -3 as above,
+        // -4 keys and -5 interactions), permissions on all five, and storage
+        // on the four that keep history — the -2 never takes any.
         val gatedCost = cost(
-            4 * GAS_CREATE_STREAM +
-                4 * GAS_SET_PERMISSIONS_BATCH +
-                3 * GAS_ADD_STORAGE_NODE +
-                3 * GAS_SET_STORAGE_DAY_COUNT
+            GAS_CREATE_GATE +
+                5 * GAS_CREATE_STREAM +
+                5 * GAS_SET_PERMISSIONS_BATCH +
+                4 * GAS_ADD_STORAGE_NODE +
+                4 * GAS_SET_STORAGE_DAY_COUNT
         )
         // DM inbox: 2 streams (-1 + -2) + 2 public permissions + storage on -1.
         val dmInboxCost = cost(

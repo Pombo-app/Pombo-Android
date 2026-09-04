@@ -1066,7 +1066,7 @@ class AppViewModel(app: Application) : AndroidViewModel(app), PomboBridge.Listen
     fun setMemberGrant(address: String, canGrant: Boolean, onDone: () -> Unit = {}) = viewModelScope.launch {
         chainAction(
             if (canGrant) "Grant admin" else "Revoke admin",
-            "Updates this member's permissions on all three streams (3 transactions)."
+            "Updates this member's permissions on the channel's streams."
         ) {
             runWithToast(
                 if (canGrant) "Granting admin…" else "Revoking admin…",
@@ -1077,9 +1077,9 @@ class AppViewModel(app: Application) : AndroidViewModel(app), PomboBridge.Listen
         onDone()
     }
 
-    /** Owner-only: grants access on all three streams (on-chain, costs gas). */
+    /** Owner-only: grants access on the channel's streams (on-chain, costs gas). */
     fun addMember(address: String, onDone: () -> Unit = {}) = viewModelScope.launch {
-        chainAction("Add member", "Grants access on all three channel streams (3 transactions).") {
+        chainAction("Add member", "Grants access on the channel's streams. One transaction each.") {
             runWithToast("Adding member…", "Member added", "Failed to add member") {
                 manager.addMember(address)
             }
@@ -1110,7 +1110,7 @@ class AppViewModel(app: Application) : AndroidViewModel(app), PomboBridge.Listen
         // whole loop.
         chainAction(
             "Add ${valid.size} member${if (valid.size == 1) "" else "s"}",
-            "Grants access on all three channel streams, ${valid.size * 3} transactions in total."
+            "Grants access on the channel's streams, for ${valid.size} member(s)."
         ) {
             for (addr in valid) {
                 try { manager.addMember(addr); added++ }
@@ -1128,7 +1128,7 @@ class AppViewModel(app: Application) : AndroidViewModel(app), PomboBridge.Listen
 
     /** Owner-only: revokes all permissions for an address. */
     fun removeMember(address: String, onDone: () -> Unit = {}) = viewModelScope.launch {
-        chainAction("Remove member", "Revokes their access on all three channel streams (3 transactions).") {
+        chainAction("Remove member", "Revokes their access on the channel's streams.") {
             runWithToast("Removing member…", "Member removed", "Failed to remove member") {
                 manager.removeMember(address)
             }
@@ -1235,7 +1235,7 @@ class AppViewModel(app: Application) : AndroidViewModel(app), PomboBridge.Listen
     fun deleteChannelOnChain(messageStreamId: String, name: String) = viewModelScope.launch {
         chainAction(
             "Delete channel",
-            "Destroys \"$name\" and its three streams for everyone (3 transactions). This cannot be undone."
+            "Destroys \"$name\" and every stream it owns, for everyone. This cannot be undone."
         ) {
         val id = toast(
             "Deleting channel...", com.pombo.android.ui.ToastKind.LOADING, Long.MAX_VALUE,
