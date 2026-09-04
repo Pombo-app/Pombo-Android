@@ -3378,7 +3378,10 @@ class AppViewModel(app: Application) : AndroidViewModel(app), PomboBridge.Listen
         }
         // Push relay housekeeping: republish rows after an FCM token rotation
         // (they hold a dead token until then) and at the web's 6h cadence.
-        viewModelScope.launch { push.refreshRegistrationsIfDue() }
+        viewModelScope.launch {
+            push.ensureWakeTags(settingsStore.keyResponderChannels.map { it.tag })
+            push.refreshRegistrationsIfDue()
+        }
         // Cross-device state (channels/contacts/blocks/username changed on the
         // web) — without this pull the sync button was the only way it ever
         // arrived. Deferred a few seconds so the first paint, the inbox replay

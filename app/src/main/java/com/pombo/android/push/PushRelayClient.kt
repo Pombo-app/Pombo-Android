@@ -83,6 +83,20 @@ class PushRelayClient(
     }
 
     /**
+     * Reconciles the wake set against the channels that actually want one.
+     * The toggle registers on the spot, but a device that marked channels
+     * before this existed (or restored them) would carry the mark with no
+     * relay row and never wake, so the set is rebuilt on each connect and the
+     * missing rows go out on the refresh below.
+     */
+    fun ensureWakeTags(tags: List<String>) {
+        val wanted = tags.filter { it.isNotEmpty() }.toSet()
+        if (wanted == wakeTags) return
+        if ((wanted - wakeTags).isNotEmpty()) wakeTagsDirty = true
+        wakeTags = wanted
+    }
+
+    /**
      * The delivery token. Shaped as `{"fcmToken": "..."}` because the relay
      * stores the subscription opaquely and branches on this field; a browser
      * sends `{endpoint, keys}` instead.
