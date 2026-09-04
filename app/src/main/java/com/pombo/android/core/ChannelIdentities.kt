@@ -8,8 +8,8 @@ package com.pombo.android.core
  *
  * ONE KEY PER CHANNEL, not per message or per account — the pseudonym's job is
  * to stop a network observer from stitching a social graph, and two channels
- * must not be tied together by publisher. All three streams (-1/-2/-3) share
- * the entry.
+ * must not be tied together by publisher. Every stream of the channel shares
+ * the entry (web channelIdentity.js baseChannelId).
  *
  * NEVER PERSISTED: in memory only. Entries are dropped on channel leave, and
  * an entry minted under another account is ignored (each remembers who signed
@@ -28,8 +28,8 @@ object ChannelIdentities {
 
     private val entries = HashMap<String, Entry>()
 
-    /** All three streams of a channel (-1/-2/-3) share one identity. */
-    fun baseChannelId(streamId: String): String = streamId.replace(Regex("-[123]$"), "")
+    /** Every stream of a channel shares one identity: -1, -2, -3, -4, -5. */
+    fun baseChannelId(streamId: String): String = streamId.replace(Regex("-[12345]$"), "")
 
     @Synchronized
     fun entryFor(streamId: String, accountAddress: String, accountPrivateKey: String): Entry {

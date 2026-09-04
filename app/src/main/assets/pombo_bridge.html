@@ -477,9 +477,9 @@ const api = {
     // switch — peers mid-transfer know the current publisher.
     _channelIdentities: {},
 
-    // All three streams of a channel (-1/-2/-3) share one identity.
+    // Every stream of a channel shares one identity: -1, -2, -3, -4, -5.
     _baseChannelId(streamId) {
-        return String(streamId).replace(/-[123]$/, '');
+        return String(streamId).replace(/-[12345]$/, '');
     },
 
     // Kotlin mints the channel pseudonym natively (ChannelIdentities) and

@@ -5,9 +5,10 @@ package com.pombo.android.core
  * Pombo web src/js/streamConstants.js) — changing them breaks
  * interoperability with already-published messages.
  *
- * Each channel derives up to 4 streams from the base ID by suffix:
+ * Each channel derives up to 5 streams from the base ID by suffix:
  *   -1 -> messages (with storage)  -2 -> ephemeral (no storage)
- *   -3 -> admin (with storage)     -4 -> epoch keys (native only, with storage)
+ *   -3 -> admin (with storage)     -4 -> epoch keys (gated only, with storage)
+ *   -5 -> interactions (with storage)
  */
 object StreamConstants {
     const val SUFFIX_MESSAGE = "-1"

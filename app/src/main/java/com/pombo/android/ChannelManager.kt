@@ -1256,13 +1256,9 @@ class ChannelManager(
     }
 
     private suspend fun readStoredStreams(channel: Channel): List<StoredStream> {
-        // Same order as storedStreams: a kind that falls off this list turns
-        // into "extra" and every per-kind decision downstream stops seeing it.
-        val kinds = listOf("message", "admin", "keys", "interactions")
-        return storedStreams(channel).mapIndexed { i, id ->
+        return storedStreamsByKind(channel).map { (id, kind) ->
             val res = streamStorage(id)
-            StoredStream(id, kinds.getOrElse(i) { "extra" }, res != null,
-                res?.first ?: emptyList(), res?.second)
+            StoredStream(id, kind, res != null, res?.first ?: emptyList(), res?.second)
         }
     }
 
@@ -1336,7 +1332,7 @@ class ChannelManager(
     }
 
     /**
-     * Every stored stream of the channel: -1, -3, and -4 on gated. The
+     * Every stored stream of the channel: -1, -3, -5, and -4 on gated. The
      * ephemeral -2 never has storage by design, and the DM inbox is an
      * account-level stream rather than part of any one conversation.
      */
@@ -1346,7 +1342,7 @@ class ChannelManager(
             channel.keysStreamId.ifEmpty { StreamConstants.deriveKeysId(channel.messageStreamId) }
         } else ""
 
-        val interactionsStreamId = if (channel.type == "gated") {
+        val interactionsStreamId = if (channel.type != "dm") {
             channel.interactionsStreamId.ifEmpty {
                 StreamConstants.deriveInteractionsId(channel.messageStreamId)
             }
@@ -1367,7 +1363,8 @@ class ChannelManager(
         // a node's absence from one of them means anything.
         val allStreamsRead = msg != null &&
             (channel.adminStreamId.isEmpty() || admin != null) &&
-            (!hasKeys || (keys != null && inter != null))
+            (!hasKeys || keys != null) &&
+            (interactionsStreamId.isEmpty() || inter != null)
         val byAddr = linkedMapOf<String, StorageNode>()
         fun mark(addresses: List<String>, set: (StorageNode) -> StorageNode) {
             addresses.forEach { n ->
@@ -1506,7 +1503,7 @@ class ChannelManager(
         val keysDays = if (keysId.isNotEmpty()) {
             com.pombo.android.core.GraphApi.streamRetention(keysId)
         } else null
-        val interId = if (channel.type == "gated") {
+        val interId = if (channel.type != "dm") {
             channel.interactionsStreamId.ifEmpty {
                 StreamConstants.deriveInteractionsId(channel.messageStreamId)
             }
@@ -1545,8 +1542,9 @@ class ChannelManager(
     }
 
     /**
-     * Full streamr.js createStream flow: 3 streams serially (nonce),
-     * permissions per type, storage on -1/-3, password challenge on -3/P2.
+     * Full streamr.js createStream flow: every stream serially (nonce),
+     * permissions per type, storage on all but the ephemeral -2, password
+     * challenge on -3/P2.
      */
     suspend fun createChannel(
         name: String,
@@ -1768,11 +1766,11 @@ class ChannelManager(
             }
         }
 
-        // Storage on the -1 and -3 streams (never the ephemeral one).
+        // Storage on every stream but the ephemeral one.
         // Storage failure is NOT fatal: the web logs and continues so the user
         // still gets a working channel, just without retained history
         // (channels.js:418-420). Letting retry() throw here would abort a
-        // creation whose three streams are already paid for on-chain.
+        // creation whose streams are already paid for on-chain.
         val storageNode = if (storageProvider == "custom" && !customStorageAddress.isNullOrBlank())
             customStorageAddress else STORAGE_NODE
         var storageOk = true
@@ -1802,18 +1800,18 @@ class ChannelManager(
                 Log.w(TAG, "Storage on -4 failed; key exchange limited to live members: ${e.message}")
             }
             onProgress()
-            // -5 needs storage too: reactions must persist, which is why
-            // they could not live on the storage-less -2.
-            try { interDays = addStorageRetry(interactionsStreamId, storageNode, storageDays) } catch (e: Exception) {
-                Log.w(TAG, "Storage on -5 failed; reactions will not persist: ${e.message}")
-            }
-            onProgress()
         }
+        // -5 needs storage in every channel type: reactions must persist,
+        // which is why they could not live on the storage-less -2.
+        try { interDays = addStorageRetry(interactionsStreamId, storageNode, storageDays) } catch (e: Exception) {
+            Log.w(TAG, "Storage on -5 failed; reactions will not persist: ${e.message}")
+        }
+        onProgress()
         val missingRetention = listOfNotNull(
             if (storageOk && msgDays == null) "-1" else null,
             if (admDays == null) "-3" else null,
             if (type == "gated" && keyDays == null) "-4" else null,
-            if (type == "gated" && interDays == null) "-5" else null
+            if (interDays == null) "-5" else null
         )
         if (missingRetention.isNotEmpty()) {
             Log.w(TAG, "Retention not applied on ${missingRetention.joinToString(", ")} — " +
@@ -2172,11 +2170,10 @@ class ChannelManager(
      * subscription only for the channel on screen.
      *
      * The two outputs need DIFFERENT filters, which is the easy thing to get
-     * wrong here. A reaction is a legitimate preview ("reacted with 🎉") but is
-     * not a new message, so it must not raise the badge; `image_chunk` is pure
-     * transport and is neither. Web `isContentMessage`: text/message, image
-     * with an imageId, video_announce with metadata — never reaction, edit or
-     * delete.
+     * wrong here. An edit is a legitimate preview but is not a new message, so
+     * it must not raise the badge; `image_chunk` is pure transport and is
+     * neither. Web `isContentMessage`: text/message, image with an imageId,
+     * video_announce with metadata — never reaction, edit or delete.
      */
     suspend fun scanChannelActivity(channel: Channel) {
         val streamId = channel.messageStreamId
@@ -4593,7 +4590,7 @@ class ChannelManager(
     }
 
     /**
-     * Delete the channel ON-CHAIN: all three streams, then drop it locally.
+     * Delete the channel ON-CHAIN: every stream, then drop it locally.
      *
      * Distinct from [removeChannel], which only forgets the channel on this
      * device and leaves the streams standing so anyone (including you) can
@@ -4619,7 +4616,7 @@ class ChannelManager(
             },
             // The -5 goes too, or the reactions and their paid storage stay
             // standing after the channel is gone.
-            channel?.takeIf { it.type == "gated" }?.let {
+            channel?.takeIf { it.type != "dm" }?.let {
                 it.interactionsStreamId.ifEmpty {
                     StreamConstants.deriveInteractionsId(messageStreamId)
                 }
@@ -4814,9 +4811,10 @@ class ChannelManager(
             val o = async {
                 fetchHistoryPage(channel, StreamConstants.P_CONTROL, 50, 20_000, 30_000)
             }
-            // Reactions moved to the -5 on gated channels — without this read
-            // a reopened channel would render messages with no reactions.
-            val r = if (channel.type == "gated") async {
+            // Reactions moved to the -5 — without this read a reopened channel
+            // would render messages with no reactions. Same predicate as the
+            // subscription and the pagination: every channel but a DM.
+            val r = if (channel.type != "dm") async {
                 fetchHistoryPage(
                     channel, StreamConstants.P_REACTIONS,
                     StreamConstants.INITIAL_MESSAGES, 20_000, 30_000,
@@ -5102,6 +5100,9 @@ class ChannelManager(
     /** Web dedup key `streamId:messageId:emoji:action` -> last send time. */
     private val recentReactions = HashMap<String, Long>()
 
+    /** Interactions streams a publish already proved absent (web `_interactionsMissing`). */
+    private val interactionsMissing = java.util.concurrent.ConcurrentHashMap.newKeySet<String>()
+
     /** channels.js sendReaction format — no signature; authorship = publisherId. */
     suspend fun sendReaction(messageId: String, emoji: String, add: Boolean) {
         val channel = _current.value ?: return
@@ -5140,9 +5141,18 @@ class ChannelManager(
                 StreamConstants.deriveInteractionsId(channel.messageStreamId)
             }
         }
-        if (interactionsId.isNotEmpty()) {
-            publishForChannel(channel, interactionsId, StreamConstants.P_REACTIONS, reaction)
-        } else {
+        var sent = false
+        if (interactionsId.isNotEmpty() && !interactionsMissing.contains(interactionsId)) {
+            try {
+                publishForChannel(channel, interactionsId, StreamConstants.P_REACTIONS, reaction)
+                sent = true
+            } catch (e: Exception) {
+                if (!STREAM_ABSENT.containsMatchIn(e.message ?: "")) throw e
+                interactionsMissing.add(interactionsId)
+                Log.w(TAG, "No interactions stream on this channel — reacting on the -1")
+            }
+        }
+        if (!sent) {
             publishForChannel(channel, channel.messageStreamId, StreamConstants.P_MESSAGES, reaction)
         }
         // A DM reaction goes to the PEER's inbox and never comes back from any
@@ -5471,10 +5481,12 @@ class ChannelManager(
                 // clone, so the admin's own KEY_ANNOUNCE is rejected as
                 // non-admin and its wraps are discarded.
                 (it.type == "gated" &&
-                    (StreamConstants.deriveKeysId(it.messageStreamId) == streamId ||
-                        // The -5 must resolve too, or reactions arriving there
-                        // would find no channel and be dropped at the funnel.
-                        it.interactionsStreamId == streamId ||
+                    StreamConstants.deriveKeysId(it.messageStreamId) == streamId) ||
+                // The -5 must resolve too, or reactions arriving there would
+                // find no channel and be dropped at the funnel. Every type
+                // but a DM has one.
+                (it.type != "dm" &&
+                    (it.interactionsStreamId == streamId ||
                         StreamConstants.deriveInteractionsId(it.messageStreamId) == streamId))
         }
         // Preview channels live only in _current, never in _channels — the
@@ -5675,8 +5687,9 @@ class ChannelManager(
         val isMsgStream = streamId == channel.messageStreamId
         val isEphStream = streamId == channel.ephemeralStreamId
         // The -5 carries this channel's reactions, so it belongs here as much
-        // as the -1 and the -2 do.
-        val isIntStream = channel.type == "gated" && streamId == (
+        // as the -1 and the -2 do. Every type but a DM has one, and gating
+        // this on gated dropped every live reaction elsewhere.
+        val isIntStream = channel.type != "dm" && streamId == (
             channel.interactionsStreamId.ifEmpty {
                 StreamConstants.deriveInteractionsId(channel.messageStreamId)
             })
@@ -6366,6 +6379,8 @@ class ChannelManager(
 
     companion object {
         private const val TAG = "PomboChannels"
+        /** A publish rejected because the stream itself is not on chain (web publishReaction). */
+        private val STREAM_ABSENT = Regex("not found|does not exist|NOT_FOUND", RegexOption.IGNORE_CASE)
         /** Canonical wrapped-native on Polygon (WPOL) — bridge `_WRAPPED_NATIVE`. */
         const val WRAPPED_NATIVE = "0x0d500b1d8e8ef31e21c99d1db9a6444d3adf1270"
         /** PomboGate.Mode — ABI order, never reorder (NONE=0, TOKEN=1, NFT=2, PAID=3). */
@@ -6540,18 +6555,28 @@ class ChannelManager(
         fun needsNodeRemove(stream: StoredStream, address: String): Boolean =
             !stream.read || stream.carries(address)
 
-        fun storedStreams(channel: Channel): List<String> = buildList {
-            add(channel.messageStreamId)
-            if (channel.adminStreamId.isNotEmpty()) add(channel.adminStreamId)
+        fun storedStreams(channel: Channel): List<String> =
+            storedStreamsByKind(channel).map { it.first }
+
+        /**
+         * The stored streams paired with what each one is. The kind cannot be
+         * inferred from the position: a channel with no -4 makes the third
+         * entry the -5, and reading the list positionally labelled it "keys".
+         */
+        fun storedStreamsByKind(channel: Channel): List<Pair<String, String>> = buildList {
+            add(channel.messageStreamId to "message")
+            if (channel.adminStreamId.isNotEmpty()) add(channel.adminStreamId to "admin")
             if (channel.type == "gated") {
-                add(channel.keysStreamId.ifEmpty { StreamConstants.deriveKeysId(channel.messageStreamId) })
+                add(channel.keysStreamId.ifEmpty {
+                    StreamConstants.deriveKeysId(channel.messageStreamId)
+                } to "keys")
             }
             // Reactions live here, and they have to survive a reopen — which
             // is why they moved off the storage-less -2. Every type has one.
             if (channel.type != "dm") {
                 add(channel.interactionsStreamId.ifEmpty {
                     StreamConstants.deriveInteractionsId(channel.messageStreamId)
-                })
+                } to "interactions")
             }
         }
 

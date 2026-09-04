@@ -451,8 +451,8 @@ internal class Moderation(private val manager: ChannelManager) {
     }
 
     /**
-     * Grants a member access on all three streams — sequential, because
-     * parallel on-chain writes from one account collide on the nonce.
+     * Grants a member access on the streams that need a grant — sequential,
+     * because parallel on-chain writes from one account collide on the nonce.
      * Admin stream is subscribe-only: members read moderation, owner writes it.
      */
     suspend fun addMember(address: String) {

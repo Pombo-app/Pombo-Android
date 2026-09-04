@@ -60,6 +60,22 @@ class StorageStreamsTest {
         )
     }
 
+    /**
+     * Kinds used to come from a fixed list read by position, so on a channel
+     * with no -4 the -5 was reported as the keys stream.
+     */
+    @Test
+    fun `each stored stream is labelled by what it is, not by its position`() {
+        assertEquals(
+            listOf("message", "admin", "interactions"),
+            ChannelManager.storedStreamsByKind(channel("public")).map { it.second }
+        )
+        assertEquals(
+            listOf("message", "admin", "keys", "interactions"),
+            ChannelManager.storedStreamsByKind(channel("gated")).map { it.second }
+        )
+    }
+
     // ===== StorageNode.partial =====
 
     private fun node(
