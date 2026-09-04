@@ -36,10 +36,11 @@ class StorageStreamsTest {
         )
     }
 
+    /** No -4 without a gate, but the -5 belongs to every channel type. */
     @Test
-    fun `a public channel has no keys stream to store`() {
+    fun `a public channel stores the message, admin and interactions streams`() {
         assertEquals(
-            listOf("0xowner/test-1", "0xowner/test-3"),
+            listOf("0xowner/test-1", "0xowner/test-3", "0xowner/test-5"),
             ChannelManager.storedStreams(channel("public"))
         )
     }

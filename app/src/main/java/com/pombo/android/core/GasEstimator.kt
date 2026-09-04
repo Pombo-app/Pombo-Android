@@ -146,14 +146,14 @@ object GasEstimator {
         val gasPrice = getGasPrice()
         fun cost(units: Long) = gasPrice.multiply(BigInteger.valueOf(units))
 
-        // Channels create 3 streams (-1 message + -2 ephemeral + -3 admin) +
-        // permissions on all three. Storage is enabled on -1 and -3 → 2×
-        // addStorageNode + 2× setStorageDayCount.
+        // Public and password channels own four streams (-1 messages, -2
+        // ephemeral, -3 admin, -5 interactions) with permissions on all four;
+        // storage goes on the three that keep history, never on the -2.
         val publicCost = cost(
-            3 * GAS_CREATE_STREAM +
-                3 * GAS_SET_PUBLIC_PERMISSIONS +
-                2 * GAS_ADD_STORAGE_NODE +
-                2 * GAS_SET_STORAGE_DAY_COUNT
+            4 * GAS_CREATE_STREAM +
+                4 * GAS_SET_PUBLIC_PERMISSIONS +
+                3 * GAS_ADD_STORAGE_NODE +
+                3 * GAS_SET_STORAGE_DAY_COUNT
         )
         // Gated: the gate contract plus five streams (-1, -2, -3 as above,
         // -4 keys and -5 interactions), permissions on all five, and storage

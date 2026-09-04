@@ -1670,8 +1670,12 @@ class ChannelManager(
         // owner-only publish (web streamr.js createStream, N-A).
         if (type == "gated") {
             createStreamRetry(keysStreamId, keysMeta.toString(), StreamConstants.KEYS_PARTITIONS); onProgress()
-            createStreamRetry(interactionsStreamId, interMeta.toString(), StreamConstants.INTERACTIONS_PARTITIONS); onProgress()
         }
+        // Interactions (-5): every channel type. Permissions are per stream,
+        // so a read-only channel that keeps reactions on the -1 loses them
+        // along with the ability to post; and off the -1 a last-N read
+        // comes back with conversation instead of emoji.
+        createStreamRetry(interactionsStreamId, interMeta.toString(), StreamConstants.INTERACTIONS_PARTITIONS); onProgress()
 
         val publicRW = JSONArray().put(JSONObject().put("public", true).put("permissions", JSONArray(listOf("subscribe", "publish"))))
         val publicRead = JSONArray().put(JSONObject().put("public", true).put("permissions", JSONArray(listOf("subscribe"))))
@@ -1680,6 +1684,8 @@ class ChannelManager(
                 setPermissionsRetry(messageStreamId, if (readOnly) publicRead else publicRW); onProgress()
                 setPermissionsRetry(ephemeralStreamId, publicRW); onProgress()   // presence needs public publish
                 setPermissionsRetry(adminStreamId, publicRead); onProgress()     // publish is the owner\x27s by ownership
+                // Read-only means members do not POST; reacting stays theirs.
+                setPermissionsRetry(interactionsStreamId, publicRW); onProgress()
             }
             "gated" -> {
                 // ONE grantee for every stream: the gate clone (N-C, Q7).
@@ -1832,7 +1838,7 @@ class ChannelManager(
             ephemeralStreamId = ephemeralStreamId,
             adminStreamId = adminStreamId,
             keysStreamId = if (type == "gated") keysStreamId else "",
-            interactionsStreamId = if (type == "gated") interactionsStreamId else "",
+            interactionsStreamId = interactionsStreamId,
             name = name,
             type = type,
             createdBy = addr,
@@ -4374,9 +4380,9 @@ class ChannelManager(
                     subscribeQuiet(channel.keysStreamId, StreamConstants.P_KEY_EXCHANGE)
                     subscribeQuiet(channel.keysStreamId, StreamConstants.P_REQUESTS)
                 }
-                // Interactions (-5): reactions, which gated channels moved off
-                // the -1 so a read-only channel can still have them.
-                if (channel.type == "gated") {
+                // Interactions (-5): reactions, which moved off the -1 so a
+                // read-only channel can still have them.
+                if (channel.type != "dm") {
                     subscribeQuiet(
                         channel.interactionsStreamId.ifEmpty {
                             StreamConstants.deriveInteractionsId(channel.messageStreamId)
@@ -4458,7 +4464,7 @@ class ChannelManager(
             unsubscribeQuiet(channel.keysStreamId, StreamConstants.P_KEY_EXCHANGE)
             unsubscribeQuiet(channel.keysStreamId, StreamConstants.P_REQUESTS)
         }
-        if (channel.type == "gated") {
+        if (channel.type != "dm") {
             unsubscribeQuiet(
                 channel.interactionsStreamId.ifEmpty {
                     StreamConstants.deriveInteractionsId(channel.messageStreamId)
@@ -4492,7 +4498,7 @@ class ChannelManager(
                     subscribeQuiet(channel.keysStreamId, StreamConstants.P_KEY_EXCHANGE)
                     subscribeQuiet(channel.keysStreamId, StreamConstants.P_REQUESTS)
                 }
-                if (channel.type == "gated") {
+                if (channel.type != "dm") {
                     subscribeQuiet(
                         channel.interactionsStreamId.ifEmpty {
                             StreamConstants.deriveInteractionsId(channel.messageStreamId)
@@ -4921,6 +4927,20 @@ class ChannelManager(
                 emptyRetry++
             }
             val overrides = resendOlder(channel.messageStreamId, StreamConstants.P_CONTROL, before, channel.password)
+            // Reactions moved to the -5, so paging only the -1 brings older
+            // messages back stripped of them. Same window; a channel with no
+            // -5 reads as empty and costs one call.
+            val reactionsId = if (channel.type == "dm") "" else {
+                channel.interactionsStreamId.ifEmpty {
+                    StreamConstants.deriveInteractionsId(channel.messageStreamId)
+                }
+            }
+            val reactions = if (reactionsId.isEmpty()) null else try {
+                resendOlder(reactionsId, StreamConstants.P_REACTIONS, before, channel.password)
+            } catch (e: Exception) {
+                Log.d(TAG, "loadMoreHistory: interactions page failed: ${e.message}")
+                null
+            }
 
             // Discard if the user switched channels while we were fetching.
             if (!stillCurrent(generationAtStart)) return 0
@@ -4928,7 +4948,8 @@ class ChannelManager(
             // Content first, then overrides — an edit/delete needs its target
             // present, so each partition gets its own batch rather than one
             // batch around both: the overrides must see the merged content.
-            for (partition in listOf(content, overrides)) {
+            // Reactions last, for the same reason.
+            for (partition in listOf(content, overrides, reactions)) {
                 val arr = partition?.optJSONArray("messages") ?: continue
                 val contents = predecrypt(arr, channel.password)
                 batchingMerges {
@@ -5103,13 +5124,16 @@ class ChannelManager(
         // stream accepts public publishes, so the emoji and the message it
         // points at were readable by anyone. Seal it like every other DM
         // payload (web sendReaction takes the same branch).
-        // Gated channels react on the -5: it is where members participate,
-        // so a read-only channel still has reactions and the -1 goes back to
-        // being conversation only. Everywhere else the -1/P0 stays.
-        if (channel.type == "gated") {
-            val interactionsId = channel.interactionsStreamId.ifEmpty {
+        // Reactions live on the -5 in every channel type: it is where
+        // members participate, so a read-only channel still has them and the
+        // -1 goes back to being conversation only. A channel created before
+        // the -5 existed has none, and there the -1/P0 stays the home.
+        val interactionsId = if (channel.type == "dm") "" else {
+            channel.interactionsStreamId.ifEmpty {
                 StreamConstants.deriveInteractionsId(channel.messageStreamId)
             }
+        }
+        if (interactionsId.isNotEmpty()) {
             publishForChannel(channel, interactionsId, StreamConstants.P_REACTIONS, reaction)
         } else {
             publishForChannel(channel, channel.messageStreamId, StreamConstants.P_MESSAGES, reaction)
@@ -6514,9 +6538,13 @@ class ChannelManager(
             if (channel.adminStreamId.isNotEmpty()) add(channel.adminStreamId)
             if (channel.type == "gated") {
                 add(channel.keysStreamId.ifEmpty { StreamConstants.deriveKeysId(channel.messageStreamId) })
-                // Reactions live here, and they have to survive a reopen —
-                // which is why they moved off the storage-less -2.
-                add(channel.interactionsStreamId.ifEmpty { StreamConstants.deriveInteractionsId(channel.messageStreamId) })
+            }
+            // Reactions live here, and they have to survive a reopen — which
+            // is why they moved off the storage-less -2. Every type has one.
+            if (channel.type != "dm") {
+                add(channel.interactionsStreamId.ifEmpty {
+                    StreamConstants.deriveInteractionsId(channel.messageStreamId)
+                })
             }
         }
 
