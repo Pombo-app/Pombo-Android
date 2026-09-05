@@ -1984,13 +1984,17 @@ private fun ChannelDeletePanel(vm: AppViewModel, channel: Channel, onDismiss: ()
 private fun ChannelDestroyPanel(vm: AppViewModel, channel: Channel, onDismiss: () -> Unit) {
     var confirmText by remember { mutableStateOf("") }
     val armed = confirmText.trim().equals(channel.name.trim(), ignoreCase = true)
+    // One transaction per stream, and only a gated channel has the -4.
+    val streamCount = remember(channel.messageStreamId, channel.type) {
+        com.pombo.android.ChannelManager.channelStreams(channel.messageStreamId, channel).size
+    }
 
     Text("Delete channel", color = PomboColors.Danger, fontSize = 15.sp, fontWeight = FontWeight.SemiBold)
     Spacer(Modifier.height(6.dp))
     Text(
-        "Deletes all three streams on-chain. The channel disappears for every " +
+        "Deletes all $streamCount streams on-chain. The channel disappears for every " +
             "member, its history stops being served, and it cannot be recovered " +
-            "or rejoined. Three transactions, so it costs gas.",
+            "or rejoined. $streamCount transactions, so it costs gas.",
         color = Color.White.copy(alpha = 0.40f), fontSize = 12.sp, lineHeight = 18.sp
     )
     Spacer(Modifier.height(14.dp))

@@ -4607,21 +4607,7 @@ class ChannelManager(
         if (channel != null && !amOwner(channel)) {
             throw IllegalStateException("Only the channel owner can delete it")
         }
-        val ids = listOfNotNull(
-            messageStreamId,
-            channel?.ephemeralStreamId,
-            channel?.adminStreamId,
-            channel?.takeIf { isEpochChannel(it) }?.let {
-                it.keysStreamId.ifEmpty { StreamConstants.deriveKeysId(messageStreamId) }
-            },
-            // The -5 goes too, or the reactions and their paid storage stay
-            // standing after the channel is gone.
-            channel?.takeIf { it.type != "dm" }?.let {
-                it.interactionsStreamId.ifEmpty {
-                    StreamConstants.deriveInteractionsId(messageStreamId)
-                }
-            }
-        ).distinct()
+        val ids = channelStreams(messageStreamId, channel)
         val failed = mutableListOf<String>()
         for (id in ids) {
             try {
@@ -6557,6 +6543,29 @@ class ChannelManager(
 
         fun storedStreams(channel: Channel): List<String> =
             storedStreamsByKind(channel).map { it.first }
+
+        /**
+         * EVERY stream the channel owns, stored or not — what a delete has to
+         * destroy, and the figure the prompt for it must quote. The ephemeral
+         * -2 belongs here and not in [storedStreams]: it is deleted like the
+         * rest, it just never takes storage.
+         */
+        fun channelStreams(messageStreamId: String, channel: Channel?): List<String> =
+            listOfNotNull(
+                messageStreamId,
+                channel?.ephemeralStreamId,
+                channel?.adminStreamId,
+                channel?.takeIf { it.type == "gated" }?.let {
+                    it.keysStreamId.ifEmpty { StreamConstants.deriveKeysId(messageStreamId) }
+                },
+                // The -5 goes too, or the reactions and their paid storage
+                // stay standing after the channel is gone.
+                channel?.takeIf { it.type != "dm" }?.let {
+                    it.interactionsStreamId.ifEmpty {
+                        StreamConstants.deriveInteractionsId(messageStreamId)
+                    }
+                }
+            ).distinct()
 
         /**
          * The stored streams paired with what each one is. The kind cannot be

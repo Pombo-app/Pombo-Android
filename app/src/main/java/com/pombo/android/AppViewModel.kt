@@ -871,7 +871,7 @@ class AppViewModel(app: Application) : AndroidViewModel(app), PomboBridge.Listen
      * states the ceiling rather than a figure that would often be too high.
      */
     private val storedStreamCount: Int
-        get() = if (manager.current.value?.type == "gated") 3 else 2
+        get() = manager.current.value?.let { ChannelManager.storedStreams(it).size } ?: 0
 
     /**
      * Report a storage write by what it actually achieved.
@@ -1089,7 +1089,7 @@ class AppViewModel(app: Application) : AndroidViewModel(app), PomboBridge.Listen
 
     /**
      * Owner-only batch add (web handleBatchAddMembers). Runs the grants one at a
-     * time — each is three on-chain transactions — and reports how many landed,
+     * time — one gate transaction each — and reports how many landed,
      * because a mid-list failure (already a member, gas ran out) must not abort
      * the ones that already succeeded or hide that some did not.
      */
@@ -1233,13 +1233,19 @@ class AppViewModel(app: Application) : AndroidViewModel(app), PomboBridge.Listen
 
     /** On-chain channel deletion — irreversible, and not the same as leaving. */
     fun deleteChannelOnChain(messageStreamId: String, name: String) = viewModelScope.launch {
+        // One delete per stream the channel owns: four everywhere (-1, -2, -3,
+        // -5) and five on gated, which is the only type with a keys stream.
+        val streamCount = ChannelManager.channelStreams(
+            messageStreamId,
+            manager.channels.value.firstOrNull { it.messageStreamId == messageStreamId }
+        ).size
         chainAction(
             "Delete channel",
-            "Destroys \"$name\" and every stream it owns, for everyone. This cannot be undone."
+            "Destroys \"$name\" and its $streamCount streams, for everyone. This cannot be undone."
         ) {
         val id = toast(
             "Deleting channel...", com.pombo.android.ui.ToastKind.LOADING, Long.MAX_VALUE,
-            subtitle = "Three on-chain transactions"
+            subtitle = "$streamCount on-chain transactions"
         )
         try {
             val failed = manager.deleteChannel(messageStreamId)
@@ -2921,9 +2927,10 @@ class AppViewModel(app: Application) : AndroidViewModel(app), PomboBridge.Listen
     /**
      * Creates my DM inbox on-chain (needs POL) so others can DM me — with the
      * web's step progress (DMModalsUI.handleCreateInbox: Creating Inbox →
-     * Setting Permissions → Setting Storage). The web counts 6 steps because
-     * addToStorageNode and setStorageDayCount are separate there; our bridge
-     * does both in one call, so it is 5 here.
+     * Setting Permissions → Setting Storage). Five steps here against the
+     * web's six because our bridge sends addToStorageNode and
+     * setStorageDayCount in one call — the CHAIN still sees six writes, which
+     * is the figure the confirmation quotes.
      */
     fun setupDmInbox(
         storageProvider: String = "streamr",
@@ -2933,7 +2940,7 @@ class AppViewModel(app: Application) : AndroidViewModel(app), PomboBridge.Listen
         if (!canAffordOrWarn("dmInbox")) return@launch
         chainAction(
             "Create DM inbox",
-            "Creates your inbox streams, permissions and storage (5 transactions)."
+            "Creates your inbox streams, permissions and storage (6 transactions)."
         ) {
         val totalSteps = 5
         val id = toast(
@@ -3139,7 +3146,12 @@ class AppViewModel(app: Application) : AndroidViewModel(app), PomboBridge.Listen
         val inbox = myInboxStreamId() ?: return@launch
         val node = if (provider == "custom" && !customAddress.isNullOrBlank())
             customAddress.trim() else com.pombo.android.ChannelManager.STORAGE_NODE
-        chainAction("Add inbox storage node", "Assigns a storage node to your DM inbox (1 transaction).") {
+        chainAction(
+            "Add inbox storage node",
+            // Assigning the node and setting its retention are two writes,
+            // even though the bridge sends them in one call.
+            "Assigns a storage node to your DM inbox (2 transactions)."
+        ) {
             runWithToast("Adding storage node…", "Storage node added", "Failed to add storage node") {
                 bridge.call(
                     "addToStorageNode",
