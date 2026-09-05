@@ -271,10 +271,17 @@ class AppViewModel(app: Application) : AndroidViewModel(app), PomboBridge.Listen
     }
 
     fun updateChannelMetadata(name: String?, description: String?) = viewModelScope.launch {
+        val channel = manager.current.value
+        // Saving what is already there is a transaction for nothing: the Save
+        // button does not know whether the user edited anything, so the check
+        // belongs here (web handleSaveChannelName does the same).
+        val nameSame = name == null || name.trim() == channel?.name?.trim()
+        val descSame = description == null || description.trim() == channel?.description?.trim()
+        if (nameSame && descSame) return@launch
         // The same question the write itself asks, so the prompt and the
         // transaction never disagree — a local flag left over from an older
         // build had the owner renaming on-chain with no confirmation shown.
-        val onChain = manager.current.value?.let { manager.writesMetadataOnChain(it) } ?: false
+        val onChain = channel?.let { manager.writesMetadataOnChain(it) } ?: false
         val save: suspend () -> Unit = {
             runWithToast(
                 if (onChain) "Saving on-chain…" else "Saving…",
