@@ -575,8 +575,9 @@ private fun ChannelDetailsMain(
         Spacer(Modifier.height(8.dp))
     }
     if (canModerate) {
-        // Delete Channel has no leading icon in the web.
-        ChannelNavRow("Delete Channel") { onOpenSub(ChannelSubPanel.DESTROY) }
+        ChannelNavRow("Delete Channel", leadingIcon = Icons.Outlined.Delete) {
+            onOpenSub(ChannelSubPanel.DESTROY)
+        }
     }
     // Clear the gesture bar: the last row was flush against it.
     Spacer(Modifier.height(40.dp))
@@ -662,8 +663,7 @@ internal fun GasWarningBanner(text: String) {
 
 /**
  * Web .channel-mobile-nav-item: white/3 fill, white/5 border, r12, py-4, with a
- * leading icon (18dp, white/40) and a trailing chevron. Members and Moderation
- * carry an icon; Delete Channel does not (index.html:1755 has no leading svg).
+ * leading icon (18dp, white/40) and a trailing chevron.
  */
 @Composable
 private fun ChannelNavRow(
