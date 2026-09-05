@@ -495,8 +495,9 @@ private fun ExploreCard(
                     // `text-base text-white/40 mt-1 line-clamp-2`
                     Spacer(Modifier.height(4.dp))
                     Text(
-                        ch.description, color = Color.White.copy(alpha = 0.40f),
-                        fontSize = 16.exp, lineHeight = 21.exp, maxLines = 2
+                        collapseWhitespace(ch.description), color = Color.White.copy(alpha = 0.40f),
+                        fontSize = 16.exp, lineHeight = 21.exp, maxLines = 2,
+                        overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis
                     )
                 }
                 if (ch.lastText.isNotEmpty()) {
@@ -506,9 +507,10 @@ private fun ExploreCard(
                     val ensLabel = ch.lastSenderAddress.takeIf { it.isNotEmpty() }
                         ?.let { ensNames[it.lowercase()] }
                     Text(
-                        "${ensLabel ?: ch.lastSender}: ${ch.lastText}",
+                        "${ensLabel ?: ch.lastSender}: ${collapseWhitespace(ch.lastText)}",
                         color = Color.White.copy(alpha = 0.50f), fontSize = 14.exp,
                         lineHeight = 18.exp, maxLines = 3,
+                        overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis,
                         modifier = Modifier.padding(start = 12.dp)
                     )
                 }
