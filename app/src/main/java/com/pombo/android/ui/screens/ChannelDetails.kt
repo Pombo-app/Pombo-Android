@@ -63,6 +63,7 @@ import androidx.compose.material.icons.filled.Notifications
 import androidx.compose.material.icons.outlined.FileUpload
 import androidx.compose.material.icons.outlined.HelpOutline
 import androidx.compose.material.icons.outlined.Campaign
+import androidx.compose.material.icons.outlined.ContentCopy
 import androidx.compose.material.icons.outlined.Key
 import androidx.compose.material.icons.outlined.Lock
 import androidx.compose.material.icons.outlined.Public
@@ -227,44 +228,12 @@ private fun ChannelDetailsMain(
         )
     }
 
-    // Notification chip at the very top (web #mobile-notif-chip): a pill, not a
-    // row with a switch. Left-aligned, mb-3. Visible to all users.
-    val pushRev by vm.pushRev.collectAsState()
-    val notified = remember(channel.messageStreamId, pushRev) {
-        // A DM's relay registration is the inbox-wide one; the per-DM state
-        // is the local mute of this peer.
-        if (channel.type == "dm") !vm.isDmMuted(channel.peerAddress)
-        else vm.isChannelNotified(channel.messageStreamId)
+    // The access line is async on gated channels: the default stands until
+    // the (cached) chain answers.
+    var gateAccess by remember(channel.messageStreamId) { mutableStateOf<String?>(null) }
+    if (channel.type == "gated") {
+        LaunchedEffect(channel.messageStreamId) { gateAccess = vm.gateAccessLabel() }
     }
-    Row(
-        Modifier
-            .background(
-                if (notified) PomboColors.Accent.copy(alpha = 0.10f) else Color.White.copy(alpha = 0.05f),
-                RoundedCornerShape(999.dp)
-            )
-            .border(
-                1.dp,
-                if (notified) PomboColors.Accent.copy(alpha = 0.30f) else Color.White.copy(alpha = 0.10f),
-                RoundedCornerShape(999.dp)
-            )
-            .clickableNoRipple { vm.setChannelNotifications(channel, !notified) }
-            .padding(horizontal = 12.dp, vertical = 6.dp),
-        verticalAlignment = Alignment.CenterVertically
-    ) {
-        Icon(
-            if (notified) Icons.Filled.Notifications else Icons.Outlined.Notifications,
-            contentDescription = null,
-            tint = if (notified) PomboColors.Accent else Color.White.copy(alpha = 0.40f),
-            modifier = Modifier.size(16.dp)
-        )
-        Spacer(Modifier.width(8.dp))
-        Text(
-            if (notified) "Notifications On" else "Notifications Off",
-            color = if (notified) Color.White else Color.White.copy(alpha = 0.40f),
-            fontSize = 14.sp, fontWeight = FontWeight.Medium
-        )
-    }
-    Spacer(Modifier.height(16.dp))
 
     // Image (circular 80dp, border white/8) + name, gap 16 — web layout.
     // A DM has no room identity: the face here is the PEER's, ENS picture when
@@ -340,6 +309,10 @@ private fun ChannelDetailsMain(
                         modifier = Modifier.size(16.dp).clickableNoRipple { editing = !editing }
                     )
                 }
+            }
+            if (channel.type != "dm") {
+                Spacer(Modifier.height(8.dp))
+                ChannelAttributeChips(channel, gateAccess)
             }
         }
     }
@@ -422,99 +395,44 @@ private fun ChannelDetailsMain(
         ValueBox(channel.description)
     }
 
-    // ID (tap to copy, exactly like the web's <code> block)
+    // Your setting, not the channel's: it reads after the identity block and
+    // before the facts.
     Spacer(Modifier.height(20.dp))
-    SectionLabel("ID")
-    Text(
-        channel.messageStreamId,
-        color = Color.White.copy(alpha = 0.60f), fontSize = 13.sp,
-        fontFamily = androidx.compose.ui.text.font.FontFamily.Monospace,
-        modifier = Modifier.fillMaxWidth()
-            .background(Color.White.copy(alpha = 0.05f), RoundedCornerShape(8.dp))
-            .clickableNoRipple {
-                clipboard.setText(androidx.compose.ui.text.AnnotatedString(channel.messageStreamId))
-                vm.toast("Stream ID copied", com.pombo.android.ui.ToastKind.SUCCESS)
-            }
-            .padding(horizontal = 12.dp, vertical = 8.dp)
-    )
+    NotificationPill(vm, channel)
 
-    // ACCESS — the web shows an icon + label per type (HeaderUI type lines):
-    // native = Ethereum diamond + "Verified Membership", password = lock +
-    // "Password Protected", public = globe + "Open".
-    // N-D: only Closed (NONE) keeps "Verified Membership" — token/NFT show
-    // the condition, paid the price/period, same lineup as Create Channel.
-    // Async on purpose: the default stands until the (cached) chain answers.
-    var gateAccess by remember(channel.messageStreamId) { mutableStateOf<String?>(null) }
-    if (channel.type == "gated") {
-        LaunchedEffect(channel.messageStreamId) {
-            gateAccess = vm.gateAccessLabel()
-        }
-    }
-    Spacer(Modifier.height(20.dp))
-    SectionLabel("Access")
-    Row(verticalAlignment = Alignment.CenterVertically) {
-        val accessTint = Color.White.copy(alpha = 0.70f)
-        val accessText: String
-        // Gated uses the Ethereum mark, drawn (not a Material icon).
-        if (channel.type == "gated" && !channel.readOnly) {
-            EthereumIcon(accessTint, Modifier.size(16.dp))
-            accessText = gateAccess ?: "Verified Membership"
-        } else {
-            val icon = when {
-                channel.readOnly -> Icons.Outlined.Campaign
-                channel.type == "password" -> Icons.Outlined.Lock
-                channel.type == "public" -> Icons.Outlined.Public
-                channel.type == "dm" -> Icons.Outlined.MailOutline
-                else -> Icons.Outlined.Public
-            }
-            accessText = when {
-                channel.readOnly -> "Announcements"
-                channel.type == "password" -> "Password Protected"
-                channel.type == "public" -> "Open"
-                channel.type == "dm" -> "Direct Message"
-                else -> channelTypeLabel(channel.type)
-            }
-            Icon(icon, contentDescription = null, tint = accessTint, modifier = Modifier.size(16.dp))
-        }
-        Spacer(Modifier.width(6.dp))
-        Text(accessText, color = accessTint, fontSize = 14.sp)
-    }
-
-    // PAID member view: the subscription clock lives here, under the access
-    // line — the chat header stays clean (N-F). paidUntil 0 = moderator on a
-    // paid gate (never pays), no clock.
     val detailsPaidStatus by vm.paidStatus.collectAsState()
-    detailsPaidStatus?.takeIf { it.paidUntil > 0 }?.let { ps ->
-        val msLeft = ps.paidUntil * 1000L - System.currentTimeMillis()
-        Spacer(Modifier.height(4.dp))
-        Text(
-            if (msLeft > 0) "${com.pombo.android.core.GateFormat.formatRemaining(msLeft)} left"
-            else "Subscription expired",
-            color = when {
-                msLeft <= 0 -> Color(0xFFF87171).copy(alpha = 0.80f)
-                msLeft < com.pombo.android.core.GateFormat.WARNING_MS -> Color(0xFFFBBF24)
-                else -> Color.White.copy(alpha = 0.40f)
-            },
-            fontSize = 12.sp
-        )
-    }
-
-    // IDENTITY ON THE WIRE — the gate's own property, immutable for its life,
-    // so it reads under Access and only on gated channels. Group = members
-    // only, globe = everyone: the audience for authorship, never an identity
-    // glyph. Same copy as the web's Channel Details line.
-    if (channel.type == "gated" && !channel.wireIdentity.isNullOrEmpty()) {
-        val sealedWire = channel.wireIdentity == "sealed"
-        Spacer(Modifier.height(20.dp))
-        SectionLabel("Identity on the wire")
-        Row(verticalAlignment = Alignment.CenterVertically) {
-            val wireTint = Color.White.copy(alpha = 0.70f)
-            Icon(
-                if (sealedWire) Icons.Outlined.People else Icons.Outlined.Public,
-                contentDescription = null, tint = wireTint, modifier = Modifier.size(16.dp)
+    Spacer(Modifier.height(20.dp))
+    Column(
+        Modifier.fillMaxWidth()
+            .background(Color.White.copy(alpha = 0.03f), RoundedCornerShape(12.dp))
+            .border(1.dp, Color.White.copy(alpha = 0.05f), RoundedCornerShape(12.dp))
+            .padding(horizontal = 14.dp, vertical = 12.dp)
+    ) {
+        FactRow(
+            label = "ID",
+            value = shortStreamId(channel.messageStreamId),
+            mono = true,
+            trailing = Icons.Outlined.ContentCopy
+        ) {
+            clipboard.setText(androidx.compose.ui.text.AnnotatedString(channel.messageStreamId))
+            vm.toast("Stream ID copied", com.pombo.android.ui.ToastKind.SUCCESS)
+        }
+        // PAID member view: the subscription clock (N-F). paidUntil 0 is a
+        // moderator on a paid gate, who never pays and has no clock.
+        detailsPaidStatus?.takeIf { it.paidUntil > 0 }?.let { ps ->
+            val msLeft = ps.paidUntil * 1000L - System.currentTimeMillis()
+            Spacer(Modifier.height(10.dp))
+            FactRow(
+                label = "Subscription",
+                value = if (msLeft > 0)
+                    com.pombo.android.core.GateFormat.formatRemaining(msLeft) + " left"
+                else "Expired",
+                valueColor = when {
+                    msLeft <= 0 -> Color(0xFFF87171).copy(alpha = 0.80f)
+                    msLeft < com.pombo.android.core.GateFormat.WARNING_MS -> Color(0xFFFBBF24)
+                    else -> Color.White.copy(alpha = 0.70f)
+                }
             )
-            Spacer(Modifier.width(6.dp))
-            Text(if (sealedWire) "Sealed" else "Visible", color = wireTint, fontSize = 14.sp)
         }
     }
 
@@ -575,12 +493,157 @@ private fun ChannelDetailsMain(
         Spacer(Modifier.height(8.dp))
     }
     if (canModerate) {
-        ChannelNavRow("Delete Channel", leadingIcon = Icons.Outlined.Delete) {
+        ChannelNavRow("Delete Channel", leadingIcon = Icons.Outlined.Delete, destructive = true) {
             onOpenSub(ChannelSubPanel.DESTROY)
         }
     }
     // Clear the gesture bar: the last row was flush against it.
     Spacer(Modifier.height(40.dp))
+}
+
+/** `0xae34…7667/9862eb7bd898f338-1` — the path is what identifies a channel. */
+internal fun shortStreamId(streamId: String): String {
+    val slash = streamId.indexOf('/')
+    if (slash < 12) return streamId
+    val addr = streamId.substring(0, slash)
+    return addr.take(6) + "…" + addr.takeLast(4) + streamId.substring(slash)
+}
+
+/** One line of the facts card: label left, value right, optional action. */
+@Composable
+private fun FactRow(
+    label: String,
+    value: String,
+    mono: Boolean = false,
+    valueColor: Color = Color.White.copy(alpha = 0.70f),
+    trailing: androidx.compose.ui.graphics.vector.ImageVector? = null,
+    onClick: (() -> Unit)? = null
+) {
+    Row(
+        Modifier.fillMaxWidth().let { if (onClick != null) it.clickableNoRipple(onClick) else it },
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        Text(label, color = Color.White.copy(alpha = 0.35f), fontSize = 12.sp)
+        Spacer(Modifier.width(12.dp))
+        Text(
+            value, color = valueColor, fontSize = 12.sp,
+            fontFamily = if (mono) androidx.compose.ui.text.font.FontFamily.Monospace else null,
+            maxLines = 1,
+            overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis,
+            textAlign = androidx.compose.ui.text.style.TextAlign.End,
+            modifier = Modifier.weight(1f)
+        )
+        if (trailing != null) {
+            Spacer(Modifier.width(8.dp))
+            Icon(
+                trailing, contentDescription = null,
+                tint = Color.White.copy(alpha = 0.30f), modifier = Modifier.size(14.dp)
+            )
+        }
+    }
+}
+
+/**
+ * What the channel IS, as chips under its name: the access type, whether only
+ * the owner writes, and on gated channels whose name travels the wire. These
+ * were three labelled sections; they are three words.
+ */
+@OptIn(androidx.compose.foundation.layout.ExperimentalLayoutApi::class)
+@Composable
+private fun ChannelAttributeChips(channel: Channel, gateAccess: String?) {
+    androidx.compose.foundation.layout.FlowRow(
+        horizontalArrangement = Arrangement.spacedBy(6.dp),
+        verticalArrangement = Arrangement.spacedBy(6.dp)
+    ) {
+        val tint = Color.White.copy(alpha = 0.55f)
+        if (channel.type == "gated") {
+            AttributeChip(gateAccess ?: "Verified Membership") {
+                EthereumIcon(tint, Modifier.size(12.dp))
+            }
+        } else {
+            AttributeChip(
+                when (channel.type) {
+                    "password" -> "Password Protected"
+                    "public" -> "Open"
+                    else -> channelTypeLabel(channel.type)
+                }
+            ) {
+                Icon(
+                    if (channel.type == "password") Icons.Outlined.Lock else Icons.Outlined.Public,
+                    null, tint = tint, modifier = Modifier.size(12.dp)
+                )
+            }
+        }
+        if (channel.readOnly) {
+            AttributeChip("Announcements") {
+                Icon(Icons.Outlined.Campaign, null, tint = tint, modifier = Modifier.size(12.dp))
+            }
+        }
+        if (channel.type == "gated" && !channel.wireIdentity.isNullOrEmpty()) {
+            val sealedWire = channel.wireIdentity == "sealed"
+            AttributeChip(if (sealedWire) "Sealed" else "Visible") {
+                Icon(
+                    if (sealedWire) Icons.Outlined.People else Icons.Outlined.Public,
+                    null, tint = tint, modifier = Modifier.size(12.dp)
+                )
+            }
+        }
+    }
+}
+
+@Composable
+private fun AttributeChip(label: String, icon: @Composable () -> Unit) {
+    Row(
+        Modifier
+            .background(Color.White.copy(alpha = 0.05f), RoundedCornerShape(999.dp))
+            .border(1.dp, Color.White.copy(alpha = 0.08f), RoundedCornerShape(999.dp))
+            .padding(horizontal = 8.dp, vertical = 4.dp),
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        icon()
+        Spacer(Modifier.width(5.dp))
+        Text(label, color = Color.White.copy(alpha = 0.55f), fontSize = 12.sp)
+    }
+}
+
+/** Web #mobile-notif-chip: a pill, not a row with a switch. Everyone sees it. */
+@Composable
+private fun NotificationPill(vm: AppViewModel, channel: Channel) {
+    val pushRev by vm.pushRev.collectAsState()
+    val notified = remember(channel.messageStreamId, pushRev) {
+        // A DM's relay registration is the inbox-wide one; the per-DM state
+        // is the local mute of this peer.
+        if (channel.type == "dm") !vm.isDmMuted(channel.peerAddress)
+        else vm.isChannelNotified(channel.messageStreamId)
+    }
+    Row(
+        Modifier
+            .background(
+                if (notified) PomboColors.Accent.copy(alpha = 0.10f) else Color.White.copy(alpha = 0.05f),
+                RoundedCornerShape(999.dp)
+            )
+            .border(
+                1.dp,
+                if (notified) PomboColors.Accent.copy(alpha = 0.30f) else Color.White.copy(alpha = 0.10f),
+                RoundedCornerShape(999.dp)
+            )
+            .clickableNoRipple { vm.setChannelNotifications(channel, !notified) }
+            .padding(horizontal = 12.dp, vertical = 6.dp),
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        Icon(
+            if (notified) Icons.Filled.Notifications else Icons.Outlined.Notifications,
+            contentDescription = null,
+            tint = if (notified) PomboColors.Accent else Color.White.copy(alpha = 0.40f),
+            modifier = Modifier.size(16.dp)
+        )
+        Spacer(Modifier.width(8.dp))
+        Text(
+            if (notified) "Notifications On" else "Notifications Off",
+            color = if (notified) Color.White else Color.White.copy(alpha = 0.40f),
+            fontSize = 14.sp, fontWeight = FontWeight.Medium
+        )
+    }
 }
 
 /** Web: uppercase label, 12sp medium, white/80, tracking-wider, mb 6dp. */
@@ -669,24 +732,42 @@ internal fun GasWarningBanner(text: String) {
 private fun ChannelNavRow(
     label: String,
     leadingIcon: androidx.compose.ui.graphics.vector.ImageVector? = null,
+    destructive: Boolean = false,
     onClick: () -> Unit
 ) {
+    val danger = Color(0xFFF87171)
     Row(
         Modifier.fillMaxWidth()
-            .background(Color.White.copy(alpha = 0.03f), RoundedCornerShape(12.dp))
-            .border(1.dp, Color.White.copy(alpha = 0.05f), RoundedCornerShape(12.dp))
+            .background(
+                if (destructive) danger.copy(alpha = 0.06f) else Color.White.copy(alpha = 0.03f),
+                RoundedCornerShape(12.dp)
+            )
+            .border(
+                1.dp,
+                if (destructive) danger.copy(alpha = 0.20f) else Color.White.copy(alpha = 0.05f),
+                RoundedCornerShape(12.dp)
+            )
             .clickableNoRipple(onClick)
             .padding(horizontal = 16.dp, vertical = 16.dp),
         verticalAlignment = Alignment.CenterVertically
     ) {
         if (leadingIcon != null) {
-            Icon(leadingIcon, contentDescription = null, tint = Color.White.copy(alpha = 0.40f), modifier = Modifier.size(18.dp))
+            Icon(
+                leadingIcon, contentDescription = null,
+                tint = if (destructive) danger.copy(alpha = 0.80f) else Color.White.copy(alpha = 0.40f),
+                modifier = Modifier.size(18.dp)
+            )
             Spacer(Modifier.width(12.dp))
         }
-        Text(label, color = Color.White.copy(alpha = 0.70f), fontSize = 14.sp, modifier = Modifier.weight(1f))
+        Text(
+            label,
+            color = if (destructive) danger.copy(alpha = 0.90f) else Color.White.copy(alpha = 0.70f),
+            fontSize = 14.sp, modifier = Modifier.weight(1f)
+        )
         Icon(
             Icons.AutoMirrored.Filled.KeyboardArrowRight, contentDescription = null,
-            tint = Color.White.copy(alpha = 0.20f), modifier = Modifier.size(18.dp)
+            tint = if (destructive) danger.copy(alpha = 0.35f) else Color.White.copy(alpha = 0.20f),
+            modifier = Modifier.size(18.dp)
         )
     }
 }
