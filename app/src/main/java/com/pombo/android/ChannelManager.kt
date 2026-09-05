@@ -1016,6 +1016,35 @@ class ChannelManager(
     fun hasPublicMetadata(channel: Channel): Boolean = channel.exposure == "visible"
 
     /**
+     * Whether a rename writes on-chain — the question behind the gas warning,
+     * the confirmation prompt and the write itself, so all three have to
+     * answer it the same way.
+     *
+     * The local flag is checked first and the chain settles the rest: a
+     * channel the registry lists under a name is public whatever this device
+     * happens to think, and believing the stale flag is what turned an
+     * owner's rename into a silent local one. The corrected exposure is kept,
+     * so this costs one lookup per channel and the UI stops disagreeing with
+     * itself. An unreachable Graph falls back to the local flag.
+     */
+    suspend fun writesMetadataOnChain(channel: Channel): Boolean {
+        if (channel.type == "dm") return false
+        if (hasPublicMetadata(channel)) return true
+        val info = try {
+            com.pombo.android.core.GraphApi.getChannelInfo(channel.messageStreamId)
+        } catch (e: Exception) { null } ?: return false
+        if (info.name.isNullOrEmpty()) return false
+        val fixed = channel.copy(exposure = info.exposure.ifEmpty { "visible" })
+        _channels.value = _channels.value.map {
+            if (it.messageStreamId == fixed.messageStreamId) fixed else it
+        }
+        store.save(_channels.value)
+        if (_current.value?.messageStreamId == fixed.messageStreamId) _current.value = fixed
+        Log.i(TAG, "rename: chain says this channel is named publicly — exposure corrected")
+        return true
+    }
+
+    /**
      * Renames / re-describes the channel (web: streamr.js updateStreamMetadata).
      * Owner-only. Visible channels: a single on-chain transaction (gas).
      * Hidden channels: LOCAL rename only, propagated by sync like a DM's.
@@ -1023,7 +1052,7 @@ class ChannelManager(
     suspend fun updateChannelMetadata(name: String?, description: String?) {
         val channel = _current.value ?: throw IllegalStateException("No channel open")
         if (!amOwner(channel)) throw IllegalStateException("Only the channel admin can edit the channel")
-        if (hasPublicMetadata(channel)) {
+        if (writesMetadataOnChain(channel)) {
             val args = JSONObject().put("streamId", channel.messageStreamId)
             name?.trim()?.takeIf { it.isNotEmpty() }?.let { args.put("name", it) }
             description?.let { args.put("description", it.trim()) }
@@ -1067,6 +1096,14 @@ class ChannelManager(
 
             var next = channel
             if (!info.name.isNullOrEmpty() && info.name != channel.name) next = next.copy(name = info.name)
+            // Exposure comes from the chain too, and it decides real things:
+            // whether a rename costs gas, warns about it and reaches everyone
+            // else. A record that says hidden about a channel the registry
+            // lists turns the owner's rename into a local one, silently — and
+            // that is the state every channel created before the flag is in.
+            if (info.exposure.isNotEmpty() && info.exposure != channel.exposure) {
+                next = next.copy(exposure = info.exposure)
+            }
             // Hidden channels keep their description off-chain, so only trust
             // the on-chain one for visible channels.
             if (info.exposure == "visible" && info.description != channel.description) {

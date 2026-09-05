@@ -10,9 +10,11 @@ import org.junit.Test
  * framework.
  *
  * A hidden channel's rename never reaches the chain (ChannelManager only calls
- * updateStreamMetadata when hasPublicMetadata). Asking for an on-chain
- * confirmation there costs the user the rename itself: cancelling the prompt
- * skips the local save too.
+ * updateStreamMetadata when writesMetadataOnChain says so). Asking for an
+ * on-chain confirmation there costs the user the rename itself: cancelling the
+ * prompt skips the local save too. Prompt and write must ask the SAME
+ * question — they disagreed once, and the owner renamed on-chain with no
+ * confirmation shown.
  */
 class RenamePromptWiringTest {
 
@@ -30,8 +32,8 @@ class RenamePromptWiringTest {
     fun `the rename asks for confirmation only when it writes on chain`() {
         val body = updateChannelMetadataBody()
         assertTrue(
-            "the rename decides the prompt on something other than hasPublicMetadata",
-            Regex("""hasPublicMetadata\(""").containsMatchIn(body)
+            "the rename decides the prompt on something other than writesMetadataOnChain",
+            Regex("""writesMetadataOnChain\(""").containsMatchIn(body)
         )
         assertTrue(
             "chainAction is no longer inside a branch",

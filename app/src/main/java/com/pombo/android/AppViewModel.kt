@@ -261,8 +261,20 @@ class AppViewModel(app: Application) : AndroidViewModel(app), PomboBridge.Listen
      * on the same condition the manager writes on — a hidden channel saves
      * locally and must not be held behind a prompt it can only fail.
      */
+    /**
+     * Settle whether this channel's name is public, correcting a record that
+     * says otherwise. Cheap and cached; the details screen asks on open so the
+     * gas warning is right before the user decides to save.
+     */
+    fun confirmExposureFromChain() = viewModelScope.launch {
+        manager.current.value?.let { manager.writesMetadataOnChain(it) }
+    }
+
     fun updateChannelMetadata(name: String?, description: String?) = viewModelScope.launch {
-        val onChain = manager.current.value?.let { manager.hasPublicMetadata(it) } ?: false
+        // The same question the write itself asks, so the prompt and the
+        // transaction never disagree — a local flag left over from an older
+        // build had the owner renaming on-chain with no confirmation shown.
+        val onChain = manager.current.value?.let { manager.writesMetadataOnChain(it) } ?: false
         val save: suspend () -> Unit = {
             runWithToast(
                 if (onChain) "Saving on-chain…" else "Saving…",

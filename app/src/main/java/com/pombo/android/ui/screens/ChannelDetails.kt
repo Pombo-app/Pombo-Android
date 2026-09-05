@@ -197,6 +197,11 @@ private fun ChannelDetailsMain(
 ) {
     val clipboard = androidx.compose.ui.platform.LocalClipboardManager.current
     val image by vm.channelImage.collectAsState()
+    // The gas warning below reads the record's exposure, which on channels
+    // created before that flag can disagree with the registry. Settle it when
+    // the screen opens rather than when Save is pressed, so the warning is
+    // there before the decision instead of after it.
+    LaunchedEffect(channel.messageStreamId) { vm.confirmExposureFromChain() }
     var editing by remember { mutableStateOf(false) }
     var editName by remember(channel.name) { mutableStateOf(channel.name) }
     var editDesc by remember(channel.description) { mutableStateOf(channel.description) }
