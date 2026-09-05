@@ -163,7 +163,7 @@ internal fun ExploreTab(vm: AppViewModel, onCreate: () -> Unit, onConnect: () ->
         LazyColumn(
             Modifier.fillMaxSize(),
             contentPadding = androidx.compose.foundation.layout.PaddingValues(
-                start = 14.dp, end = 14.dp, bottom = PILL_NAV_BOTTOM_OFFSET + PILL_NAV_HEIGHT + 12.dp
+                start = 16.dp, end = 16.dp, bottom = PILL_NAV_BOTTOM_OFFSET + PILL_NAV_HEIGHT + 12.dp
             )
         ) {
         item {
@@ -418,12 +418,10 @@ private fun ExploreLanguageFilter(selected: String, onPick: (String) -> Unit) {
 }
 
 /**
- * Explore cards run slightly tighter than the web's type scale — the sizes are
- * a straight port of the Tailwind classes, which were set for a desktop-first
- * card. One factor for every text in the card (and its line heights), so the
- * internal proportions stay exactly as designed and a future nudge is one line.
+ * One factor for every text in the card (and its line heights), so a nudge to
+ * the card's type scale stays one line and the internal proportions hold.
  */
-private const val EXPLORE_TEXT_SCALE = 0.92f
+private const val EXPLORE_TEXT_SCALE = 1.0f
 private val Number.exp get() = (toFloat() * EXPLORE_TEXT_SCALE).sp
 
 @Composable
@@ -515,7 +513,9 @@ private fun ExploreCard(
                     )
                 }
             }
-            // Web: a chevron on the right of every card, `w-4 h-4 text-white/15`.
+            // Web: a chevron on the right of every card, `w-4 h-4 text-white/15`,
+            // with the row's `gap-3` between it and the text.
+            Spacer(Modifier.width(12.dp))
             Icon(
                 Icons.AutoMirrored.Filled.KeyboardArrowRight, contentDescription = null,
                 tint = Color.White.copy(alpha = 0.15f),
