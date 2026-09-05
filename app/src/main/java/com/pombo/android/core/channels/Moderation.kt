@@ -684,6 +684,12 @@ internal class Moderation(private val manager: ChannelManager) {
     /** streamId -> (address that was checked, verdict). */
     private val permCache = HashMap<String, Pair<String, ChannelPerms>>()
 
+    /** The stream lives under this account's own address, so it created it. */
+    internal fun namespaceOwner(streamId: String, address: String?): Boolean {
+        val ns = streamId.substringBefore('/', "")
+        return ns.isNotEmpty() && ns.equals(address, ignoreCase = true)
+    }
+
     internal fun refreshModerationPermission(channel: Channel, preview: Boolean) {
         val me = myAddress()?.lowercase()
         // A DM has no moderation surface, and a preview is read-only until the
@@ -700,30 +706,45 @@ internal class Moderation(private val manager: ChannelManager) {
         }
         _perms.value = ChannelPerms()
         scope.launch {
-            val verdict = try {
+            // A moderator holds nothing on the stream, so this is a separate
+            // read against the gate.
+            val moderatesGate = channel.gateAddress?.let { gate ->
+                try {
+                    bridge.call("gateIsModerator", JSONObject()
+                        .put("gate", gate).put("user", me), 30_000)
+                        .optBoolean("moderator", false)
+                } catch (e: Exception) { false }
+            } ?: false
+            // null = the read did not answer, which is not the same as "holds
+            // nothing": caching that would hide the owner's own surfaces for
+            // the rest of the session on one RPC miss (web
+            // Membership.preloadDeletePermission takes the same care).
+            val verdict: ChannelPerms? = if (namespaceOwner(key, me)) {
+                // Nobody else can create a stream under my address, so these
+                // are mine by construction — no RPC, and no way for a flaky
+                // one to lock the owner out of their own channel (web
+                // streamr.js hasDeletePermission short-circuits the same way).
+                ChannelPerms(
+                    canPublish = true, canGrant = true, canEdit = true,
+                    canDelete = true, moderatesGate = moderatesGate
+                )
+            } else try {
                 val r = bridge.call("checkPermissions", JSONObject().put("streamId", key), 30_000)
                 ChannelPerms(
                     canPublish = r.optBoolean("canPublish", false),
                     canGrant = r.optBoolean("canGrant", false),
                     canEdit = r.optBoolean("canEdit", false),
                     canDelete = r.optBoolean("canDelete", false),
-                    // A moderator holds nothing on the stream, so this is a
-                    // separate read against the gate.
-                    moderatesGate = channel.gateAddress?.let { gate ->
-                        try {
-                            bridge.call("gateIsModerator", JSONObject()
-                                .put("gate", gate).put("user", me), 30_000)
-                                .optBoolean("moderator", false)
-                        } catch (e: Exception) { false }
-                    } ?: false
+                    moderatesGate = moderatesGate
                 )
             } catch (e: Exception) {
-                // Fail closed: offering actions we cannot perform is worse than
-                // hiding actions the user might have — the former fails at
-                // publish time with nothing to show for it.
+                // Fail closed for THIS render: offering actions we cannot
+                // perform is worse than hiding actions the user might have.
+                // The next open asks again.
                 Log.w(TAG, "Permission check failed for $key: ${e.message}")
-                ChannelPerms()
+                null
             }
+            if (verdict == null) return@launch
             permCache[key] = me to verdict
             // Only apply if this channel is still the open one — a fast switch
             // must not stamp the previous channel's verdict onto the new one.
