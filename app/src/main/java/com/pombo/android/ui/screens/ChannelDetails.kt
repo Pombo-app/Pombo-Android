@@ -244,10 +244,10 @@ private fun ChannelDetailsMain(
     val dmPeer = channel.peerAddress?.takeIf { channel.type == "dm" }
     LaunchedEffect(dmPeer) { dmPeer?.let { vm.ensureEns(it) } }
     Row(verticalAlignment = Alignment.CenterVertically) {
-        Box(Modifier.size(80.dp)) {
+        Box(Modifier.size(96.dp)) {
             if (dmPeer != null) {
                 Avatar(
-                    dmPeer, size = 80.dp, cornerRadiusFraction = 0.5,
+                    dmPeer, size = 96.dp, cornerRadiusFraction = 0.5,
                     ensAvatarUrl = ensAvatars[dmPeer.lowercase()],
                     modifier = Modifier.border(1.dp, Color.White.copy(alpha = 0.08f), CircleShape)
                 )
@@ -258,12 +258,12 @@ private fun ChannelDetailsMain(
                     },
                     contentDescription = null,
                     contentScale = androidx.compose.ui.layout.ContentScale.Crop,
-                    modifier = Modifier.size(80.dp).clip(CircleShape)
+                    modifier = Modifier.size(96.dp).clip(CircleShape)
                         .border(1.dp, Color.White.copy(alpha = 0.08f), CircleShape)
                 )
             } else {
                 Avatar(
-                    channel.messageStreamId, size = 80.dp, cornerRadiusFraction = 0.5,
+                    channel.messageStreamId, size = 96.dp, cornerRadiusFraction = 0.5,
                     modifier = Modifier.border(1.dp, Color.White.copy(alpha = 0.08f), CircleShape)
                 )
             }
@@ -310,10 +310,8 @@ private fun ChannelDetailsMain(
                     )
                 }
             }
-            if (channel.type != "dm") {
-                Spacer(Modifier.height(8.dp))
-                ChannelAttributeChips(channel, gateAccess)
-            }
+            Spacer(Modifier.height(8.dp))
+            ChannelAttributeChips(channel, gateAccess)
         }
     }
 
@@ -345,8 +343,7 @@ private fun ChannelDetailsMain(
             )
         }
         if (channel.type != "dm" && !memberLocalRename) {
-            Spacer(Modifier.height(20.dp))
-            SectionLabel("Description")
+            Spacer(Modifier.height(8.dp))
             OutlinedTextField(
                 value = editDesc, onValueChange = { editDesc = it },
                 placeholder = { Text("Enter description", color = Color.White.copy(alpha = 0.25f), fontSize = 14.sp) },
@@ -391,7 +388,6 @@ private fun ChannelDetailsMain(
         }
     } else if (channel.description.isNotEmpty()) {
         Spacer(Modifier.height(20.dp))
-        SectionLabel("Description")
         ValueBox(channel.description)
     }
 
@@ -408,14 +404,21 @@ private fun ChannelDetailsMain(
             .border(1.dp, Color.White.copy(alpha = 0.05f), RoundedCornerShape(12.dp))
             .padding(horizontal = 14.dp, vertical = 12.dp)
     ) {
+        // A DM's stream id is the peer's address with the inbox suffix, so the
+        // address is the fact and the id is noise.
+        val dmAddress = channel.peerAddress?.takeIf { channel.type == "dm" }
         FactRow(
-            label = "ID",
-            value = shortStreamId(channel.messageStreamId),
+            label = if (dmAddress != null) "Address" else "ID",
+            value = if (dmAddress != null) shortAddress(dmAddress) else shortStreamId(channel.messageStreamId),
             mono = true,
             trailing = Icons.Outlined.ContentCopy
         ) {
-            clipboard.setText(androidx.compose.ui.text.AnnotatedString(channel.messageStreamId))
-            vm.toast("Stream ID copied", com.pombo.android.ui.ToastKind.SUCCESS)
+            val copied = dmAddress ?: channel.messageStreamId
+            clipboard.setText(androidx.compose.ui.text.AnnotatedString(copied))
+            vm.toast(
+                if (dmAddress != null) "Address copied" else "Stream ID copied",
+                com.pombo.android.ui.ToastKind.SUCCESS
+            )
         }
         // PAID member view: the subscription clock (N-F). paidUntil 0 is a
         // moderator on a paid gate, who never pays and has no clock.
@@ -445,10 +448,14 @@ private fun ChannelDetailsMain(
     //   Delete    — DELETE permission only; irreversible for every member.
     // Invite lives in the chat header, Leave in the header kebab — neither is a
     // nav row here, matching the web.
-    Spacer(Modifier.height(24.dp))
-    Box(Modifier.fillMaxWidth().height(1.dp).background(Color.White.copy(alpha = 0.05f)))
-    Spacer(Modifier.height(16.dp))
     val isGated = channel.type == "gated"
+    // A DM has none of these, and a divider with nothing under it reads as a
+    // section that failed to load.
+    if (isGated || canModerate || channel.type != "dm") {
+        Spacer(Modifier.height(20.dp))
+        Box(Modifier.fillMaxWidth().height(1.dp).background(Color.White.copy(alpha = 0.05f)))
+        Spacer(Modifier.height(20.dp))
+    }
     if (isGated) {
         ChannelNavRow("Members", leadingIcon = Icons.Outlined.People) { onOpenSub(ChannelSubPanel.MEMBERS) }
         Spacer(Modifier.height(8.dp))
@@ -565,11 +572,16 @@ private fun ChannelAttributeChips(channel: Channel, gateAccess: String?) {
                 when (channel.type) {
                     "password" -> "Password Protected"
                     "public" -> "Open"
+                    "dm" -> "Direct Message"
                     else -> channelTypeLabel(channel.type)
                 }
             ) {
                 Icon(
-                    if (channel.type == "password") Icons.Outlined.Lock else Icons.Outlined.Public,
+                    when (channel.type) {
+                        "password" -> Icons.Outlined.Lock
+                        "dm" -> Icons.Outlined.MailOutline
+                        else -> Icons.Outlined.Public
+                    },
                     null, tint = tint, modifier = Modifier.size(12.dp)
                 )
             }
