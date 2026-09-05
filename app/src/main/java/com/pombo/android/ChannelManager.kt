@@ -3471,7 +3471,14 @@ class ChannelManager(
         // Both halves are already in hand: sent from local storage, received
         // from the inbox history the router replayed on connect. No fetching
         // here — that is exactly the web's loadDMTimeline.
-        val sent = sentDmStore.load(channel.messageStreamId).mapNotNull { toUiMessage(it, me) }
+        // A record in the sent slice is one of MINE by definition, so one
+        // naming another account landed in the wrong slice — an old build
+        // filed a received message there and the device sync carried it to
+        // every device since. It is not shown, whatever put it there; a record
+        // that names nobody predates the account field and is kept.
+        val sent = sentDmStore.load(channel.messageStreamId)
+            .mapNotNull { toUiMessage(it, me) }
+            .filter { dmTimelineKeeps(it.sender, me) }
 
         // NO resend here. The inbox replay is a once-per-session job owned by
         // [subscribeMyInbox]; everything it routed is already in [dmReceived],
@@ -3486,7 +3493,11 @@ class ChannelManager(
         // bounded.
         inboxSubscribeJob?.join()
         if (!stillCurrent(generation)) return
+        // Keyed by the recovered sender, so this is already the peer's — the
+        // filter is the same invariant as above, stated once for both halves:
+        // a conversation shows my messages and this peer's, nothing else.
         val receivedNow = synchronized(dmReceived) { dmReceived[peer]?.toList() ?: emptyList() }
+            .filter { dmTimelineKeeps(it.sender, peer) }
 
         val merged = (sent + receivedNow)
             .distinctBy { it.id }
@@ -6603,6 +6614,19 @@ class ChannelManager(
                 } to "interactions")
             }
         }
+
+        /**
+         * Does this message belong in the conversation being shown?
+         *
+         * The sent slice holds MY messages and the received one holds this
+         * PEER's, so a record naming anyone else landed in the wrong slice —
+         * an old build filed a received message in the sent one and the state
+         * sync carried it to every device since. A record naming nobody is
+         * kept: the oldest entries predate the account field, and unknown
+         * provenance is not grounds for erasing history.
+         */
+        fun dmTimelineKeeps(sender: String, expected: String): Boolean =
+            sender.isEmpty() || sender.equals(expected, ignoreCase = true)
 
         fun retentionInSync(vararg values: Int?): Boolean {
             val known = values.filterNotNull().filter { it > 0 }
