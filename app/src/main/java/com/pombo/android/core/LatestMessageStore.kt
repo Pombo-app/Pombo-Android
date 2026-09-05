@@ -67,8 +67,14 @@ class LatestMessageStore(context: Context) {
             val loaded = HashMap<String, Preview>()
             root.keys().forEach { key ->
                 val o = root.optJSONObject(key) ?: return@forEach
+                val text = o.optString("text")
+                // Reactions stopped being a preview line outside DMs, and a
+                // channel with no new message would never replace the line it
+                // was cached with. Dropping one wrongly costs a preview until
+                // the next scan, which is seconds.
+                if (!key.endsWith("/Pombo-DM-1") && text.startsWith("reacted with ")) return@forEach
                 loaded[key] = Preview(
-                    o.optString("sender"), o.optString("text"), o.optLong("ts"), o.optString("senderAddress")
+                    o.optString("sender"), text, o.optLong("ts"), o.optString("senderAddress")
                 )
             }
             if (loaded.isNotEmpty()) _previews.value = loaded
