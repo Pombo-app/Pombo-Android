@@ -381,17 +381,7 @@ private fun ChannelDetailsMain(
             // the chain), so no caveat there.
             if (channel.exposure == "visible") {
                 Spacer(Modifier.height(10.dp))
-                Row(
-                    Modifier.fillMaxWidth()
-                        .background(Color(0xFFF59E0B).copy(alpha = 0.05f), RoundedCornerShape(12.dp))
-                        .border(1.dp, Color(0xFFF59E0B).copy(alpha = 0.10f), RoundedCornerShape(12.dp))
-                        .padding(12.dp)
-                ) {
-                    Text(
-                        "Saving writes the stream metadata on-chain and costs gas.",
-                        color = Color(0xFFF59E0B).copy(alpha = 0.80f), fontSize = 12.sp
-                    )
-                }
+                GasWarningBanner("Changes require on-chain transactions and gas fees.")
             }
         }
         Spacer(Modifier.height(10.dp))
