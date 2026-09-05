@@ -1053,22 +1053,7 @@ private fun DmInboxPanel(vm: AppViewModel) {
 
             // Gas warning (web amber card)
             Spacer(Modifier.height(12.dp))
-            Row(
-                Modifier.fillMaxWidth()
-                    .background(Color(0xFFF59E0B).copy(alpha = 0.05f), RoundedCornerShape(12.dp))
-                    .border(1.dp, Color(0xFFF59E0B).copy(alpha = 0.10f), RoundedCornerShape(12.dp))
-                    .padding(12.dp)
-            ) {
-                Icon(
-                    Icons.Outlined.WarningAmber, contentDescription = null,
-                    tint = Color(0xFFFBBF24).copy(alpha = 0.80f), modifier = Modifier.size(16.dp)
-                )
-                Spacer(Modifier.width(8.dp))
-                Text(
-                    "Storage changes require on-chain transactions and gas fees.",
-                    color = Color(0xFFFBBF24).copy(alpha = 0.80f), fontSize = 12.sp, lineHeight = 16.sp
-                )
-            }
+            GasWarningBanner("Storage changes require on-chain transactions and gas fees.")
         }
     }
 }

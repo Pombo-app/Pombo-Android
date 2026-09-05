@@ -638,6 +638,34 @@ private fun ValueBox(text: String) {
 }
 
 /**
+ * The amber "this costs gas" notice, one per panel that spends any.
+ *
+ * Centred rather than top-aligned: the copy wraps to two lines on a phone,
+ * and an icon pinned to the first line reads as misplaced against a box that
+ * is twice as tall.
+ */
+@Composable
+internal fun GasWarningBanner(text: String) {
+    Row(
+        Modifier.fillMaxWidth()
+            .background(Color(0xFFF59E0B).copy(alpha = 0.05f), RoundedCornerShape(12.dp))
+            .border(1.dp, Color(0xFFF59E0B).copy(alpha = 0.10f), RoundedCornerShape(12.dp))
+            .padding(12.dp),
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        Icon(
+            Icons.Outlined.WarningAmber, contentDescription = null,
+            tint = Color(0xFFFBBF24).copy(alpha = 0.80f), modifier = Modifier.size(16.dp)
+        )
+        Spacer(Modifier.width(8.dp))
+        Text(
+            text,
+            color = Color(0xFFFBBF24).copy(alpha = 0.80f), fontSize = 12.sp, lineHeight = 17.sp
+        )
+    }
+}
+
+/**
  * Web .channel-mobile-nav-item: white/3 fill, white/5 border, r12, py-4, with a
  * leading icon (18dp, white/40) and a trailing chevron. Members and Moderation
  * carry an icon; Delete Channel does not (index.html:1755 has no leading svg).
@@ -905,21 +933,7 @@ private fun ChannelMembersPanel(vm: AppViewModel, channel: Channel, canModerate:
             ) { Text("Add All Addresses", color = Color.White, fontSize = 14.sp) }
         }
         Spacer(Modifier.height(12.dp))
-        // Same bordered amber box as the storage fees warning.
-        Row(
-            Modifier.fillMaxWidth()
-                .background(Color(0xFFF59E0B).copy(alpha = 0.05f), RoundedCornerShape(12.dp))
-                .border(1.dp, Color(0xFFF59E0B).copy(alpha = 0.10f), RoundedCornerShape(12.dp))
-                .padding(12.dp),
-            verticalAlignment = Alignment.Top
-        ) {
-            Icon(Icons.Outlined.WarningAmber, contentDescription = null, tint = Color(0xFFFBBF24).copy(alpha = 0.80f), modifier = Modifier.size(16.dp))
-            Spacer(Modifier.width(8.dp))
-            Text(
-                "Adding members requires on-chain transactions and gas fees.",
-                color = Color(0xFFFBBF24).copy(alpha = 0.80f), fontSize = 12.sp, lineHeight = 17.sp
-            )
-        }
+        GasWarningBanner("Adding members requires on-chain transactions and gas fees.")
     }
 
     // Revoking is destructive and costs gas — always confirm first.
@@ -1329,23 +1343,7 @@ private fun ChannelStoragePanel(vm: AppViewModel, channel: Channel, canModerate:
     // (web #channel-storage-gas-warning), admin only. The web has no "Storage:
     // Enabled" status line — it goes straight from here to Retention Period.
     if (canModerate) {
-        Row(
-            Modifier.fillMaxWidth()
-                .background(Color(0xFFF59E0B).copy(alpha = 0.05f), RoundedCornerShape(12.dp))
-                .border(1.dp, Color(0xFFF59E0B).copy(alpha = 0.10f), RoundedCornerShape(12.dp))
-                .padding(12.dp),
-            verticalAlignment = Alignment.Top
-        ) {
-            Icon(
-                Icons.Outlined.WarningAmber, contentDescription = null,
-                tint = Color(0xFFFBBF24).copy(alpha = 0.80f), modifier = Modifier.size(16.dp)
-            )
-            Spacer(Modifier.width(8.dp))
-            Text(
-                "Storage changes require on-chain transactions and gas fees.",
-                color = Color(0xFFFBBF24).copy(alpha = 0.80f), fontSize = 12.sp, lineHeight = 17.sp
-            )
-        }
+        GasWarningBanner("Storage changes require on-chain transactions and gas fees.")
         Spacer(Modifier.height(20.dp))
     } else if (info != null && !info!!.enabled) {
         // Non-admins only see a note when there is no storage at all.
@@ -1984,18 +1982,12 @@ private fun ChannelDeletePanel(vm: AppViewModel, channel: Channel, onDismiss: ()
 private fun ChannelDestroyPanel(vm: AppViewModel, channel: Channel, onDismiss: () -> Unit) {
     var confirmText by remember { mutableStateOf("") }
     val armed = confirmText.trim().equals(channel.name.trim(), ignoreCase = true)
-    // One transaction per stream, and only a gated channel has the -4.
-    val streamCount = remember(channel.messageStreamId, channel.type) {
-        com.pombo.android.ChannelManager.channelStreams(channel.messageStreamId, channel).size
-    }
 
     Text("Delete channel", color = PomboColors.Danger, fontSize = 15.sp, fontWeight = FontWeight.SemiBold)
-    Spacer(Modifier.height(6.dp))
-    Text(
-        "Deletes all $streamCount streams on-chain. The channel disappears for every " +
-            "member, its history stops being served, and it cannot be recovered " +
-            "or rejoined. $streamCount transactions, so it costs gas.",
-        color = Color.White.copy(alpha = 0.40f), fontSize = 12.sp, lineHeight = 18.sp
+    Spacer(Modifier.height(10.dp))
+    GasWarningBanner(
+        "Deleting this channel requires on-chain transactions and gas fees. " +
+            "It cannot be reversed."
     )
     Spacer(Modifier.height(14.dp))
     Text(
