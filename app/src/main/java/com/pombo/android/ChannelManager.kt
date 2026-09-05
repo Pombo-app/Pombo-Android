@@ -4599,6 +4599,10 @@ class ChannelManager(
      * Each stream is deleted separately and failures are collected rather than
      * aborting: a partial delete is a real outcome, and the user needs to know
      * which streams are still out there instead of seeing one generic error.
+     *
+     * @return the streams that are still standing — empty means the channel is
+     *   gone. While that list is non-empty the channel stays on this device,
+     *   because it is the only handle left for deleting the rest.
      */
     suspend fun deleteChannel(messageStreamId: String): List<String> {
         val channel = _channels.value.firstOrNull { it.messageStreamId == messageStreamId }
@@ -4607,7 +4611,11 @@ class ChannelManager(
         if (channel != null && !amOwner(channel)) {
             throw IllegalStateException("Only the channel owner can delete it")
         }
+        // The message stream goes LAST: while it stands the channel still
+        // opens, so a run that dies halfway leaves something the owner can
+        // come back to instead of a husk.
         val ids = channelStreams(messageStreamId, channel)
+            .sortedBy { if (it == messageStreamId) 1 else 0 }
         val failed = mutableListOf<String>()
         for (id in ids) {
             try {
@@ -4617,11 +4625,11 @@ class ChannelManager(
                 failed.add(id)
             }
         }
-        // Nothing was deleted at all (no gas, RPC down): keep the channel —
-        // forgetting it locally would hide a still fully working channel and
-        // read as success. Partial failure still drops it, because a channel
-        // whose message stream is gone just fails on every open.
-        if (failed.size == ids.size && ids.isNotEmpty()) return failed
+        // Anything left standing keeps the channel here, because dropping it
+        // locally is what makes the leftovers unreachable: the delete screen
+        // is the retry, and deleting again only pays for what is still there
+        // (a stream already gone answers as deleted).
+        if (failed.isNotEmpty()) return failed
         removeChannel(messageStreamId)
         return failed
     }

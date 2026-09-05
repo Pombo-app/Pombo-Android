@@ -1253,11 +1253,12 @@ class AppViewModel(app: Application) : AndroidViewModel(app), PomboBridge.Listen
             if (failed.isEmpty()) {
                 toast("Channel \"$name\" deleted", com.pombo.android.ui.ToastKind.SUCCESS)
             } else {
-                // Say which half failed rather than claiming success: the
-                // remaining streams are still live on-chain.
+                // The channel stays in the list precisely so this is
+                // retryable — and the retry only pays for what is left.
                 toast(
-                    "Channel removed here, but ${failed.size} stream(s) could not be deleted on-chain",
-                    com.pombo.android.ui.ToastKind.WARNING, 6000L
+                    "${failed.size} of $streamCount stream(s) could not be deleted. " +
+                        "The channel is still here — delete it again to retry.",
+                    com.pombo.android.ui.ToastKind.WARNING, 7000L
                 )
             }
         } catch (e: Exception) {
