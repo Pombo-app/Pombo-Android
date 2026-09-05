@@ -324,12 +324,25 @@ const api = {
         const isBinary = data instanceof Uint8Array;
         const content = isBinary ? data : new TextEncoder().encode(JSON.stringify(data));
 
+        const onWirePublisher = opts.publisherId != null
+            ? opts.publisherId : await identity.getUserId();
+        // client.publish() asks the registry before signing anything; building
+        // the message by hand skipped that, and the network relays regardless —
+        // so a publish nobody may make still reaches storage, where only a
+        // validating reader ever refuses it. Ask here, as the SDK would; the
+        // forced re-read covers a grant written seconds ago (a member just
+        // added) that a cached answer would call a forgery.
+        if (!await api._mayPublishAs(streamId, onWirePublisher, true)) {
+            throw new Error('Refusing to publish to ' + streamId + ': ' +
+                onWirePublisher + ' holds no PUBLISH permission');
+        }
+
         const messageId = new MessageID(
             streamId,
             partition,
             opts.timestamp != null ? opts.timestamp : Date.now(),
             0,
-            opts.publisherId != null ? opts.publisherId : await identity.getUserId(),
+            onWirePublisher,
             opts.msgChainId != null ? opts.msgChainId : api._randomHex(10)
         );
 
@@ -482,8 +495,16 @@ const api = {
         const publisherId = (message && message.publisherId != null)
             ? message.publisherId
             : (sm && sm.messageId ? sm.messageId.publisherId : null);
+        return api._mayPublishAs(streamId, publisherId, false);
+    },
+
+    // The same question asked of a bare address, for the publish side.
+    // `refresh` skips the cache: a publish is one call, and a grant written
+    // seconds ago must not read as a forgery.
+    async _mayPublishAs(streamId, publisherId, refresh) {
         if (!streamId || !publisherId) return false;
         const who = String(publisherId).toLowerCase();
+        if (refresh) api._writerCache.delete(streamId);
         try {
             let entry = api._writerCache.get(streamId);
             if (!entry) {
