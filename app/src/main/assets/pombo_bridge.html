@@ -1060,13 +1060,17 @@ const api = {
             opener.take(rec);
         }, Date.now() + (a.budgetMs || 40000), { streamId: a.streamId, partition: a.partition });
         await opener.done();
-        await api._keepOnlyWriters(a.streamId, out);
+        // Exhaustion is about what the RANGE held, not about what survived the
+        // permission filter: a page made only of refused rows still means there
+        // is older history behind it.
+        const fetched = all.length;
+        await api._keepOnlyWriters(a.streamId, all);
         // The resend iterator order is not guaranteed; sort ASC before slicing.
         all.sort((x, y) => (x.meta.timestamp || 0) - (y.meta.timestamp || 0));
         const count = a.last || 50;
         const start = Math.max(0, all.length - count);
         // A cut-short drain cannot prove exhaustion — keep pagination alive.
-        return { messages: all.slice(start), hasMore: all.length > count || partial, partial: partial };
+        return { messages: all.slice(start), hasMore: fetched > count || partial, partial: partial };
     },
 
     // Bounded time-window resend, for DM pagination (streamr.js
