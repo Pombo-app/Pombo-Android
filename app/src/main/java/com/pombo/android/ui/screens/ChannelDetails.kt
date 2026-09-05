@@ -260,7 +260,7 @@ private fun ChannelDetailsMain(
         Spacer(Modifier.width(8.dp))
         Text(
             if (notified) "Notifications On" else "Notifications Off",
-            color = if (notified) PomboColors.Accent else Color.White.copy(alpha = 0.40f),
+            color = if (notified) Color.White else Color.White.copy(alpha = 0.40f),
             fontSize = 14.sp, fontWeight = FontWeight.Medium
         )
     }
