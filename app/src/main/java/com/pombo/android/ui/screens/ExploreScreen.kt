@@ -442,7 +442,7 @@ private fun ExploreCard(
             .background(Color.White.copy(alpha = 0.05f), RoundedCornerShape(16.dp))
             .border(1.dp, Color.White.copy(alpha = 0.07f), RoundedCornerShape(16.dp))
             .clickableNoRipple(onOpen)
-            .padding(14.dp)
+            .padding(16.dp)
     ) {
         Row(verticalAlignment = Alignment.Top) {
             // Channel thumb: `rounded-full`, 56×56, avatar fallback at 0.5.
@@ -534,7 +534,7 @@ private fun ExploreCard(
         // and no orphaned lone badge. Subscribe = recurring (accent-tinted
         // verb); Hold = mere possession, "in your wallet" = "you pay nothing".
         if (ch.gateVerb != null || tags.isNotEmpty() || ch.wireIdentity != null) {
-            Spacer(Modifier.height(6.dp))
+            Spacer(Modifier.height(12.dp))
             Box(Modifier.fillMaxWidth()) {
                 ch.gateVerb?.let { verb ->
                     Column(
