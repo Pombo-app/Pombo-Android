@@ -5525,11 +5525,18 @@ class ChannelManager(
         val publisher = meta.optString("publisherId").lowercase()
         if (streamId.endsWith(StreamConstants.SUFFIX_ADMIN)) {
             // -3 as the ACCOUNT: the owner publishes the admin stream under
-            // their own address — the transport validated the plain EVM
-            // signature, and the namespace prefix IS the authority. The
+            // their own address, and the namespace prefix IS the authority.
+            // The signature is checked rather than taken on trust: a raw read
+            // skips the SDK validation, and on the gated path the bridge's
+            // envelope-authenticity check does not run either. The
             // clone-published path below stays for pre-switch history.
             val admin = channel.messageStreamId.substringBefore('/').lowercase()
-            if (publisher == admin) return publisher
+            if (publisher == admin) {
+                val signed = meta.optString("signer").lowercase()
+                if (signed == admin) return publisher
+                Log.w(TAG, "gated: -3 envelope not signed by the admin — dropping")
+                return null
+            }
         }
         if (publisher != gate) return null
         val signer = meta.optString("signer").lowercase().ifEmpty { null } ?: run {
