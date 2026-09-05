@@ -2115,7 +2115,7 @@ fun CreateDmInboxDialog(
                 if (storageProvider == "streamr") {
                     Spacer(Modifier.height(12.dp))
                     Text(
-                        "STORAGE NODE", color = Color.White.copy(alpha = 0.30f),
+                        "STORAGE PROVIDER", color = Color.White.copy(alpha = 0.30f),
                         fontSize = 10.sp, letterSpacing = 0.8.sp
                     )
                     Spacer(Modifier.height(6.dp))
@@ -2132,7 +2132,7 @@ fun CreateDmInboxDialog(
                 } else {
                     Spacer(Modifier.height(12.dp))
                     Text(
-                        "STORAGE NODE", color = Color.White.copy(alpha = 0.30f),
+                        "STORAGE PROVIDER", color = Color.White.copy(alpha = 0.30f),
                         fontSize = 10.sp, letterSpacing = 0.8.sp
                     )
                     Spacer(Modifier.height(6.dp))

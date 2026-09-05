@@ -1450,7 +1450,7 @@ private fun ChannelStoragePanel(vm: AppViewModel, channel: Channel, canModerate:
     SectionLabel("Storage Provider")
     val nodes = info?.nodes ?: emptyList()
     if (info != null && nodes.isEmpty()) {
-        Text("No storage nodes", color = Color.White.copy(alpha = 0.40f), fontSize = 14.sp)
+        Text("No storage provider", color = Color.White.copy(alpha = 0.40f), fontSize = 14.sp)
     }
     nodes.forEach { node ->
         Row(
@@ -1484,7 +1484,7 @@ private fun ChannelStoragePanel(vm: AppViewModel, channel: Channel, canModerate:
                 Spacer(Modifier.width(8.dp))
                 // Web: a trash-can icon button, white/40 — not a "Remove" label.
                 Icon(
-                    Icons.Outlined.Delete, contentDescription = "Remove storage node",
+                    Icons.Outlined.Delete, contentDescription = "Remove storage provider",
                     tint = Color.White.copy(alpha = 0.40f),
                     modifier = Modifier.size(18.dp).clickableNoRipple { confirmRemove = node.address }
                 )
@@ -1505,11 +1505,13 @@ private fun ChannelStoragePanel(vm: AppViewModel, channel: Channel, canModerate:
                     tint = Color.White.copy(alpha = 0.60f), modifier = Modifier.size(14.dp)
                 )
                 Spacer(Modifier.width(6.dp))
-                Text("Add storage node", color = Color.White.copy(alpha = 0.60f), fontSize = 13.sp)
+                Text("Add Storage Provider", color = Color.White.copy(alpha = 0.60f), fontSize = 13.sp)
             }
         } else {
-            SectionLabel("Provider")
-            listOf(false to "Pombo", true to "Custom storage node").forEach { (custom, label) ->
+            // No label of its own: the section above it already says what
+            // these two choices are.
+            Spacer(Modifier.height(4.dp))
+            listOf(false to "Pombo", true to "Custom Storage Provider").forEach { (custom, label) ->
                 Row(
                     Modifier.fillMaxWidth().clickableNoRipple { customProvider = custom }
                         .padding(vertical = 8.dp),
@@ -1601,7 +1603,7 @@ private fun ChannelStoragePanel(vm: AppViewModel, channel: Channel, canModerate:
                     .border(1.dp, Color.White.copy(alpha = 0.08f), RoundedCornerShape(20.dp))
                     .padding(20.dp)
             ) {
-                Text("Remove storage node", color = Color.White, fontSize = 17.sp, fontWeight = FontWeight.SemiBold)
+                Text("Remove storage provider", color = Color.White, fontSize = 17.sp, fontWeight = FontWeight.SemiBold)
                 Spacer(Modifier.height(10.dp))
                 Text(
                     "${addr.take(6)}…${addr.takeLast(4)} stops serving this channel's history. " +

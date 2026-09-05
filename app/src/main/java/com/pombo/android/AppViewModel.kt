@@ -895,16 +895,16 @@ class AppViewModel(app: Application) : AndroidViewModel(app), PomboBridge.Listen
 
     fun addStorageNode(address: String, onDone: () -> Unit = {}) = viewModelScope.launch {
         chainAction(
-            "Add storage node",
-            "Assigns a storage node to this channel's streams (up to $storedStreamCount transactions; " +
+            "Add Storage Provider",
+            "Assigns a storage provider to this channel's streams (up to $storedStreamCount transactions; " +
                 "only the streams missing it are charged)."
         ) {
-            runWithToast("Adding storage node…", null, "Failed to add storage node") {
+            runWithToast("Adding storage provider…", null, "Failed to add storage provider") {
                 storageOutcomeToast(
                     manager.addStorageNode(address),
-                    nothing = "Storage node already on every stream",
-                    done = "Storage node added",
-                    partial = "Storage node partially added. Try again to sync."
+                    nothing = "Storage provider already on every stream",
+                    done = "Storage provider added",
+                    partial = "Storage provider partially added. Try again to sync."
                 )
             }
         }
@@ -913,16 +913,16 @@ class AppViewModel(app: Application) : AndroidViewModel(app), PomboBridge.Listen
 
     fun removeStorageNode(address: String, onDone: () -> Unit = {}) = viewModelScope.launch {
         chainAction(
-            "Remove storage node",
+            "Remove storage provider",
             "Stops retaining this channel's history on that node (up to $storedStreamCount transactions; " +
                 "only the streams carrying it are charged)."
         ) {
-            runWithToast("Removing storage node…", null, "Failed to remove storage node") {
+            runWithToast("Removing storage provider…", null, "Failed to remove storage provider") {
                 storageOutcomeToast(
                     manager.removeStorageNode(address),
-                    nothing = "Storage node was not on any stream",
-                    done = "Storage node removed",
-                    partial = "Storage node partially removed. Try again to sync."
+                    nothing = "Storage provider was not on any stream",
+                    done = "Storage provider removed",
+                    partial = "Storage provider partially removed. Try again to sync."
                 )
             }
         }
@@ -3148,12 +3148,12 @@ class AppViewModel(app: Application) : AndroidViewModel(app), PomboBridge.Listen
         val node = if (provider == "custom" && !customAddress.isNullOrBlank())
             customAddress.trim() else com.pombo.android.ChannelManager.STORAGE_NODE
         chainAction(
-            "Add inbox storage node",
+            "Add inbox storage provider",
             // Assigning the node and setting its retention are two writes,
             // even though the bridge sends them in one call.
-            "Assigns a storage node to your DM inbox (2 transactions)."
+            "Assigns a storage provider to your DM inbox (2 transactions)."
         ) {
-            runWithToast("Adding storage node…", "Storage node added", "Failed to add storage node") {
+            runWithToast("Adding storage provider…", "Storage provider added", "Failed to add storage provider") {
                 bridge.call(
                     "addToStorageNode",
                     JSONObject().put("streamId", inbox).put("nodeAddress", node).put("storageDays", days),
@@ -3168,10 +3168,10 @@ class AppViewModel(app: Application) : AndroidViewModel(app), PomboBridge.Listen
     fun removeInboxStorageNode(nodeAddress: String) = viewModelScope.launch {
         val inbox = myInboxStreamId() ?: return@launch
         chainAction(
-            "Remove inbox storage node",
+            "Remove inbox storage provider",
             "Stops retaining your DM history on that node (1 transaction)."
         ) {
-            runWithToast("Removing storage node…", "Storage node removed", "Failed to remove storage node") {
+            runWithToast("Removing storage provider…", "Storage provider removed", "Failed to remove storage provider") {
                 bridge.call(
                     "removeStorageNode",
                     JSONObject().put("streamId", inbox).put("nodeAddress", nodeAddress),

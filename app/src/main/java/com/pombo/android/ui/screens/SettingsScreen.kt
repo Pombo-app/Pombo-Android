@@ -855,7 +855,7 @@ private fun DmInboxPanel(vm: AppViewModel) {
             Text("Inbox Storage", color = Color.White.copy(alpha = 0.90f), fontSize = 14.sp, fontWeight = FontWeight.Medium)
             Spacer(Modifier.height(2.dp))
             Text(
-                "Change the storage node that persists your DM inbox.",
+                "Change the storage provider that persists your DM inbox.",
                 color = Color.White.copy(alpha = 0.40f), fontSize = 12.sp
             )
 
@@ -904,12 +904,12 @@ private fun DmInboxPanel(vm: AppViewModel) {
 
             Spacer(Modifier.height(14.dp))
             Text(
-                "STORAGE NODES", color = Color.White.copy(alpha = 0.30f),
+                "STORAGE PROVIDER", color = Color.White.copy(alpha = 0.30f),
                 fontSize = 10.sp, letterSpacing = 0.8.sp
             )
             Spacer(Modifier.height(6.dp))
             if (info.nodes.isEmpty()) {
-                Text("No storage nodes", color = Color.White.copy(alpha = 0.30f), fontSize = 12.sp)
+                Text("No storage provider", color = Color.White.copy(alpha = 0.30f), fontSize = 12.sp)
             } else {
                 info.nodes.forEach { node ->
                     Row(
@@ -933,7 +933,7 @@ private fun DmInboxPanel(vm: AppViewModel) {
                         }
                         Spacer(Modifier.width(8.dp))
                         Icon(
-                            Icons.Outlined.Delete, contentDescription = "Remove storage node",
+                            Icons.Outlined.Delete, contentDescription = "Remove storage provider",
                             tint = Color.White.copy(alpha = 0.40f),
                             modifier = Modifier.size(18.dp).clickableNoRipple { vm.removeInboxStorageNode(node) }
                         )
@@ -951,7 +951,7 @@ private fun DmInboxPanel(vm: AppViewModel) {
                 ) {
                     Icon(Icons.Filled.Add, contentDescription = null, tint = Color.White.copy(alpha = 0.60f), modifier = Modifier.size(13.dp))
                     Spacer(Modifier.width(6.dp))
-                    Text("Add storage node", color = Color.White.copy(alpha = 0.60f), fontSize = 12.sp)
+                    Text("Add Storage Provider", color = Color.White.copy(alpha = 0.60f), fontSize = 12.sp)
                 }
             } else {
                 var provider by remember { mutableStateOf("streamr") }
@@ -964,7 +964,7 @@ private fun DmInboxPanel(vm: AppViewModel) {
                         .padding(12.dp)
                 ) {
                     Row(horizontalArrangement = Arrangement.spacedBy(16.dp)) {
-                        listOf("streamr" to "Pombo", "custom" to "Custom storage node").forEach { (value, label) ->
+                        listOf("streamr" to "Pombo", "custom" to "Custom Storage Provider").forEach { (value, label) ->
                             Row(
                                 Modifier.clickableNoRipple { provider = value },
                                 verticalAlignment = Alignment.CenterVertically
@@ -996,7 +996,7 @@ private fun DmInboxPanel(vm: AppViewModel) {
                                 .padding(horizontal = 12.dp, vertical = 8.dp),
                             decorationBox = { inner ->
                                 if (customAddr.isEmpty()) Text(
-                                    "0x… custom storage node address",
+                                    "0x… custom storage provider address",
                                     color = Color.White.copy(alpha = 0.20f), fontSize = 12.sp,
                                     fontFamily = androidx.compose.ui.text.font.FontFamily.Monospace
                                 )
