@@ -973,32 +973,36 @@ fun ChatScreen(vm: AppViewModel) {
         LaunchedEffect(ch.messageStreamId, ch.readOnly) {
             readOnlyWriter = ch.readOnly && ch.type == "gated" && vm.canManageGate()
         }
-        val canPost = (!ch.readOnly || readOnlyWriter ||
-            ch.createdBy?.equals(myAddr, ignoreCase = true) == true) &&
-            !subExpired
-        ChatComposer(
-            input = composerInput,
-            canPost = canPost,
-            disabledPlaceholder = if (subExpired) "Subscription expired — renew to write"
-                else "This channel is read-only",
-            onTyping = { vm.notifyTyping() },
-            onPickImage = { vm.sendImage(it) },
-            onPickVideo = { vm.sendVideo(it) },
-            onPickFile = { vm.sendFile(it) },
-            onPickStorageFile = { vm.sendStorageFile(it) },
-            onSend = { text ->
-                val et = editTarget
-                if (et != null) {
-                    vm.editMessage(et.id, text)
-                    editTarget = null
-                } else {
-                    vm.sendMessage(text, replyTarget?.let {
-                        com.pombo.android.ReplyRef(it.id, it.sender, it.senderName ?: it.ensName, it.text)
-                    })
-                    replyTarget = null
+        val mayWriteHere = !ch.readOnly || readOnlyWriter ||
+            ch.createdBy?.equals(myAddr, ignoreCase = true) == true
+        // A reader of an announcements channel gets no composer at all: a
+        // disabled field is furniture that only says "not for you". An expired
+        // subscription keeps its field, because there the placeholder is the
+        // instruction for getting it back.
+        if (mayWriteHere) {
+            ChatComposer(
+                input = composerInput,
+                canPost = !subExpired,
+                disabledPlaceholder = "Subscription expired — renew to write",
+                onTyping = { vm.notifyTyping() },
+                onPickImage = { vm.sendImage(it) },
+                onPickVideo = { vm.sendVideo(it) },
+                onPickFile = { vm.sendFile(it) },
+                onPickStorageFile = { vm.sendStorageFile(it) },
+                onSend = { text ->
+                    val et = editTarget
+                    if (et != null) {
+                        vm.editMessage(et.id, text)
+                        editTarget = null
+                    } else {
+                        vm.sendMessage(text, replyTarget?.let {
+                            com.pombo.android.ReplyRef(it.id, it.sender, it.senderName ?: it.ensName, it.text)
+                        })
+                        replyTarget = null
+                    }
                 }
-            }
-        )
+            )
+        }
     }
 }
 

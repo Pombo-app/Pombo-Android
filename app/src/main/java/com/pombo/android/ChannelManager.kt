@@ -4048,6 +4048,9 @@ class ChannelManager(
                 name = preview.name.ifEmpty { messageStreamId.substringAfterLast('/') },
                 type = preview.type.ifEmpty { "public" },
                 gateAddress = if (gated) preview.gateAddress else null,
+                // Without this the preview composer offers a publish the
+                // network refuses, and the send fails where nobody sees it.
+                readOnly = preview.readOnly,
                 // Carry the Explore metadata so the settings sheet isn't blank —
                 // anything listed in Explore is by definition exposure=visible.
                 description = preview.description,
