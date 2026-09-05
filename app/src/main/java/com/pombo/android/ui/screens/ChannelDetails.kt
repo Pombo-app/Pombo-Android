@@ -244,10 +244,10 @@ private fun ChannelDetailsMain(
     val dmPeer = channel.peerAddress?.takeIf { channel.type == "dm" }
     LaunchedEffect(dmPeer) { dmPeer?.let { vm.ensureEns(it) } }
     Row(verticalAlignment = Alignment.CenterVertically) {
-        Box(Modifier.size(96.dp)) {
+        Box(Modifier.size(88.dp)) {
             if (dmPeer != null) {
                 Avatar(
-                    dmPeer, size = 96.dp, cornerRadiusFraction = 0.5,
+                    dmPeer, size = 88.dp, cornerRadiusFraction = 0.5,
                     ensAvatarUrl = ensAvatars[dmPeer.lowercase()],
                     modifier = Modifier.border(1.dp, Color.White.copy(alpha = 0.08f), CircleShape)
                 )
@@ -258,12 +258,12 @@ private fun ChannelDetailsMain(
                     },
                     contentDescription = null,
                     contentScale = androidx.compose.ui.layout.ContentScale.Crop,
-                    modifier = Modifier.size(96.dp).clip(CircleShape)
+                    modifier = Modifier.size(88.dp).clip(CircleShape)
                         .border(1.dp, Color.White.copy(alpha = 0.08f), CircleShape)
                 )
             } else {
                 Avatar(
-                    channel.messageStreamId, size = 96.dp, cornerRadiusFraction = 0.5,
+                    channel.messageStreamId, size = 88.dp, cornerRadiusFraction = 0.5,
                     modifier = Modifier.border(1.dp, Color.White.copy(alpha = 0.08f), CircleShape)
                 )
             }
