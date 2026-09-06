@@ -164,6 +164,15 @@ class EpochKeyManager(
          * with the account's static key, in any session of any device.
          */
         val pendingRequests = LinkedHashMap<String, PendingId>()
+        /**
+         * Wraps that arrived before the announce that legitimises them, by
+         * epoch. A responder answers the request as soon as it hears it, so on
+         * a cold subscribe the wrap regularly overtakes the announce; dropping
+         * it cost a 35s stall in the field, waiting for a retry that only came
+         * with the next sweep. Memory only, and never a key: an unverifiable
+         * wrap is worth nothing until the announce says what it should hash to.
+         */
+        val parkedWraps = LinkedHashMap<Int, MutableList<JSONObject>>()
         /** Epochs we already published a MEMBER_HELLO for — persisted. */
         val helloEpochs = LinkedHashSet<Int>()
         /** Name the last hello carried, and when — the next one chains it. */
@@ -226,6 +235,29 @@ class EpochKeyManager(
          * comes from the newest hello that actually carried one — a later
          * name-less hello must not erase a name someone announced.
          */
+        /**
+         * Holds a wrap whose announce has not arrived yet. A responder answers
+         * a request the moment it hears it, so on a cold subscribe the wrap
+         * regularly overtakes the announce that says what it should hash to;
+         * dropping it cost a 35s stall in the field.
+         */
+        internal fun parkWrap(
+            parked: LinkedHashMap<Int, MutableList<JSONObject>>, epoch: Int, wrap: JSONObject
+        ) {
+            if (epoch < 1) return
+            val forEpoch = parked.getOrPut(epoch) { mutableListOf() }
+            if (forEpoch.size >= MAX_PARKED_WRAPS_PER_EPOCH) return
+            forEpoch.add(wrap)
+            while (parked.size > MAX_PARKED_EPOCHS) {
+                parked.remove(parked.keys.first())
+            }
+        }
+
+        /** The wraps waiting on this epoch's announce, removed as they are handed over. */
+        internal fun takeParkedWraps(
+            parked: LinkedHashMap<Int, MutableList<JSONObject>>, epoch: Int
+        ): List<JSONObject> = parked.remove(epoch).orEmpty()
+
         internal fun mergeHello(
             members: MutableMap<String, RosterMember>,
             nameTs: MutableMap<String, Long>,
@@ -276,6 +308,9 @@ class EpochKeyManager(
         // have no window: the v2 wrap opens in any later session.
         private const val REQUEST_ANSWER_WINDOW_MS = 10 * 60 * 1000L
         private const val SEEN_WRAPS_MAX = 100
+        /** Wraps held for an announce that has not arrived; memory only. */
+        private const val MAX_PARKED_WRAPS_PER_EPOCH = 4
+        private const val MAX_PARKED_EPOCHS = 8
         // Persisted pending-request ids (wrap v2), bounded: a wrap for a
         // request this old answers a question nobody is asking any more.
         private const val PENDING_REQUEST_MAX_AGE_MS = 30L * 24 * 60 * 60 * 1000
@@ -1055,13 +1090,19 @@ class EpochKeyManager(
     ) {
         when (data.optString("t")) {
             StreamConstants.KEY_ANNOUNCE -> {
+                var replay: List<JSONObject> = emptyList()
                 val needRequest = mutex.withLock {
                     val s = getState(messageStreamId)
                     if (!s.loaded) { loadPersisted(messageStreamId, s); s.loaded = true }
                     val changed = applyAnnounceLocked(messageStreamId, s, data, publisherId, timestamp)
-                    if (changed) persist(messageStreamId, s)
+                    if (changed) {
+                        persist(messageStreamId, s)
+                        replay = takeParkedWraps(s.parkedWraps, data.optInt("epoch", 0))
+                    }
                     changed && missingEpochsLocked(s).isNotEmpty()
                 }
+                // Outside the lock: handleWrap takes it, and routes v2 itself.
+                for (wrap in replay) handleWrap(messageStreamId, keysStreamId, wrap)
                 // Pull model: a live announce for an epoch we lack triggers a request
                 if (needRequest) sendKeyRequest(messageStreamId, keysStreamId)
             }
@@ -1080,6 +1121,10 @@ class EpochKeyManager(
             StreamConstants.PUB_WRAP -> handlePubWrap(messageStreamId, data)
         }
     }
+
+    /** Caller holds the lock. */
+    private fun parkWrapLocked(s: ChannelState, epoch: Int, data: JSONObject) =
+        parkWrap(s.parkedWraps, epoch, data)
 
     /** D13 conflict rule. Returns true when state changed. Caller holds the lock. */
     private fun applyAnnounceLocked(
@@ -1388,7 +1433,7 @@ class EpochKeyManager(
             val epoch = data.optInt("epoch", 0)
             val announce = s.announces[epoch]
             if (announce == null || announce.keyId != keyId) {
-                Log.w(TAG, "wrap for unannounced key ignored: $keyId")
+                parkWrapLocked(s, epoch, data)
                 return
             }
             val keyHex = try {
@@ -1435,7 +1480,7 @@ class EpochKeyManager(
             val epoch = data.optInt("epoch", 0)
             val announce = s.announces[epoch]
             if (announce == null || announce.keyId != keyId) {
-                Log.w(TAG, "v2 wrap for unannounced key ignored: $keyId")
+                parkWrapLocked(s, epoch, data)
                 return
             }
             if (accountKey == null) return
