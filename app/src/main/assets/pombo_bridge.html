@@ -324,12 +324,25 @@ const api = {
         const isBinary = data instanceof Uint8Array;
         const content = isBinary ? data : new TextEncoder().encode(JSON.stringify(data));
 
+        const onWirePublisher = opts.publisherId != null
+            ? opts.publisherId : await identity.getUserId();
+        // client.publish() asks the registry before signing anything; building
+        // the message by hand skipped that, and the network relays regardless —
+        // so a publish nobody may make still reaches storage, where only a
+        // validating reader ever refuses it. Ask here, as the SDK would; the
+        // forced re-read covers a grant written seconds ago (a member just
+        // added) that a cached answer would call a forgery.
+        if (!await api._mayPublishAs(streamId, onWirePublisher, true)) {
+            throw new Error('Refusing to publish to ' + streamId + ': ' +
+                onWirePublisher + ' holds no PUBLISH permission');
+        }
+
         const messageId = new MessageID(
             streamId,
             partition,
             opts.timestamp != null ? opts.timestamp : Date.now(),
             0,
-            opts.publisherId != null ? opts.publisherId : await identity.getUserId(),
+            onWirePublisher,
             opts.msgChainId != null ? opts.msgChainId : api._randomHex(10)
         );
 
@@ -448,6 +461,80 @@ const api = {
             ? message.publisherId
             : (sm && sm.messageId ? sm.messageId.publisherId : null);
         return !!publisherId && String(publisherId).toLowerCase() === signer;
+    },
+
+    // The other half of what `raw` turns off: authenticity proves WHO signed,
+    // never whether they may write here. The transport layer relays without
+    // consulting the registry and a storage node keeps whatever reaches it, so
+    // a raw resend can hand back a message the on-chain ACL refuses — and a
+    // read-only channel would render a stranger's post that no validating
+    // client shows. Read-only and gated channels publish as the ACCOUNT or the
+    // gate clone precisely because their grant is on-chain, so the check reads
+    // the same list the SDK would.
+    //
+    // One registry read per stream, cached: a stream with public publish
+    // answers for everyone at once, which is every open channel.
+    _writerCache: new Map(),
+    _writerFetches: new Map(),
+
+    // Drops from a drained resend whatever the registry says may not be there.
+    // Applied after the drain because that callback is synchronous; one cache
+    // lookup per row, and at most one registry read per stream.
+    async _keepOnlyWriters(streamId, rows) {
+        if (!rows.length) return;
+        const verdicts = await Promise.all(rows.map(function (r) {
+            return api._mayWriteHere(streamId, { publisherId: r.meta && r.meta.publisherId });
+        }));
+        let kept = 0;
+        for (let i = 0; i < rows.length; i++) if (verdicts[i]) rows[kept++] = rows[i];
+        rows.length = kept;
+    },
+
+    async _mayWriteHere(streamId, message) {
+        const sm = (message && message.streamMessage) ? message.streamMessage : message;
+        const publisherId = (message && message.publisherId != null)
+            ? message.publisherId
+            : (sm && sm.messageId ? sm.messageId.publisherId : null);
+        return api._mayPublishAs(streamId, publisherId, false);
+    },
+
+    // The same question asked of a bare address, for the publish side.
+    // `refresh` skips the cache: a publish is one call, and a grant written
+    // seconds ago must not read as a forgery.
+    async _mayPublishAs(streamId, publisherId, refresh) {
+        if (!streamId || !publisherId) return false;
+        const who = String(publisherId).toLowerCase();
+        if (refresh) api._writerCache.delete(streamId);
+        try {
+            let entry = api._writerCache.get(streamId);
+            if (!entry) {
+                let fetch = api._writerFetches.get(streamId);
+                if (!fetch) {
+                    fetch = (async function () {
+                        const stream = await client.getStream(streamId);
+                        const rows = await stream.getPermissions();
+                        // Every real stream lists its owner, so an empty answer
+                        // is a failed read, not a stream nobody may write.
+                        const e = { pub: !rows || rows.length === 0, writers: new Set() };
+                        (rows || []).forEach(function (r) {
+                            if (!(r.permissions || []).includes('publish')) return;
+                            if (r.public) e.pub = true;
+                            else if (r.userId) e.writers.add(String(r.userId).toLowerCase());
+                        });
+                        api._writerCache.set(streamId, e);
+                        return e;
+                    })();
+                    api._writerFetches.set(streamId, fetch);
+                }
+                try { entry = await fetch; } finally { api._writerFetches.delete(streamId); }
+            }
+            return entry.pub || entry.writers.has(who);
+        } catch (e) {
+            // Registry unreadable: keep the message. Blanking history during an
+            // RPC outage would read as data loss, and this is a filter against
+            // junk, not a confidentiality boundary.
+            return true;
+        }
     },
 
     // Streams whose publish rights are on-chain and owner/member-bound must
@@ -934,6 +1021,7 @@ const api = {
         }, Date.now() + (a.budgetMs || 40000), { streamId: a.streamId, partition: a.partition });
         const tDrain = Date.now();
         await opener.done();
+        await api._keepOnlyWriters(a.streamId, out);
         // drainMs = network. decryptMs = the crypto TAIL only, i.e. the part
         // that found no network wait left to hide behind. A large tail means
         // PBKDF2 is the wall, not the storage node.
@@ -972,12 +1060,17 @@ const api = {
             opener.take(rec);
         }, Date.now() + (a.budgetMs || 40000), { streamId: a.streamId, partition: a.partition });
         await opener.done();
+        // Exhaustion is about what the RANGE held, not about what survived the
+        // permission filter: a page made only of refused rows still means there
+        // is older history behind it.
+        const fetched = all.length;
+        await api._keepOnlyWriters(a.streamId, all);
         // The resend iterator order is not guaranteed; sort ASC before slicing.
         all.sort((x, y) => (x.meta.timestamp || 0) - (y.meta.timestamp || 0));
         const count = a.last || 50;
         const start = Math.max(0, all.length - count);
         // A cut-short drain cannot prove exhaustion — keep pagination alive.
-        return { messages: all.slice(start), hasMore: all.length > count || partial, partial: partial };
+        return { messages: all.slice(start), hasMore: fetched > count || partial, partial: partial };
     },
 
     // Bounded time-window resend, for DM pagination (streamr.js
@@ -1009,6 +1102,7 @@ const api = {
             if (a.recoverSigner) rec.meta.signer = api._recoverEnvelopeSigner(msg);
             out.push(rec);
         }, Date.now() + (a.budgetMs || 40000), { streamId: a.streamId, partition: a.partition });
+        await api._keepOnlyWriters(a.streamId, out);
         // Reaching epoch means there is nothing older left to scan.
         return { messages: out, hasMore: windowStart > 0 || partial, windowStart: windowStart, partial: partial };
     },

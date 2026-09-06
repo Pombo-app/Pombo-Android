@@ -14,6 +14,9 @@ import java.io.File
  * ChannelLatestMessageManager, which persists them so a cold start paints
  * previews immediately instead of waiting on a resend per channel.
  */
+/** How long a preview may be newer than storage before it stops being an echo. */
+private const val ECHO_GRACE_MS = 5 * 60 * 1000L
+
 class LatestMessageStore(context: Context) {
 
     /**
@@ -85,9 +88,12 @@ class LatestMessageStore(context: Context) {
 
     suspend fun put(streamId: String, preview: Preview) {
         // Never let an older message overwrite a newer one (the live path in
-        // channels.js always wins over a resend that lands late).
+        // channels.js always wins over a resend that lands late) — unless the
+        // newer one has outlived what the stream serves, which is what pinned
+        // a refused message on a read-only card for good.
         val existing = _previews.value[streamId]
-        if (existing != null && existing.ts > preview.ts) return
+        if (existing != null && existing.ts > preview.ts
+            && System.currentTimeMillis() - existing.ts < ECHO_GRACE_MS) return
         _previews.value = _previews.value + (streamId to preview)
         persist()
     }

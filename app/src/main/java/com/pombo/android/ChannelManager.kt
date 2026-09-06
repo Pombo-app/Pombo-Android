@@ -4048,6 +4048,9 @@ class ChannelManager(
                 name = preview.name.ifEmpty { messageStreamId.substringAfterLast('/') },
                 type = preview.type.ifEmpty { "public" },
                 gateAddress = if (gated) preview.gateAddress else null,
+                // Without this the preview composer offers a publish the
+                // network refuses, and the send fails where nobody sees it.
+                readOnly = preview.readOnly,
                 // Carry the Explore metadata so the settings sheet isn't blank —
                 // anything listed in Explore is by definition exposure=visible.
                 description = preview.description,
@@ -5597,9 +5600,40 @@ class ChannelManager(
                 Log.w(TAG, "gated: non-admin $signer on admin stream — dropping")
                 return null
             }
+            return signer
+        }
+        // The gate grants publish to every member, so read-only only holds if
+        // readers cut it. Sealed needs none of this: no publish key, no message.
+        if (channel.readOnly && !streamId.endsWith(StreamConstants.SUFFIX_KEYS)
+            && !isReadOnlyWriter(channel, gate, signer)) {
+            Log.w(TAG, "gated: $signer is not a writer on read-only $streamId — dropping")
+            return null
         }
         return signer
     }
+
+    /**
+     * Owner + moderators, the only writers a read-only gate has. A cold cache
+     * decides NO and fills in the background: deciding yes would make the cut
+     * cosmetic, since the first render is the one that matters.
+     */
+    private fun isReadOnlyWriter(channel: Channel, gate: String, signer: String): Boolean {
+        if (signer == channel.messageStreamId.substringBefore('/').lowercase()) return true
+        val key = "$gate:$signer"
+        gateWriterCache[key]?.let { return it }
+        scope.launch {
+            val moderator = try {
+                bridge.call("gateIsModerator", JSONObject()
+                    .put("gate", gate).put("user", signer), 30_000)
+                    .optBoolean("moderator", false)
+            } catch (e: Exception) { return@launch }   // unread ≠ not a writer
+            gateWriterCache[key] = moderator
+            if (moderator) Log.i(TAG, "gated: $signer is a moderator — reopen to see their messages")
+        }
+        return false
+    }
+
+    private val gateWriterCache = java.util.concurrent.ConcurrentHashMap<String, Boolean>()
 
     private fun startPresence(channel: Channel) = presence.startPresence(channel)
 

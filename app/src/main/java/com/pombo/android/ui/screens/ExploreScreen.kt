@@ -513,14 +513,7 @@ private fun ExploreCard(
                     )
                 }
             }
-            // Web: a chevron on the right of every card, `w-4 h-4 text-white/15`,
-            // with the row's `gap-3` between it and the text.
             Spacer(Modifier.width(12.dp))
-            Icon(
-                Icons.AutoMirrored.Filled.KeyboardArrowRight, contentDescription = null,
-                tint = Color.White.copy(alpha = 0.15f),
-                modifier = Modifier.size(16.dp)
-            )
         }
         // Tags (category / language) — `px-1.5 py-1 bg-white/5 text-white/50
         // text-[11px] rounded`, category hidden when it is the default.
