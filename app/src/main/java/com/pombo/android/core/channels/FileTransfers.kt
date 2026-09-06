@@ -403,13 +403,13 @@ internal class FileTransfers(private val manager: ChannelManager) {
                     ?: throw IllegalStateException(
                         "No epoch key for ${channel.messageStreamId} — cannot store media")
             } else null
-            // Members-only: chunks travel under the SHARED key; the clone path
+            // Sealed: chunks travel under the SHARED key; the clone path
             // would stamp the uploader's account onto every stored chunk.
             val membersOnly = !isDm && channel.wireIdentity == "sealed"
             val sharedKeyHex = if (membersOnly) {
                 epochKeys.publishKeyFor(channel.messageStreamId)?.keyHex
                     ?: throw IllegalStateException(
-                        "No publish key for ${channel.messageStreamId} — cannot store media on a Members-only channel")
+                        "No publish key for ${channel.messageStreamId} — cannot store media on a Sealed channel")
             } else null
             val gate = if (!isDm && channel.type == "gated" && !membersOnly) {
                 channel.gateAddress ?: throw IllegalStateException(

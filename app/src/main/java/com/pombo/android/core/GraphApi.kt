@@ -61,7 +61,7 @@ object GraphApi {
         val createdBy: String,
         /** Gated (N-C): the PomboGate clone from metadata `g`, lowercase. */
         val gateAddress: String? = null,
-        /** Author visibility from metadata `m` (1 = Members only). */
+        /** Author visibility from metadata `m` (1 = Sealed). */
         val wireIdentity: String? = null
     )
 

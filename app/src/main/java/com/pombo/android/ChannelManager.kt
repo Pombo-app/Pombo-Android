@@ -489,7 +489,7 @@ class ChannelManager(
                     val sealed = epochKeys.sealBinaryCurrent(channel!!.messageStreamId, bytes)
                         ?: throw IllegalStateException(
                             "No epoch key for ${channel.messageStreamId} — cannot send media")
-                    // Members-only: pieces travel under the SHARED key — the
+                    // Sealed: pieces travel under the SHARED key — the
                     // clone path would stamp the sender's account onto them.
                     if (channel.wireIdentity == "sealed") {
                         // The -2 is participation, so it rides the
@@ -498,7 +498,7 @@ class ChannelManager(
                         val pub = epochKeys.interactionsKeyFor(channel.messageStreamId)
                             ?: epochKeys.publishKeyFor(channel.messageStreamId)
                             ?: throw IllegalStateException(
-                                "No interactions key for ${channel.messageStreamId} — cannot send media on a Members-only channel")
+                                "No interactions key for ${channel.messageStreamId} — cannot send media on a Sealed channel")
                         bridge.publishBinary(
                             ephemeralStreamId,
                             StreamConstants.EPH_MEDIA_DATA,
@@ -1645,7 +1645,7 @@ class ChannelManager(
             gate
         } else null
 
-        // Members-only author visibility (the default for gated): mint the
+        // Sealed (the default for gated): mint the
         // SHARED publish key now so its address rides the permission batch.
         val sharedPub = if (type == "gated" && wireIdentity == "sealed")
             epochKeys.mintPublishKey() else null
@@ -1684,7 +1684,7 @@ class ChannelManager(
         // Gated: the clone address — the system of record joins and repairs
         // read (web streamr.js metadata g field)
         gateAddress?.let { msgMeta.put("g", it) }
-        // Author visibility: 1 = Members only. Absent = Everyone, which is
+        // Author visibility: 1 = Sealed. Absent = Visible, which is
         // what every channel created before the flag existed is. IMMUTABLE.
         if (sharedPub != null) msgMeta.put("m", 1)
         if (visible) {
@@ -1734,7 +1734,7 @@ class ChannelManager(
                 val clonePerms = JSONArray().put(JSONObject()
                     .put("userId", gateAddress)
                     .put("permissions", JSONArray(listOf("subscribe", "publish"))))
-                // Members-only: -1/-2 also grant the SHARED publish key's
+                // Sealed: -1/-2 also grant the SHARED publish key's
                 // address — every member publishes under it, so the transport
                 // carries no authorship. -4 keeps clone-only (KEY_REQUESTs
                 // must name the requester) and -3 stays owner-published.
@@ -2034,8 +2034,8 @@ class ChannelManager(
                     gateAddress = meta.optString("g").lowercase()
                         .takeIf { Regex("^0x[0-9a-f]{40}$").matches(it) }
                     // Author visibility (immutable `m` flag): it has to be
-                    // right BEFORE the first publish — joining a Members-only
-                    // channel as Everyone would put the account on the wire.
+                    // right BEFORE the first publish — joining a Sealed
+                    // channel as Visible would put the account on the wire.
                     metaWireIdentity = if (meta.optInt("m") == 1) "sealed" else "visible"
                 }
             }
@@ -5392,7 +5392,7 @@ class ChannelManager(
             }
             var clean = stripLocalFields(payload)
 
-            // Members-only author visibility: the plaintext becomes an
+            // Sealed: the plaintext becomes an
             // authorship wrapper (pseudonym signature per message + account
             // bind proof) and the on-wire publisher becomes the channel's
             // SHARED key — the wire says nothing about who wrote this.
@@ -5446,7 +5446,7 @@ class ChannelManager(
                     } else epochKeys.publishKeyFor(channel.messageStreamId)
                 }
                 if (pub == null) throw IllegalStateException(
-                    "No publish key for ${channel.messageStreamId} — cannot publish on a Members-only channel (waiting for PUB_WRAP)")
+                    "No publish key for ${channel.messageStreamId} — cannot publish on a Sealed channel (waiting for PUB_WRAP)")
                 val auth = epochKeys.authorshipFor(channel.messageStreamId)
                     ?: throw IllegalStateException("No wallet available to bind the channel pseudonym")
                 clean = com.pombo.android.core.Authorship.seal(
@@ -5713,10 +5713,10 @@ class ChannelManager(
                 val ch = channelByStream(streamId)
                 if (ch != null && isEpochChannel(ch)) {
                     val membersOnly = ch.type == "gated" && ch.wireIdentity == "sealed"
-                    // Everyone-mode gated: the on-wire publisher is the CLONE —
+                    // Visible gated: the on-wire publisher is the CLONE —
                     // the seeder/leecher identity the media controller needs is
                     // the envelope signer, never the transport publisher.
-                    // Members-only rides the SHARED key instead: the transport
+                    // Sealed rides the SHARED key instead: the transport
                     // says nothing, authorship comes from the wrapper inside
                     // the seal and resolves after decryption.
                     val envelopeAuthor = if (ch.type == "gated" && !membersOnly) {
@@ -5804,7 +5804,7 @@ class ChannelManager(
             val channel = channelByStream(streamId)?.takeIf { isEpochChannel(it) } ?: return
             scope.launch {
                 val gated = channel.type == "gated"
-                // Members-only: pieces publish under the SHARED key, so the
+                // Sealed: pieces publish under the SHARED key, so the
                 // transport names nobody. Their trust anchor is the content
                 // hash from an AUTHORED announce — the piece carries the
                 // shared address as its identity, and the assembly path
@@ -5982,11 +5982,11 @@ class ChannelManager(
                 live = !historical,
                 timestamp = meta.optLong("timestamp", 0L)) ?: return
 
-            // Members-only: the seal held an authorship wrapper — the author
+            // Sealed: the seal held an authorship wrapper — the author
             // comes from it, never from the transport (the shared key says
             // nothing). A sealed message without a valid wrapper has no
             // author and drops; lapsed members cut live, exactly like the
-            // Everyone mode cuts them on the envelope signer.
+            // Visible cuts them on the envelope signer.
             if (channel.wireIdentity == "sealed") {
                 val opened = com.pombo.android.core.Authorship.open(channel.messageStreamId, data)
                     ?: return
@@ -6044,7 +6044,7 @@ class ChannelManager(
         // are the same address, so nothing changes for old history (D10b).
         // Gated: the transport is the clone for everyone — the author is the
         // envelope signer, resolved by gatedAuthor (drop on failure; D10c).
-        // Members-only channels resolved theirs from the wrapper above.
+        // Sealed channels resolved theirs from the wrapper above.
         val author = if (innerAuthor != null) {
             innerAuthor
         } else if (channel.type == "gated") {

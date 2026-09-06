@@ -1177,9 +1177,9 @@ private fun TokenPresetRow(
 @Composable
 internal fun CreateChannelDialog(vm: AppViewModel, onDismiss: () -> Unit, onCreate: (NewChannel) -> Unit) {
     var kind by remember { mutableStateOf(ChannelKind.OPEN) }
-    // Author visibility (gated variants; immutable post-creation): false =
-    // Members only (the default), true = Everyone.
-    var authorEveryone by remember { mutableStateOf(false) }
+    // Identity on the wire (gated variants; immutable post-creation):
+    // false = Sealed (the default), true = Visible.
+    var wireVisible by remember { mutableStateOf(false) }
     var name by remember { mutableStateOf("") }
     var password by remember { mutableStateOf("") }
     var visible by remember { mutableStateOf(false) }
@@ -1244,7 +1244,7 @@ internal fun CreateChannelDialog(vm: AppViewModel, onDismiss: () -> Unit, onCrea
         storageProvider = storageProvider,
         customStorageAddress = customStorage.trim().ifBlank { null },
         storageDays = storageDays.toInt(),
-        wireIdentity = if (authorEveryone) "visible" else "sealed"
+        wireIdentity = if (wireVisible) "visible" else "sealed"
     )
 
     // Low-balance confirm fires AFTER async gate resolution — remember the
@@ -1659,7 +1659,7 @@ internal fun CreateChannelDialog(vm: AppViewModel, onDismiss: () -> Unit, onCrea
                             Triple(false, "Sealed", Icons.Outlined.People),
                             Triple(true, "Visible", Icons.Outlined.Public)
                         ).forEach { (value, label, icon) ->
-                            val active = authorEveryone == value
+                            val active = wireVisible == value
                             val activeText = if (value) Color(0xFFFBBF24).copy(alpha = 0.90f) else Color.White
                             Row(
                                 Modifier.weight(1f)
@@ -1672,7 +1672,7 @@ internal fun CreateChannelDialog(vm: AppViewModel, onDismiss: () -> Unit, onCrea
                                         Color.White.copy(alpha = if (active) 0.10f else 0.05f),
                                         RoundedCornerShape(8.dp)
                                     )
-                                    .clickableNoRipple { authorEveryone = value }
+                                    .clickableNoRipple { wireVisible = value }
                                     .padding(vertical = 8.dp),
                                 horizontalArrangement = Arrangement.Center,
                                 verticalAlignment = Alignment.CenterVertically
@@ -1692,7 +1692,7 @@ internal fun CreateChannelDialog(vm: AppViewModel, onDismiss: () -> Unit, onCrea
                         }
                     }
                     Text(
-                        if (authorEveryone)
+                        if (wireVisible)
                             "Every message exposes its author's account, attributable by anyone, forever. Removed members' messages are rejected by readers, but can still reach storage."
                         else
                             "Full author privacy. Removed members can pollute storage until you reset the key with a paid on-chain action.",

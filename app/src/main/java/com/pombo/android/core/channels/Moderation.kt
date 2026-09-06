@@ -587,7 +587,7 @@ internal class Moderation(private val manager: ChannelManager) {
     }
 
     /**
-     * Replaces the shared publish key of a Members-only channel: grants the
+     * Replaces the shared publish key of a Sealed channel: grants the
      * new key's address and revokes the old one on `-1`/`-2` (one transaction
      * per stream), then announces the new key on `-4`. Members pick it up
      * through the normal PUB_WRAP flow.
@@ -595,7 +595,7 @@ internal class Moderation(private val manager: ChannelManager) {
     suspend fun rekeyPublishKey(): Int {
         val channel = _current.value ?: throw IllegalStateException("No channel open")
         check(channel.type == "gated" && channel.wireIdentity == "sealed") {
-            "the publish key only exists on Members-only channels"
+            "the publish key only exists on Sealed channels"
         }
         val keysId = channel.keysStreamId.ifEmpty { StreamConstants.deriveKeysId(channel.messageStreamId) }
         return epochKeys.rekeyPublishKey(channel.messageStreamId, keysId) { newAddress, oldAddress ->
