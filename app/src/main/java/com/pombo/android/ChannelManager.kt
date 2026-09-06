@@ -5600,9 +5600,47 @@ class ChannelManager(
                 Log.w(TAG, "gated: non-admin $signer on admin stream — dropping")
                 return null
             }
+            return signer
+        }
+        // Read-only, Everyone mode: the gate hands the same publish grant to
+        // every member (readOnly is a declaration the contract cannot enforce
+        // on a hash), so "members do not post" only holds if readers cut here.
+        // Members-only mode needs nothing: there the publish key never reaches
+        // a plain member.
+        if (channel.readOnly && !streamId.endsWith(StreamConstants.SUFFIX_KEYS)
+            && !isReadOnlyWriter(channel, gate, signer)) {
+            Log.w(TAG, "gated: $signer is not a writer on read-only $streamId — dropping")
+            return null
         }
         return signer
     }
+
+    /**
+     * Owner + moderators, the only writers a read-only gate has. The owner is
+     * the stream namespace, so the common case needs no chain read at all.
+     *
+     * Cold cache decides NO and fills in the background: deciding yes would
+     * make the cut cosmetic, since the first render is the one that matters.
+     * The cost is a moderator's message staying hidden until the read lands
+     * and the channel is opened again.
+     */
+    private fun isReadOnlyWriter(channel: Channel, gate: String, signer: String): Boolean {
+        if (signer == channel.messageStreamId.substringBefore('/').lowercase()) return true
+        val key = "$gate:$signer"
+        gateWriterCache[key]?.let { return it }
+        scope.launch {
+            val moderator = try {
+                bridge.call("gateIsModerator", JSONObject()
+                    .put("gate", gate).put("user", signer), 30_000)
+                    .optBoolean("moderator", false)
+            } catch (e: Exception) { return@launch }   // unread ≠ not a writer
+            gateWriterCache[key] = moderator
+            if (moderator) Log.i(TAG, "gated: $signer is a moderator — reopen to see their messages")
+        }
+        return false
+    }
+
+    private val gateWriterCache = java.util.concurrent.ConcurrentHashMap<String, Boolean>()
 
     private fun startPresence(channel: Channel) = presence.startPresence(channel)
 

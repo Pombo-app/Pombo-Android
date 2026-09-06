@@ -84,4 +84,28 @@ class GatedAuthorTest {
     fun `a clone-published admin message from a non-admin is dropped`() {
         assertNull(h.manager.gatedAuthor(channel(), adminId, meta(gate, stranger)))
     }
+    /**
+     * Read-only, Everyone mode: the gate grants publish to every member (the
+     * contract sees a hash, never a stream), so a member CAN put a message on
+     * the wire. Only readers can hold "members do not post".
+     */
+    @Test
+    fun `on a read-only channel a member is not an author`() {
+        val ro = channel().copy(readOnly = true)
+        assertNull(h.manager.gatedAuthor(ro, streamId, meta(gate, stranger)))
+    }
+
+    @Test
+    fun `the owner still writes their own read-only channel`() {
+        val ro = channel().copy(readOnly = true)
+        assertEquals(owner, h.manager.gatedAuthor(ro, streamId, meta(gate, owner)))
+    }
+
+    /** The keys stream is the members' own: a read-only gate never cuts it. */
+    @Test
+    fun `a member key message survives on a read-only channel`() {
+        val ro = channel().copy(readOnly = true)
+        val keysId = StreamConstants.deriveKeysId(streamId)
+        assertEquals(stranger, h.manager.gatedAuthor(ro, keysId, meta(gate, stranger)))
+    }
 }
