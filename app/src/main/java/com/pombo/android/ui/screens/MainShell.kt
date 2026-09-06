@@ -233,7 +233,8 @@ fun MainShell(vm: AppViewModel) {
         ) {
             PillMenuAnchor(visible = settingsMenu, anchorX = settingsAnchorX, width = 200.dp) {
                 SettingsDropdown(
-                    current = SettingsPanel.entries[settingsPager.currentPage],
+                    current = SettingsPanel.entries[settingsPager.currentPage]
+                        .takeIf { tab == Tab.SETTINGS },
                     // Guests have no inbox to sync to, so the web hides this.
                     syncRow = if (!isGuest) ({ SyncDevicesRow(vm) }) else null
                 ) { panel ->
@@ -243,7 +244,7 @@ fun MainShell(vm: AppViewModel) {
                 }
             }
             PillMenuAnchor(visible = exploreMenu, anchorX = exploreAnchorX, width = 220.dp) {
-                ExploreDropdown {
+                ExploreDropdown(threadsActive = tab == Tab.EXPLORE) {
                     exploreMenu = false
                     tab = Tab.EXPLORE
                     vm.setChatOrigin(com.pombo.android.AppViewModel.ChatOrigin.EXPLORE)
@@ -573,22 +574,33 @@ private fun AboutDialog(onDismiss: () -> Unit) {
  * nothing on tap, same behaviour the user asked for.
  */
 @Composable
-private fun ExploreDropdown(onPickThreads: () -> Unit) {
+private fun ExploreDropdown(
+    /** False off the Explore tab: the highlight says where you are. */
+    threadsActive: Boolean,
+    onPickThreads: () -> Unit
+) {
     // Card chrome (shape, fill, caret, animation) lives in PillMenuAnchor.
     Column {
         Row(
             Modifier.fillMaxWidth()
-                .background(Color.White.copy(alpha = 0.08f), RoundedCornerShape(8.dp))
+                .background(
+                    if (threadsActive) Color.White.copy(alpha = 0.08f) else Color.Transparent,
+                    RoundedCornerShape(8.dp)
+                )
                 .clickableNoRipple(onPickThreads)
                 .padding(horizontal = 12.dp, vertical = 8.dp),
             verticalAlignment = Alignment.CenterVertically
         ) {
             Icon(
                 Icons.Outlined.ChatBubbleOutline, contentDescription = null,
-                tint = Color.White.copy(alpha = 0.90f), modifier = Modifier.size(16.dp)
+                tint = Color.White.copy(alpha = 0.40f), modifier = Modifier.size(16.dp)
             )
             Spacer(Modifier.width(8.dp))
-            Text("Threads", color = Color.White.copy(alpha = 0.90f), fontSize = 13.sp)
+            Text(
+                "Threads",
+                color = Color.White.copy(alpha = if (threadsActive) 0.90f else 0.60f),
+                fontSize = 13.sp
+            )
         }
         Row(
             Modifier.fillMaxWidth()
@@ -617,7 +629,8 @@ private fun ExploreDropdown(onPickThreads: () -> Unit) {
 /** Web .pill-settings-dropdown — opens upward from the Settings pill item. */
 @Composable
 private fun SettingsDropdown(
-    current: SettingsPanel,
+    /** Null off the Settings tab: the highlight says where you are. */
+    current: SettingsPanel?,
     syncRow: (@Composable () -> Unit)? = null,
     onPick: (SettingsPanel) -> Unit
 ) {

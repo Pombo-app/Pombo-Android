@@ -163,7 +163,7 @@ internal fun ExploreTab(vm: AppViewModel, onCreate: () -> Unit, onConnect: () ->
         LazyColumn(
             Modifier.fillMaxSize(),
             contentPadding = androidx.compose.foundation.layout.PaddingValues(
-                start = 14.dp, end = 14.dp, bottom = PILL_NAV_BOTTOM_OFFSET + PILL_NAV_HEIGHT + 12.dp
+                start = 16.dp, end = 16.dp, bottom = PILL_NAV_BOTTOM_OFFSET + PILL_NAV_HEIGHT + 12.dp
             )
         ) {
         item {
@@ -418,12 +418,10 @@ private fun ExploreLanguageFilter(selected: String, onPick: (String) -> Unit) {
 }
 
 /**
- * Explore cards run slightly tighter than the web's type scale — the sizes are
- * a straight port of the Tailwind classes, which were set for a desktop-first
- * card. One factor for every text in the card (and its line heights), so the
- * internal proportions stay exactly as designed and a future nudge is one line.
+ * One factor for every text in the card (and its line heights), so a nudge to
+ * the card's type scale stays one line and the internal proportions hold.
  */
-private const val EXPLORE_TEXT_SCALE = 0.92f
+private const val EXPLORE_TEXT_SCALE = 1.0f
 private val Number.exp get() = (toFloat() * EXPLORE_TEXT_SCALE).sp
 
 @Composable
@@ -444,7 +442,7 @@ private fun ExploreCard(
             .background(Color.White.copy(alpha = 0.05f), RoundedCornerShape(16.dp))
             .border(1.dp, Color.White.copy(alpha = 0.07f), RoundedCornerShape(16.dp))
             .clickableNoRipple(onOpen)
-            .padding(14.dp)
+            .padding(16.dp)
     ) {
         Row(verticalAlignment = Alignment.Top) {
             // Channel thumb: `rounded-full`, 56×56, avatar fallback at 0.5.
@@ -495,8 +493,9 @@ private fun ExploreCard(
                     // `text-base text-white/40 mt-1 line-clamp-2`
                     Spacer(Modifier.height(4.dp))
                     Text(
-                        ch.description, color = Color.White.copy(alpha = 0.40f),
-                        fontSize = 16.exp, lineHeight = 21.exp, maxLines = 2
+                        collapseWhitespace(ch.description), color = Color.White.copy(alpha = 0.40f),
+                        fontSize = 16.exp, lineHeight = 21.exp, maxLines = 2,
+                        overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis
                     )
                 }
                 if (ch.lastText.isNotEmpty()) {
@@ -506,14 +505,17 @@ private fun ExploreCard(
                     val ensLabel = ch.lastSenderAddress.takeIf { it.isNotEmpty() }
                         ?.let { ensNames[it.lowercase()] }
                     Text(
-                        "${ensLabel ?: ch.lastSender}: ${ch.lastText}",
+                        "${ensLabel ?: ch.lastSender}: ${collapseWhitespace(ch.lastText)}",
                         color = Color.White.copy(alpha = 0.50f), fontSize = 14.exp,
                         lineHeight = 18.exp, maxLines = 3,
+                        overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis,
                         modifier = Modifier.padding(start = 12.dp)
                     )
                 }
             }
-            // Web: a chevron on the right of every card, `w-4 h-4 text-white/15`.
+            // Web: a chevron on the right of every card, `w-4 h-4 text-white/15`,
+            // with the row's `gap-3` between it and the text.
+            Spacer(Modifier.width(12.dp))
             Icon(
                 Icons.AutoMirrored.Filled.KeyboardArrowRight, contentDescription = null,
                 tint = Color.White.copy(alpha = 0.15f),
@@ -532,7 +534,7 @@ private fun ExploreCard(
         // and no orphaned lone badge. Subscribe = recurring (accent-tinted
         // verb); Hold = mere possession, "in your wallet" = "you pay nothing".
         if (ch.gateVerb != null || tags.isNotEmpty() || ch.wireIdentity != null) {
-            Spacer(Modifier.height(6.dp))
+            Spacer(Modifier.height(12.dp))
             Box(Modifier.fillMaxWidth()) {
                 ch.gateVerb?.let { verb ->
                     Column(

@@ -2771,6 +2771,15 @@ internal fun addressColor(address: String): Color =
 internal fun shortAddress(address: String): String =
     if (address.length > 10) address.take(6) + "…" + address.takeLast(4) else address
 
+private val WHITESPACE_RUN = Regex("\\s+")
+
+/**
+ * One line's worth of a message body. HTML collapses runs of whitespace and a
+ * Compose Text does not, so a message with blank lines in it would spend the
+ * preview's line budget rendering them.
+ */
+internal fun collapseWhitespace(text: String): String = text.replace(WHITESPACE_RUN, " ").trim()
+
 /** True when two epoch millis fall on the same calendar day. */
 internal fun sameDay(a: Long, b: Long): Boolean {
     val f = SimpleDateFormat("yyyyMMdd", Locale.getDefault())

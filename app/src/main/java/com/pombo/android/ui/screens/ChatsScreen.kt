@@ -891,8 +891,9 @@ private fun ChannelListItem(
             preview?.let { p ->
                 val ensLabel = p.senderAddress.takeIf { it.isNotEmpty() }
                     ?.let { ensNames[it.lowercase()] }
+                val body = collapseWhitespace(p.text)
                 Text(
-                    if (channel.type == "dm") p.text else "${ensLabel ?: p.sender}: ${p.text}",
+                    if (channel.type == "dm") body else "${ensLabel ?: p.sender}: $body",
                     color = PomboColors.TextDim, fontSize = 11.sp, maxLines = 1,
                     overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis
                 )
