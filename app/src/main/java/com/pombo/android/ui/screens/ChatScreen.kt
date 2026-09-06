@@ -224,6 +224,8 @@ fun ChatScreen(vm: AppViewModel) {
         // created the channel — see ChannelManager.canModerate. Channel Details
         // reads the same flag, so both surfaces agree on what this account can do.
         val canModerate by vm.canModerate.collectAsState()
+        val moderatesGate by vm.moderatesGate.collectAsState()
+        val rosterNames by vm.rosterNames.collectAsState()
         val myAddr = vm.address.collectAsState().value
 
         if (showInfo) ChannelSettingsSheet(vm, ch, canModerate) { showInfo = false }
@@ -240,7 +242,9 @@ fun ChatScreen(vm: AppViewModel) {
         // only revoking on-chain publish, so everything the member had already
         // posted stayed on screen — the moderation action looked like it had
         // done nothing to the existing conversation.
-        val banned by vm.bannedMembers.collectAsState()
+        // A ban carries the epoch it starts from, so what its author wrote
+        // before it stays: silencing someone is not erasing their year.
+        val banned by vm.banSince.collectAsState()
         // Both of these are remembered on their real inputs. The filter used to
         // run unmemoized, allocating a new list on every recomposition — which
         // meant the `remember(visible)` key below never matched and the whole
@@ -249,7 +253,12 @@ fun ChatScreen(vm: AppViewModel) {
         // here than in the PWA.
         val visible = remember(messages, hidden, banned, loadingInitial) {
             if (loadingInitial) emptyList()
-            else messages.filter { it.id !in hidden && it.sender.lowercase() !in banned }
+            else messages.filter { msg ->
+                if (msg.id in hidden) return@filter false
+                val lower = msg.sender.lowercase()
+                if (lower !in banned) return@filter true
+                !com.pombo.android.core.ModComposition.banHides(banned[lower], msg.epoch)
+            }
         }
         val groups = remember(visible) { buildMessageGroups(visible) }
         // Only one message shows its action triggers at a time (web: .message-active).
@@ -670,6 +679,23 @@ fun ChatScreen(vm: AppViewModel) {
                         activeId = activeId,
                         onActivate = { id -> activeId = if (activeId == id) null else id },
                         isContact = { addr -> contacts.any { it.address.equals(addr, ignoreCase = true) } },
+                        displayName = { m ->
+                            // ENS > contact nickname > roster name > senderName >
+                            // address. The roster name and senderName are the same
+                            // kind of claim, so between those two the most recent
+                            // wins; the roster is what names a member who never
+                            // wrote in the channel.
+                            val nickname = contacts.firstOrNull {
+                                it.address.equals(m.sender, ignoreCase = true)
+                            }?.nickname?.takeIf { it.isNotBlank() }
+                            val announced = rosterNames[m.sender.lowercase()]
+                            m.ensName ?: nickname ?: when {
+                                announced != null && m.senderName != null ->
+                                    if (announced.second >= m.timestamp) announced.first else m.senderName
+                                announced != null -> announced.first
+                                else -> m.senderName ?: shortAddress(m.sender)
+                            }
+                        },
                         onReact = { id, emoji, add -> vm.toggleReaction(id, emoji, add) },
                         onReply = { m -> editTarget = null; replyTarget = m; activeId = null },
                         onEdit = { m ->
@@ -683,7 +709,11 @@ fun ChatScreen(vm: AppViewModel) {
                         onBan = { addr, client, protocol -> vm.banMemberLevels(addr, client, protocol) },
                         banGated = ch.type == "gated",
                         canClientBan = myAddr?.lowercase() ==
+                            (ch.createdBy ?: ch.messageStreamId.substringBefore('/')).lowercase() ||
+                            moderatesGate,
+                        canProtocolBan = ch.type == "gated" && myAddr?.lowercase() ==
                             (ch.createdBy ?: ch.messageStreamId.substringBefore('/')).lowercase(),
+                        moderatesGate = moderatesGate,
                         onAddContact = { addr -> vm.addContact(addr, null) },
                         onSendDm = { addr -> vm.startDm(addr) },
                         onRemoveContact = { addr -> vm.removeContact(addr) },
@@ -930,17 +960,21 @@ fun ChatScreen(vm: AppViewModel) {
             }
         }
 
-        // A read-only channel grants public subscribe but not publish, so a
-        // send here fails at the network layer with nothing shown to the user.
-        // The web disables the field and swaps the placeholder
-        // (PreviewModeUI.js:390-392); we only ever rendered a label.
-        // Expired subscription cuts the composer too: the transport would
-        // still accept the publish (sticky membership), but honest receivers
-        // drop it at ingest — writing into that void is a trap, not a feature.
+        // A read-only channel only lets its writers post: the owner always,
+        // and on gated channels the moderators too — the same condition the
+        // gate's isValidSignature applies at ingest, so the composer never
+        // promises a publish the network would refuse.
+        // Expired subscription cuts the composer too: honest receivers drop
+        // the message at ingest — writing into that void is a trap.
         val subExpired = paidStatus?.let {
             it.paidUntil * 1000L <= System.currentTimeMillis() && !it.accessNow
         } == true
-        val canPost = (!ch.readOnly || ch.createdBy?.equals(myAddr, ignoreCase = true) == true) &&
+        var readOnlyWriter by remember(ch.messageStreamId) { mutableStateOf(false) }
+        LaunchedEffect(ch.messageStreamId, ch.readOnly) {
+            readOnlyWriter = ch.readOnly && ch.type == "gated" && vm.canManageGate()
+        }
+        val canPost = (!ch.readOnly || readOnlyWriter ||
+            ch.createdBy?.equals(myAddr, ignoreCase = true) == true) &&
             !subExpired
         ChatComposer(
             input = composerInput,

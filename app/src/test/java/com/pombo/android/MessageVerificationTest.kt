@@ -117,12 +117,13 @@ class MessageVerificationTest {
         assertNull(msg()!!.verified)
     }
 
-    /** The replay guard: a FRESH message whose clock is far off is refused. */
+    /** A future-dated payload never reaches the list: the §3.6 ingest clamp
+     *  drops it before verification could even badge it. */
     @Test
     fun `a fresh message with a wildly wrong timestamp is refused`() {
         recovers(peer)
         text(timestamp = System.currentTimeMillis() + ChannelManager.TIMESTAMP_TOLERANCE_MS * 2)
-        assertEquals(false, msg()!!.verified)
+        assertNull(msg())
     }
 
     /**

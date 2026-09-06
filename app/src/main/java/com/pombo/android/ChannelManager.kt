@@ -62,7 +62,7 @@ data class ExploreChannel(
     val gateValue: String? = null,
     val gateQualifier: String? = null,
     /** Author visibility from metadata `m` ('members' | 'everyone'). */
-    val authorMode: String? = null
+    val wireIdentity: String? = null
 )
 
 /** Quoted message carried by a reply (web: msg.replyTo). */
@@ -103,7 +103,9 @@ data class UiMessage(
      */
     val file: com.pombo.android.core.MediaController.FileMetadata? = null,
     /** Persistent File Sharing announce (wire type `storage_file_announce`). */
-    val storageFile: com.pombo.android.core.StorageMedia.StorageFileMetadata? = null
+    val storageFile: com.pombo.android.core.StorageMedia.StorageFileMetadata? = null,
+    /** Epoch the message was written under (gated channels), from its kid. */
+    val epoch: Int? = null
 )
 
 /**
@@ -115,7 +117,7 @@ class ChannelManager(
     internal val store: ChannelStore,
     internal val scope: CoroutineScope,
     internal val myAddress: () -> String?,
-    private val myPrivateKey: () -> String?,
+    internal val myPrivateKey: () -> String?,
     internal val myUsername: () -> String?,
     /** Persistent caches so cold starts paint before the network answers. */
     internal val imageStore: com.pombo.android.core.ChannelImageStore,
@@ -180,15 +182,26 @@ class ChannelManager(
                 "Unknown channel for $keysStreamId — cannot publish keys")
             val gate = channel.gateAddress ?: throw IllegalStateException(
                 "Gate address unknown for ${channel.messageStreamId} — cannot publish keys")
+            // Split by CADENCE, not by key type: announces (one per
+            // rotation) keep P0 to themselves, requests and the wraps that
+            // answer them go to P1. Sharing one partition let the churn push
+            // the announces out of the read window, leaving a new device
+            // unable to learn the anchor everything else depends on.
+            val t = data.optString("t")
+            val partition = if (t == StreamConstants.KEY_ANNOUNCE || t == StreamConstants.PUB_ANNOUNCE)
+                StreamConstants.P_KEY_EXCHANGE else StreamConstants.P_REQUESTS
             bridge.call("publishAsGate", JSONObject()
                 .put("streamId", keysStreamId)
-                .put("partition", StreamConstants.P_KEY_EXCHANGE)
+                .put("partition", partition)
                 .put("content", data)
                 .put("gateAddress", gate))
         },
         resendKeys = { keysStreamId ->
             val entries = mutableListOf<com.pombo.android.core.EpochKeyManager.Entry>()
             val gatedChannel = channelByStream(keysStreamId)?.takeIf { it.type == "gated" }
+            // Two partitions, two cadences: P0 holds the announces, P1 the
+            // requests and the wraps that answer them.
+            for (part in listOf(StreamConstants.P_KEY_EXCHANGE, StreamConstants.P_REQUESTS)) {
             try {
                 // Raw: skips the SDK's validation/ordering pipeline. Gap
                 // filling rides the mesh, so on a half-connected node an
@@ -197,7 +210,7 @@ class ChannelManager(
                 // (recoverSigner) — raw always travels with it.
                 val res = bridge.call("resend", JSONObject()
                     .put("streamId", keysStreamId)
-                    .put("partition", StreamConstants.P_KEY_EXCHANGE)
+                    .put("partition", part)
                     .put("last", 1000)
                     .put("raw", gatedChannel != null)
                     .put("recoverSigner", gatedChannel != null), 30_000)
@@ -223,6 +236,7 @@ class ChannelManager(
                 // No storage attached yet / empty stream — an empty list is
                 // the correct cold start ("no announces")
                 Log.d(TAG, "keys resend empty (${e.message})")
+            }
             }
             entries
         },
@@ -266,7 +280,30 @@ class ChannelManager(
                 true
             }
         },
+        mayHoldPublishKey = { messageStreamId, requester ->
+            val channel = channelByStream(messageStreamId)
+            val gate = channel?.takeIf { it.type == "gated" }?.gateAddress
+            if (gate == null) true
+            else try {
+                val info = bridge.call("gateInfo", JSONObject().put("gate", gate))
+                if (!info.optBoolean("readOnly", false)) true
+                else info.optString("owner").equals(requester, ignoreCase = true) ||
+                    gateOwnerOrModerator(gate, requester)
+            } catch (e: Exception) {
+                // Unreadable gate fails CLOSED for the write capability
+                Log.w(TAG, "publish-key role check failed — withholding it: ${e.message}")
+                false
+            }
+        },
+        pubKeyBlockedForSelf = { messageStreamId -> messageStreamId in pubKeyBlocked },
+        // Only a preview lives outside _channels (channelByStream falls back to
+        // _current for it) — membership in the persisted list is the signal,
+        // not _isPreview, whose flip can race the async hello.
+        isPreviewChannel = { messageStreamId ->
+            _channels.value.none { it.messageStreamId == messageStreamId }
+        },
         myPrivateKey = myPrivateKey,
+        myUsername = myUsername,
         publishRoster = { keysStreamId, data ->
             val channel = channelByStream(keysStreamId) ?: throw IllegalStateException(
                 "Unknown channel for $keysStreamId — cannot publish roster")
@@ -317,7 +354,7 @@ class ChannelManager(
             channelByStream(messageStreamId)?.let { sendWakeSignal(it, kind = "keys") }
         },
         sharedPublishFor = { messageStreamId ->
-            channelByStream(messageStreamId)?.authorMode == "members"
+            channelByStream(messageStreamId)?.wireIdentity == "sealed"
         }
     )
 
@@ -454,10 +491,14 @@ class ChannelManager(
                             "No epoch key for ${channel.messageStreamId} — cannot send media")
                     // Members-only: pieces travel under the SHARED key — the
                     // clone path would stamp the sender's account onto them.
-                    if (channel.authorMode == "members") {
-                        val pub = epochKeys.publishKeyFor(channel.messageStreamId)
+                    if (channel.wireIdentity == "sealed") {
+                        // The -2 is participation, so it rides the
+                        // INTERACTIONS key — media coordination keeps working
+                        // for a member who may not post.
+                        val pub = epochKeys.interactionsKeyFor(channel.messageStreamId)
+                            ?: epochKeys.publishKeyFor(channel.messageStreamId)
                             ?: throw IllegalStateException(
-                                "No publish key for ${channel.messageStreamId} — cannot send media on a Members-only channel")
+                                "No interactions key for ${channel.messageStreamId} — cannot send media on a Members-only channel")
                         bridge.publishBinary(
                             ephemeralStreamId,
                             StreamConstants.EPH_MEDIA_DATA,
@@ -663,6 +704,13 @@ class ChannelManager(
     val hiddenIds: StateFlow<Set<String>> = _hiddenIds.asStateFlow()
     private val _bannedMembers get() = admin._bannedMembers
     val bannedMembers: StateFlow<Set<String>> = _bannedMembers.asStateFlow()
+    /** account -> (name, when they announced it), from the -4 roster. */
+    private val _rosterNames = MutableStateFlow<Map<String, Pair<String, Long>>>(emptyMap())
+    val rosterNames: StateFlow<Map<String, Pair<String, Long>>> = _rosterNames.asStateFlow()
+
+    private val _banSince get() = admin._banSince
+    /** address -> epoch each ban starts from; null hides everything. */
+    val banSince: StateFlow<Map<String, Int?>> = _banSince.asStateFlow()
 
     private val adminRevs get() = admin.adminRevs
     private val adminTs get() = admin.adminTs
@@ -816,6 +864,9 @@ class ChannelManager(
     private var presenceJob: Job?
         get() = presence.presenceJob
         set(value) { presence.presenceJob = value }
+    /** Member catch-up sweep for the open channel. */
+    private var memberCatchUpJob: Job? = null
+
     private var adminPollJob: Job?
         get() = admin.adminPollJob
         set(value) { admin.adminPollJob = value }
@@ -965,6 +1016,35 @@ class ChannelManager(
     fun hasPublicMetadata(channel: Channel): Boolean = channel.exposure == "visible"
 
     /**
+     * Whether a rename writes on-chain — the question behind the gas warning,
+     * the confirmation prompt and the write itself, so all three have to
+     * answer it the same way.
+     *
+     * The local flag is checked first and the chain settles the rest: a
+     * channel the registry lists under a name is public whatever this device
+     * happens to think, and believing the stale flag is what turned an
+     * owner's rename into a silent local one. The corrected exposure is kept,
+     * so this costs one lookup per channel and the UI stops disagreeing with
+     * itself. An unreachable Graph falls back to the local flag.
+     */
+    suspend fun writesMetadataOnChain(channel: Channel): Boolean {
+        if (channel.type == "dm") return false
+        if (hasPublicMetadata(channel)) return true
+        val info = try {
+            com.pombo.android.core.GraphApi.getChannelInfo(channel.messageStreamId)
+        } catch (e: Exception) { null } ?: return false
+        if (info.name.isNullOrEmpty()) return false
+        val fixed = channel.copy(exposure = info.exposure.ifEmpty { "visible" })
+        _channels.value = _channels.value.map {
+            if (it.messageStreamId == fixed.messageStreamId) fixed else it
+        }
+        store.save(_channels.value)
+        if (_current.value?.messageStreamId == fixed.messageStreamId) _current.value = fixed
+        Log.i(TAG, "rename: chain says this channel is named publicly — exposure corrected")
+        return true
+    }
+
+    /**
      * Renames / re-describes the channel (web: streamr.js updateStreamMetadata).
      * Owner-only. Visible channels: a single on-chain transaction (gas).
      * Hidden channels: LOCAL rename only, propagated by sync like a DM's.
@@ -972,7 +1052,7 @@ class ChannelManager(
     suspend fun updateChannelMetadata(name: String?, description: String?) {
         val channel = _current.value ?: throw IllegalStateException("No channel open")
         if (!amOwner(channel)) throw IllegalStateException("Only the channel admin can edit the channel")
-        if (hasPublicMetadata(channel)) {
+        if (writesMetadataOnChain(channel)) {
             val args = JSONObject().put("streamId", channel.messageStreamId)
             name?.trim()?.takeIf { it.isNotEmpty() }?.let { args.put("name", it) }
             description?.let { args.put("description", it.trim()) }
@@ -1016,6 +1096,14 @@ class ChannelManager(
 
             var next = channel
             if (!info.name.isNullOrEmpty() && info.name != channel.name) next = next.copy(name = info.name)
+            // Exposure comes from the chain too, and it decides real things:
+            // whether a rename costs gas, warns about it and reaches everyone
+            // else. A record that says hidden about a channel the registry
+            // lists turns the owner's rename into a local one, silently — and
+            // that is the state every channel created before the flag is in.
+            if (info.exposure.isNotEmpty() && info.exposure != channel.exposure) {
+                next = next.copy(exposure = info.exposure)
+            }
             // Hidden channels keep their description off-chain, so only trust
             // the on-chain one for visible channels.
             if (info.exposure == "visible" && info.description != channel.description) {
@@ -1062,8 +1150,7 @@ class ChannelManager(
         val moderator: Boolean,
         val access: Boolean,
         val banned: Boolean,
-        val everMember: Boolean,
-        val erased: Boolean,
+        val allowed: Boolean,
         val paidUntil: Long
     )
 
@@ -1071,7 +1158,7 @@ class ChannelManager(
 
     suspend fun gateBannedMembers(): List<String> = admin.gateBannedMembers()
 
-    private suspend fun rotateForPendingBans(channel: Channel) = admin.rotateForPendingBans(channel)
+    private suspend fun rotateForLostAccess(channel: Channel) = admin.rotateForLostAccess(channel)
 
     suspend fun channelMembers(): List<MemberRow> = admin.channelMembers()
 
@@ -1127,6 +1214,9 @@ class ChannelManager(
     suspend fun removeMember(address: String) = admin.removeMember(address)
 
     suspend fun rekeyPublishKey(): Int = admin.rekeyPublishKey()
+    suspend fun rotateEpochManual() = admin.rotateEpochManual()
+
+    suspend fun nextRotationAt(): Long? = admin.nextRotationAt()
 
     suspend fun streamPermissions(): List<com.pombo.android.core.GraphApi.StreamPermission> = admin.streamPermissions()
 
@@ -1156,7 +1246,8 @@ class ChannelManager(
         val onMessage: Boolean,
         val onAdmin: Boolean,
         val onKeys: Boolean = false,
-        /** False on channels with no -4, where onKeys can never be true. */
+        val onInteractions: Boolean = false,
+        /** False on channels with no -4/-5, where those can never be true. */
         val hasKeys: Boolean = false,
         /**
          * False when a stream lookup failed. Absence then proves nothing, and
@@ -1166,7 +1257,8 @@ class ChannelManager(
         val allStreamsRead: Boolean = true
     ) {
         val partial: Boolean get() =
-            allStreamsRead && !(onMessage && onAdmin && (!hasKeys || onKeys))
+            allStreamsRead &&
+                !(onMessage && onAdmin && (!hasKeys || (onKeys && onInteractions)))
     }
 
     data class StorageInfo(
@@ -1176,6 +1268,7 @@ class ChannelManager(
         val storageDays: Int?,
         val adminStorageDays: Int? = null,
         val keysStorageDays: Int? = null,
+        val interactionsStorageDays: Int? = null,
         /** False when the stored streams hold different retentions. */
         val retentionInSync: Boolean = true,
         val hasKeysStream: Boolean = false
@@ -1200,11 +1293,9 @@ class ChannelManager(
     }
 
     private suspend fun readStoredStreams(channel: Channel): List<StoredStream> {
-        val kinds = listOf("message", "admin", "keys")
-        return storedStreams(channel).mapIndexed { i, id ->
+        return storedStreamsByKind(channel).map { (id, kind) ->
             val res = streamStorage(id)
-            StoredStream(id, kinds.getOrElse(i) { "extra" }, res != null,
-                res?.first ?: emptyList(), res?.second)
+            StoredStream(id, kind, res != null, res?.first ?: emptyList(), res?.second)
         }
     }
 
@@ -1278,7 +1369,7 @@ class ChannelManager(
     }
 
     /**
-     * Every stored stream of the channel: -1, -3, and -4 on gated. The
+     * Every stored stream of the channel: -1, -3, -5, and -4 on gated. The
      * ephemeral -2 never has storage by design, and the DM inbox is an
      * account-level stream rather than part of any one conversation.
      */
@@ -1288,20 +1379,29 @@ class ChannelManager(
             channel.keysStreamId.ifEmpty { StreamConstants.deriveKeysId(channel.messageStreamId) }
         } else ""
 
+        val interactionsStreamId = if (channel.type != "dm") {
+            channel.interactionsStreamId.ifEmpty {
+                StreamConstants.deriveInteractionsId(channel.messageStreamId)
+            }
+        } else ""
+
         val msg = streamStorage(channel.messageStreamId)
         val admin = if (channel.adminStreamId.isNotEmpty()) streamStorage(channel.adminStreamId) else null
         val keys = if (keysStreamId.isNotEmpty()) streamStorage(keysStreamId) else null
+        val inter = if (interactionsStreamId.isNotEmpty()) streamStorage(interactionsStreamId) else null
 
         val (msgNodes, days) = msg ?: (emptyList<String>() to null)
         val (adminNodes, adminDays) = admin ?: (emptyList<String>() to null)
         val (keysNodes, keysDays) = keys ?: (emptyList<String>() to null)
+        val (interNodes, interDays) = inter ?: (emptyList<String>() to null)
 
         val hasKeys = keysStreamId.isNotEmpty()
         // Every stream we are comparing has to have actually answered before
         // a node's absence from one of them means anything.
         val allStreamsRead = msg != null &&
             (channel.adminStreamId.isEmpty() || admin != null) &&
-            (!hasKeys || keys != null)
+            (!hasKeys || keys != null) &&
+            (interactionsStreamId.isEmpty() || inter != null)
         val byAddr = linkedMapOf<String, StorageNode>()
         fun mark(addresses: List<String>, set: (StorageNode) -> StorageNode) {
             addresses.forEach { n ->
@@ -1314,20 +1414,22 @@ class ChannelManager(
         mark(msgNodes) { it.copy(onMessage = true) }
         mark(adminNodes) { it.copy(onAdmin = true) }
         mark(keysNodes) { it.copy(onKeys = true) }
+        mark(interNodes) { it.copy(onInteractions = true) }
 
         val nodes = byAddr.values.toList()
         // A lookup that times out reads as "not known", which is silence the
         // panel cannot distinguish from agreement — so say what came back.
-        Log.i(TAG, "Storage info: retention=[message=$days admin=$adminDays keys=$keysDays] " +
-            "inSync=${retentionInSync(days, adminDays, keysDays)} hasKeys=$hasKeys " +
-            "allRead=$allStreamsRead nodes=${nodes.size}")
+        Log.i(TAG, "Storage info: retention=[message=$days admin=$adminDays keys=$keysDays " +
+            "interactions=$interDays] inSync=${retentionInSync(days, adminDays, keysDays, interDays)} " +
+            "hasKeys=$hasKeys allRead=$allStreamsRead nodes=${nodes.size}")
         return StorageInfo(
             enabled = nodes.isNotEmpty(),
             nodes = nodes,
             storageDays = days,
             adminStorageDays = adminDays,
             keysStorageDays = keysDays,
-            retentionInSync = retentionInSync(days, adminDays, keysDays),
+            interactionsStorageDays = interDays,
+            retentionInSync = retentionInSync(days, adminDays, keysDays, interDays),
             hasKeysStream = hasKeys
         )
     }
@@ -1402,7 +1504,9 @@ class ChannelManager(
         val updated = channel.copy(
             storageDays = if (settled("message")) days else channel.storageDays,
             adminStorageDays = if (settled("admin")) days else channel.adminStorageDays,
-            keysStorageDays = if (settled("keys")) days else channel.keysStorageDays
+            keysStorageDays = if (settled("keys")) days else channel.keysStorageDays,
+            interactionsStorageDays =
+                if (settled("interactions")) days else channel.interactionsStorageDays
         )
         if (updated != channel) {
             _channels.value = _channels.value.map {
@@ -1436,16 +1540,26 @@ class ChannelManager(
         val keysDays = if (keysId.isNotEmpty()) {
             com.pombo.android.core.GraphApi.streamRetention(keysId)
         } else null
+        val interId = if (channel.type != "dm") {
+            channel.interactionsStreamId.ifEmpty {
+                StreamConstants.deriveInteractionsId(channel.messageStreamId)
+            }
+        } else ""
+        val interDays = if (interId.isNotEmpty()) {
+            com.pombo.android.core.GraphApi.streamRetention(interId)
+        } else null
 
         val current = _channels.value.firstOrNull { it.messageStreamId == channel.messageStreamId }
             ?: channel
         val updated = current.copy(
             adminStorageDays = adminDays ?: current.adminStorageDays,
-            keysStorageDays = keysDays ?: current.keysStorageDays
+            keysStorageDays = keysDays ?: current.keysStorageDays,
+            interactionsStorageDays = interDays ?: current.interactionsStorageDays
         )
         // One line per open: the sweep that consumes these is headless and
         // silent, so a wrong value is invisible until the announces are gone.
-        Log.d(TAG, "Stream retentions read=[admin=$adminDays keys=$keysDays] " +
+        Log.d(TAG, "Stream retentions read=[admin=$adminDays keys=$keysDays " +
+            "interactions=$interDays] " +
             "using=[message=${updated.storageDays} admin=${adminRetentionDays(updated)} " +
             "keys=${keysRetentionDays(updated)}]")
         if (updated == current) return current
@@ -1465,8 +1579,9 @@ class ChannelManager(
     }
 
     /**
-     * Full streamr.js createStream flow: 3 streams serially (nonce),
-     * permissions per type, storage on -1/-3, password challenge on -3/P2.
+     * Full streamr.js createStream flow: every stream serially (nonce),
+     * permissions per type, storage on all but the ephemeral -2, password
+     * challenge on -3/P2.
      */
     suspend fun createChannel(
         name: String,
@@ -1498,7 +1613,7 @@ class ChannelManager(
         /** PAID: subscription period in SECONDS. */
         gateDuration: Long? = null,
         /** Author visibility for gated channels ('members' | 'everyone'), IMMUTABLE. */
-        authorMode: String = "members",
+        wireIdentity: String = "sealed",
         /** Called once per on-chain step so the UI can drive the progress ring. */
         onProgress: () -> Unit = {}
     ): Channel {
@@ -1507,12 +1622,17 @@ class ChannelManager(
 
         // Gated (N-C): the gate clone comes FIRST — its address goes into the
         // -1 metadata and receives every stream grant. One factory tx; the
-        // creator becomes the gate owner and is everMember from block one.
-        // N-D: the mode and its params come from the caller — the UI already
-        // validated them against PomboGate.initialize's per-mode rules (a bad
-        // combination reverts InvalidParams after the deploy gas was spent).
+        // creator becomes the gate owner. The identity mode and the read-only
+        // flag are immutable fields of the clone — the contract is the
+        // authority on both; the metadata flags written below are cached
+        // copies. N-D: the mode and its params come from the caller — the UI
+        // already validated them against PomboGate.initialize's per-mode rules
+        // (a bad combination reverts InvalidParams after the deploy gas was
+        // spent).
         val gateAddress: String? = if (type == "gated") {
             val createArgs = JSONObject().put("mode", gateMode)
+                .put("wireIdentity", if (wireIdentity == "sealed") 1 else 0)
+                .put("readOnly", readOnly)
             gateToken?.let { createArgs.put("token", it) }
             gateMinBalance?.let { createArgs.put("minBalance", it) }
             gatePrice?.let { createArgs.put("price", it) }
@@ -1527,14 +1647,23 @@ class ChannelManager(
 
         // Members-only author visibility (the default for gated): mint the
         // SHARED publish key now so its address rides the permission batch.
-        val sharedPub = if (type == "gated" && authorMode == "members")
+        val sharedPub = if (type == "gated" && wireIdentity == "sealed")
             epochKeys.mintPublishKey() else null
+        // The second shared key: same mechanics, wider distribution. Every
+        // member holds it, read-only included — it carries the -5 (reactions)
+        // and the -2 (presence), so participating never depends on being
+        // allowed to post.
+        val interactionsPub = if (type == "gated" && wireIdentity == "sealed")
+            epochKeys.mintInteractionsKey() else null
 
         val base = "${addr.lowercase()}/${PomboCrypto.randomHex(8)}"
         val messageStreamId = "$base${StreamConstants.SUFFIX_MESSAGE}"
         val ephemeralStreamId = "$base${StreamConstants.SUFFIX_EPHEMERAL}"
         val adminStreamId = "$base${StreamConstants.SUFFIX_ADMIN}"
         val keysStreamId = "$base${StreamConstants.SUFFIX_KEYS}"
+        // Interactions (-5): reactions, where members participate without
+        // publishing on -1 — what lets a read-only channel still have them.
+        val interactionsStreamId = "$base${StreamConstants.SUFFIX_INTERACTIONS}"
         // Closed channels are never discoverable: exposure is forced to
         // 'hidden' — honouring a caller-supplied 'visible' would publish the
         // channel name and description in PLAINTEXT on-chain metadata for a
@@ -1565,6 +1694,7 @@ class ChannelManager(
         val ephMeta = JSONObject().put("a", "pombo").put("v", "1").put("ln", messageStreamId)
         val admMeta = JSONObject().put("a", "pombo").put("v", "1").put("ln", messageStreamId).put("k", "admin")
         val keysMeta = JSONObject().put("a", "pombo").put("v", "1").put("ln", messageStreamId).put("k", "keys")
+        val interMeta = JSONObject().put("a", "pombo").put("v", "1").put("ln", messageStreamId).put("k", "interactions")
 
         // Streams SERIALLY (parallel causes on-chain nonce conflicts) with retries
         createStreamRetry(messageStreamId, msgMeta.toString(), StreamConstants.MSG_PARTITIONS); onProgress()
@@ -1576,6 +1706,11 @@ class ChannelManager(
         if (type == "gated") {
             createStreamRetry(keysStreamId, keysMeta.toString(), StreamConstants.KEYS_PARTITIONS); onProgress()
         }
+        // Interactions (-5): every channel type. Permissions are per stream,
+        // so a read-only channel that keeps reactions on the -1 loses them
+        // along with the ability to post; and off the -1 a last-N read
+        // comes back with conversation instead of emoji.
+        createStreamRetry(interactionsStreamId, interMeta.toString(), StreamConstants.INTERACTIONS_PARTITIONS); onProgress()
 
         val publicRW = JSONArray().put(JSONObject().put("public", true).put("permissions", JSONArray(listOf("subscribe", "publish"))))
         val publicRead = JSONArray().put(JSONObject().put("public", true).put("permissions", JSONArray(listOf("subscribe"))))
@@ -1584,6 +1719,8 @@ class ChannelManager(
                 setPermissionsRetry(messageStreamId, if (readOnly) publicRead else publicRW); onProgress()
                 setPermissionsRetry(ephemeralStreamId, publicRW); onProgress()   // presence needs public publish
                 setPermissionsRetry(adminStreamId, publicRead); onProgress()     // publish is the owner\x27s by ownership
+                // Read-only means members do not POST; reacting stays theirs.
+                setPermissionsRetry(interactionsStreamId, publicRW); onProgress()
             }
             "gated" -> {
                 // ONE grantee for every stream: the gate clone (N-C, Q7).
@@ -1610,6 +1747,18 @@ class ChannelManager(
                     put(JSONObject().put("userId", sharedPub.address)
                         .put("permissions", JSONArray(listOf("publish"))))
                 } else clonePerms
+                // -5: in Sealed the interactions key publishes (handed to
+                // EVERY member, read-only included — that is what makes
+                // reactions work where messages do not); in Visible the clone
+                // does, like everything else in that mode. The key itself is
+                // minted by the interactions-key work; until then Sealed
+                // falls back to the clone.
+                val interactionPerms = if (interactionsPub != null) JSONArray().apply {
+                    put(JSONObject().put("userId", gateAddress)
+                        .put("permissions", JSONArray(listOf("subscribe"))))
+                    put(JSONObject().put("userId", interactionsPub.address)
+                        .put("permissions", JSONArray(listOf("publish"))))
+                } else clonePerms
                 val cloneSubOnly = JSONObject()
                     .put("userId", gateAddress)
                     .put("permissions", JSONArray(listOf("subscribe")))
@@ -1623,10 +1772,23 @@ class ChannelManager(
                     put(JSONObject().put("public", true)
                         .put("permissions", JSONArray(listOf("subscribe"))))
                 } else JSONArray().put(cloneSubOnly)
+                // The -2 is where everyone PARTICIPATES — presence, typing,
+                // media coordination — so it carries the interactions key
+                // beside the content one. Without that grant a read-only
+                // member is invisible, and so is everyone else: the transport
+                // rejects the key those paths actually use.
+                val ephemeralPerms = if (interactionsPub != null) JSONArray().apply {
+                    for (i in 0 until contentPerms.length()) put(contentPerms.get(i))
+                    put(JSONObject().put("userId", interactionsPub.address)
+                        .put("permissions", JSONArray(listOf("publish"))))
+                } else contentPerms
                 setPermissionsRetry(messageStreamId, contentPerms); onProgress()
-                setPermissionsRetry(ephemeralStreamId, contentPerms); onProgress()
+                setPermissionsRetry(ephemeralStreamId, ephemeralPerms); onProgress()
                 setPermissionsRetry(adminStreamId, adminPerms); onProgress()
                 setPermissionsRetry(keysStreamId, clonePerms); onProgress()
+                // -5 carries the interactions key in Sealed (every member
+                // publishes under it) and the clone in Visible.
+                setPermissionsRetry(interactionsStreamId, interactionPerms); onProgress()
                 // Initial members: ONE gate transaction. Failure is non-fatal
                 // (the owner re-adds from the members UI).
                 if (members.isNotEmpty()) {
@@ -1641,11 +1803,11 @@ class ChannelManager(
             }
         }
 
-        // Storage on the -1 and -3 streams (never the ephemeral one).
+        // Storage on every stream but the ephemeral one.
         // Storage failure is NOT fatal: the web logs and continues so the user
         // still gets a working channel, just without retained history
         // (channels.js:418-420). Letting retry() throw here would abort a
-        // creation whose three streams are already paid for on-chain.
+        // creation whose streams are already paid for on-chain.
         val storageNode = if (storageProvider == "custom" && !customStorageAddress.isNullOrBlank())
             customStorageAddress else STORAGE_NODE
         var storageOk = true
@@ -1656,6 +1818,7 @@ class ChannelManager(
         var msgDays: Int? = null
         var admDays: Int? = null
         var keyDays: Int? = null
+        var interDays: Int? = null
         try { msgDays = addStorageRetry(messageStreamId, storageNode, storageDays) } catch (e: Exception) {
             storageOk = false
             Log.w(TAG, "Storage on -1 failed; continuing without history: ${e.message}")
@@ -1675,10 +1838,17 @@ class ChannelManager(
             }
             onProgress()
         }
+        // -5 needs storage in every channel type: reactions must persist,
+        // which is why they could not live on the storage-less -2.
+        try { interDays = addStorageRetry(interactionsStreamId, storageNode, storageDays) } catch (e: Exception) {
+            Log.w(TAG, "Storage on -5 failed; reactions will not persist: ${e.message}")
+        }
+        onProgress()
         val missingRetention = listOfNotNull(
             if (storageOk && msgDays == null) "-1" else null,
             if (admDays == null) "-3" else null,
-            if (type == "gated" && keyDays == null) "-4" else null
+            if (type == "gated" && keyDays == null) "-4" else null,
+            if (interDays == null) "-5" else null
         )
         if (missingRetention.isNotEmpty()) {
             Log.w(TAG, "Retention not applied on ${missingRetention.joinToString(", ")} — " +
@@ -1703,6 +1873,7 @@ class ChannelManager(
             ephemeralStreamId = ephemeralStreamId,
             adminStreamId = adminStreamId,
             keysStreamId = if (type == "gated") keysStreamId else "",
+            interactionsStreamId = interactionsStreamId,
             name = name,
             type = type,
             createdBy = addr,
@@ -1719,6 +1890,7 @@ class ChannelManager(
             storageDays = msgDays,
             adminStorageDays = admDays,
             keysStorageDays = keyDays,
+            interactionsStorageDays = interDays,
             exposure = effectiveExposure,
             description = if (visible) description else "",
             language = if (visible) language else "",
@@ -1726,10 +1898,11 @@ class ChannelManager(
             classification = classification ?: if (type == "gated") "personal" else null,
             readOnly = readOnly,
             gateAddress = gateAddress,
-            authorMode = if (type == "gated") authorMode else null
+            wireIdentity = if (type == "gated") wireIdentity else null
         )
         addChannel(channel)
         sharedPub?.let { epochKeys.adoptPublishKey(messageStreamId, it) }
+        interactionsPub?.let { epochKeys.adoptInteractionsKey(messageStreamId, it) }
         return channel
     }
 
@@ -1843,7 +2016,7 @@ class ChannelManager(
         var exposure = "hidden"
         var descriptionMeta = ""
         var gateAddress: String? = null
-        var metaAuthorMode: String? = null
+        var metaWireIdentity: String? = null
         var netNamed = false
         var metaRead = false
         try {
@@ -1863,7 +2036,7 @@ class ChannelManager(
                     // Author visibility (immutable `m` flag): it has to be
                     // right BEFORE the first publish — joining a Members-only
                     // channel as Everyone would put the account on the wire.
-                    metaAuthorMode = if (meta.optInt("m") == 1) "members" else "everyone"
+                    metaWireIdentity = if (meta.optInt("m") == 1) "sealed" else "visible"
                 }
             }
         } catch (e: Exception) { /* metadata is optional */ }
@@ -1874,6 +2047,7 @@ class ChannelManager(
 
         // Gated (N-C): stream permissions belong to the gate clone, never to
         // members — the join gate is the CONTRACT. One cached eth_call.
+        var gateReadOnly = false
         if (gateAddress != null) {
             type = "gated"
             val me = myAddress() ?: throw IllegalStateException("No identity")
@@ -1883,6 +2057,17 @@ class ChannelManager(
                 // Typed for the UI (N-D): the gate entry screen reads the mode
                 // on-chain and offers pay() instead of a toast.
                 throw GateAccessDenied(gateAddress)
+            }
+            // The contract is the authority on the identity mode and the
+            // read-only flag; the metadata `m`/`r` are mutable copies. It has
+            // to be right BEFORE the first publish — joining a Sealed channel
+            // as Visible would put the account on the wire.
+            try {
+                val info = bridge.call("gateInfo", JSONObject().put("gate", gateAddress))
+                metaWireIdentity = if (info.optString("wireIdentityName") == "sealed") "sealed" else "visible"
+                gateReadOnly = info.optBoolean("readOnly", false)
+            } catch (e: Exception) {
+                Log.w(TAG, "gateInfo unreadable at join — keeping the metadata flags: ${e.message}")
             }
             canPublish = true
             canSubscribe = true
@@ -1910,13 +2095,13 @@ class ChannelManager(
             name = name,
             type = resolvedType,
             gateAddress = gateAddress,
-            authorMode = if (resolvedType == "gated") (metaAuthorMode ?: "everyone") else null,
+            wireIdentity = if (resolvedType == "gated") (metaWireIdentity ?: "visible") else null,
             joinedAt = System.currentTimeMillis(),
             password = if (resolvedType == "password") password else null,
             exposure = exposure,
             description = descriptionMeta,
             classification = classification,
-            readOnly = !canPublish && canSubscribe,
+            readOnly = if (resolvedType == "gated") gateReadOnly else !canPublish && canSubscribe,
             writeOnly = canPublish && !canSubscribe
         )
         addChannel(channel)
@@ -1951,6 +2136,7 @@ class ChannelManager(
         /** Password channels seal P0 payloads; without it every entry is skipped. */
         password: String? = null
     ): com.pombo.android.core.LatestMessageStore.Preview? {
+        val isDmStream = channelByStream(messageStreamId)?.type == "dm"
         return try {
             // Resends need a live client; without this the call fails instantly
             // on a cold start and the preview silently never appears.
@@ -1976,6 +2162,12 @@ class ChannelManager(
                 val entry = arr.optJSONObject(i) ?: continue
                 val content = decrypted.getOrNull(i) as? JSONObject ?: continue
                 val ts = entry.optJSONObject("meta")?.optLong("timestamp") ?: 0L
+                // Same forged-timestamp clamp the ingest funnel applies — this resend does
+                // not pass through it, and a dropped message must not surface
+                // through the preview line either.
+                val pTs = content.optLong("timestamp", 0L)
+                if (pTs > 0 && (pTs > System.currentTimeMillis() + TIMESTAMP_TOLERANCE_MS ||
+                        (ts > 0 && pTs > ts + TIMESTAMP_TOLERANCE_MS))) continue
                 // account = proof ? recovered wallet : publisherId — covers all
                 // three eras: new messages (proof), legacy (publisherId = the
                 // wallet) and reactions (no sender field at all). The legacy
@@ -1989,8 +2181,12 @@ class ChannelManager(
                     "image" -> "[image]"
                     "video_announce" -> "[video]"
                     "file_announce", "storage_file_announce" -> "[file]"
-                    // Removals are not previewable (web filters them upstream).
-                    "reaction" -> if (content.optString("action") == "remove") null
+                    // A reaction is not what was said here last, and on a
+                    // channel with a -5 this window never holds one anyway.
+                    // DMs keep theirs: no -5 there, and the local path is the
+                    // only one that feeds them. Removals are never previewable.
+                    "reaction" -> if (!isDmStream
+                        || content.optString("action") == "remove") null
                         else "reacted with ${content.optString("emoji")}"
                     else -> null
                 } ?: continue
@@ -2011,11 +2207,10 @@ class ChannelManager(
      * subscription only for the channel on screen.
      *
      * The two outputs need DIFFERENT filters, which is the easy thing to get
-     * wrong here. A reaction is a legitimate preview ("reacted with 🎉") but is
-     * not a new message, so it must not raise the badge; `image_chunk` is pure
-     * transport and is neither. Web `isContentMessage`: text/message, image
-     * with an imageId, video_announce with metadata — never reaction, edit or
-     * delete.
+     * wrong here. An edit is a legitimate preview but is not a new message, so
+     * it must not raise the badge; `image_chunk` is pure transport and is
+     * neither. Web `isContentMessage`: text/message, image with an imageId,
+     * video_announce with metadata — never reaction, edit or delete.
      */
     suspend fun scanChannelActivity(channel: Channel) {
         val streamId = channel.messageStreamId
@@ -2051,6 +2246,12 @@ class ChannelManager(
                 // the same entries forever (web does the same).
                 if (ts > maxTs) maxTs = ts
 
+                // Forged-timestamp clamp — a message the ingest funnel would drop must not
+                // count for the preview or the unread badge.
+                val pTs = content.optLong("timestamp", 0L)
+                if (pTs > 0 && (pTs > System.currentTimeMillis() + TIMESTAMP_TOLERANCE_MS ||
+                        (ts > 0 && pTs > ts + TIMESTAMP_TOLERANCE_MS))) continue
+
                 // Same rule as fetchLatestPreview: identity from the proof-
                 // resolved account, publisherId fallback for the legacy eras.
                 val senderAddr = attachAccount(content, meta?.optString("publisherId"))
@@ -2062,7 +2263,9 @@ class ChannelManager(
                     "image" -> "[image]"
                     "video_announce" -> "[video]"
                     "file_announce", "storage_file_announce" -> "[file]"
-                    "reaction" -> if (content.optString("action") == "remove") null
+                    // Same rule as the preview above: DMs only.
+                    "reaction" -> if (channel.type != "dm"
+                        || content.optString("action") == "remove") null
                         else "reacted with ${content.optString("emoji")}"
                     else -> null
                 }
@@ -2169,7 +2372,9 @@ class ChannelManager(
         val canPublish: Boolean = false,
         val canGrant: Boolean = false,
         val canEdit: Boolean = false,
-        val canDelete: Boolean = false
+        val canDelete: Boolean = false,
+        /** Moderates the gate without holding any stream permission. */
+        val moderatesGate: Boolean = false
     )
 
     private val _perms get() = admin._perms
@@ -2178,6 +2383,15 @@ class ChannelManager(
     /** Convenience for the moderation surfaces, which all key off DELETE. */
     val canModerate: StateFlow<Boolean> = _perms
         .map { it.canDelete }
+        .stateIn(scope, SharingStarted.Eagerly, false)
+
+    /**
+     * Kept apart from [canModerate]: a moderator hides and bans, but the
+     * surfaces that flow from DELETE — storage, renaming, the danger zone —
+     * stay the owner's.
+     */
+    val moderatesGate: StateFlow<Boolean> = _perms
+        .map { it.moderatesGate }
         .stateIn(scope, SharingStarted.Eagerly, false)
 
     private fun refreshModerationPermission(channel: Channel, preview: Boolean) =
@@ -2347,6 +2561,88 @@ class ChannelManager(
     suspend fun pinMessage(messageId: String, pin: Boolean) = admin.pinMessage(messageId, pin)
 
     suspend fun banMember(address: String, ban: Boolean = true) = admin.banMember(address, ban)
+
+    /**
+     * Member catch-up on a gated channel: a periodic RAW resend of the keys
+     * stream and of the message stream while the channel is open.
+     *
+     * A member's delivery has two soft spots the owner's does not. Their
+     * KEY_REQUEST is dropped by the responders' live subscription — the SDK
+     * validates on the subscribing edge, and a read-only channel's contract
+     * refuses a member's signature — so keys land only when a responder
+     * sweeps; and a live subscription on a thin mesh can silently deliver
+     * less than the stream holds, the same reason every resend here is raw.
+     *
+     * Pure catch-up: everything replays through the ordinary ingest, which
+     * dedupes by message id.
+     */
+    private fun startMemberCatchUp(channel: Channel, generation: Int) {
+        memberCatchUpJob?.cancel()
+        if (channel.type != "gated" || channel.gateAddress == null) return
+        val me = myAddress()?.lowercase() ?: return
+        val owner = (channel.createdBy ?: channel.messageStreamId.substringBefore('/')).lowercase()
+        if (me == owner) return
+        memberCatchUpJob = scope.launch {
+            while (isActive) {
+                delay(MEMBER_CATCHUP_INTERVAL_MS)
+                if (!stillCurrent(generation)) return@launch
+                val keysId = channel.keysStreamId.ifEmpty {
+                    StreamConstants.deriveKeysId(channel.messageStreamId)
+                }
+                try {
+                    epochKeys.ensureChannelKeys(
+                        channel.messageStreamId, keysId,
+                        keysRetentionDays(channel),
+                        allowMint = false, memberCount = channel.members.size)
+                } catch (e: Exception) {
+                    Log.d(TAG, "member catch-up: key sweep failed: ${e.message}")
+                }
+                if (!stillCurrent(generation)) return@launch
+                val page = fetchHistoryPage(
+                    channel, StreamConstants.P_MESSAGES, MEMBER_CATCHUP_COUNT, 20_000, 30_000)
+                    ?: continue
+                if (!stillCurrent(generation)) return@launch
+                for (i in 0 until page.entries.length()) {
+                    val entry = page.entries.optJSONObject(i) ?: continue
+                    val meta = entry.optJSONObject("meta") ?: JSONObject()
+                    handleContent(
+                        channel, page.contents[i], meta,
+                        historical = true, generation = generation)
+                }
+            }
+        }
+    }
+
+    /**
+     * The roster's names for the open channel. Read once per open: it is a
+     * resend, and the names only change when someone renames.
+     */
+    private suspend fun loadRosterNames(channel: Channel, generation: Int) {
+        val keysId = channel.keysStreamId.ifEmpty {
+            StreamConstants.deriveKeysId(channel.messageStreamId)
+        }
+        val members = try {
+            epochKeys.rosterMembers(channel.messageStreamId, keysId)
+        } catch (e: Exception) { return }
+        if (!stillCurrent(generation)) return
+        _rosterNames.value = members.mapNotNull { m ->
+            m.name?.let { m.account to (it to m.ts) }
+        }.toMap()
+    }
+
+    /** A rename has to reach the roster of every gated channel we hold. */
+    suspend fun republishHelloForRename() {
+        val gated = _channels.value.filter { it.type == "gated" }.map {
+            it.messageStreamId to it.keysStreamId.ifEmpty {
+                StreamConstants.deriveKeysId(it.messageStreamId)
+            }
+        }
+        epochKeys.republishHelloForRename(gated)
+    }
+    /** Moderator deltas the owner has not confirmed yet. */
+    fun pendingModActions(): Int = admin.pendingModActions()
+
+    suspend fun absorbModActions() = admin.absorbModActions()
 
     suspend fun banMemberLevels(address: String, client: Boolean, protocol: Boolean) =
         admin.banMemberLevels(address, client, protocol)
@@ -3212,7 +3508,14 @@ class ChannelManager(
         // Both halves are already in hand: sent from local storage, received
         // from the inbox history the router replayed on connect. No fetching
         // here — that is exactly the web's loadDMTimeline.
-        val sent = sentDmStore.load(channel.messageStreamId).mapNotNull { toUiMessage(it, me) }
+        // A record in the sent slice is one of MINE by definition, so one
+        // naming another account landed in the wrong slice — an old build
+        // filed a received message there and the device sync carried it to
+        // every device since. It is not shown, whatever put it there; a record
+        // that names nobody predates the account field and is kept.
+        val sent = sentDmStore.load(channel.messageStreamId)
+            .mapNotNull { toUiMessage(it, me) }
+            .filter { dmTimelineKeeps(it.sender, me) }
 
         // NO resend here. The inbox replay is a once-per-session job owned by
         // [subscribeMyInbox]; everything it routed is already in [dmReceived],
@@ -3227,7 +3530,11 @@ class ChannelManager(
         // bounded.
         inboxSubscribeJob?.join()
         if (!stillCurrent(generation)) return
+        // Keyed by the recovered sender, so this is already the peer's — the
+        // filter is the same invariant as above, stated once for both halves:
+        // a conversation shows my messages and this peer's, nothing else.
         val receivedNow = synchronized(dmReceived) { dmReceived[peer]?.toList() ?: emptyList() }
+            .filter { dmTimelineKeeps(it.sender, peer) }
 
         val merged = (sent + receivedNow)
             .distinctBy { it.id }
@@ -3629,7 +3936,90 @@ class ChannelManager(
     fun openChannel(messageStreamId: String) {
         val channel = _channels.value.find { it.messageStreamId == messageStreamId } ?: return
         unreadStore.clear(messageStreamId)
+        reconcileGateAuthority(channel)
         openInternal(channel, preview = false)
+    }
+
+    /**
+     * The CONTRACT is the authority on the identity mode and the read-only
+     * flag (v3 immutable fields); the -1 metadata copies are mutable and even
+     * erasable by a failed rename. Reconciled once per session, best-effort.
+     * On read-only channels it also settles whether THIS account may hold the
+     * shared publish key, so a plain member stops requesting it.
+     */
+    private val gateAuthorityChecked = java.util.Collections.synchronizedSet(HashSet<String>())
+    internal val pubKeyBlocked = java.util.Collections.synchronizedSet(HashSet<String>())
+
+    internal fun reconcileGateAuthority(channel: Channel) {
+        if (channel.type != "gated") return
+        val gate = channel.gateAddress ?: return
+        if (!gateAuthorityChecked.add(channel.messageStreamId)) return
+        scope.launch {
+            try {
+                val info = bridge.call("gateInfo", JSONObject().put("gate", gate))
+                val mode = if (info.optString("wireIdentityName") == "sealed") "sealed" else "visible"
+                val ro = info.optBoolean("readOnly", false)
+                val cur = _channels.value.find { it.messageStreamId == channel.messageStreamId }
+                if (cur != null && (cur.wireIdentity != mode || cur.readOnly != ro)) {
+                    val updated = cur.copy(wireIdentity = mode, readOnly = ro)
+                    _channels.value = _channels.value.map {
+                        if (it.messageStreamId == updated.messageStreamId) updated else it
+                    }
+                    store.save(_channels.value)
+                    if (_current.value?.messageStreamId == updated.messageStreamId) _current.value = updated
+                    Log.i(TAG, "Gate authority corrected the local record: " +
+                        "${channel.messageStreamId.takeLast(20)} → $mode${if (ro) " (read-only)" else ""}")
+                }
+                if (ro) {
+                    val me = myAddress()?.lowercase() ?: return@launch
+                    val mayWrite = info.optString("owner").equals(me, ignoreCase = true) ||
+                        gateOwnerOrModerator(gate, me)
+                    if (mayWrite) pubKeyBlocked.remove(channel.messageStreamId)
+                    else pubKeyBlocked.add(channel.messageStreamId)
+                }
+            } catch (e: Exception) {
+                gateAuthorityChecked.remove(channel.messageStreamId)
+                Log.w(TAG, "Gate authority read failed for ${channel.messageStreamId.takeLast(20)}: ${e.message}")
+            }
+        }
+    }
+
+    /** One states() read: is this address the gate's owner or a moderator? */
+    /** Session cache for the read-only reader cut: (gate|address) -> verdict.
+     *  Same TTL class as the access cache — moderator lists change rarely. */
+    private val roWriterCache = HashMap<String, Pair<Boolean, Long>>()
+
+    private suspend fun readOnlyWriterAllowed(channel: Channel, address: String): Boolean {
+        val gate = channel.gateAddress ?: return false
+        val key = "${gate.lowercase()}|${address.lowercase()}"
+        synchronized(roWriterCache) {
+            roWriterCache[key]?.let { (v, at) ->
+                if (System.currentTimeMillis() - at < 10 * 60_000L) return v
+            }
+        }
+        val allowed = try { gateOwnerOrModerator(gate, address) } catch (e: Exception) {
+            // Fail-open for rendering, like the live access cut: an RPC
+            // hiccup must not hide the owner's own posts.
+            return true
+        }
+        synchronized(roWriterCache) {
+            roWriterCache[key] = allowed to System.currentTimeMillis()
+        }
+        return allowed
+    }
+
+    private suspend fun gateOwnerOrModerator(gate: String, address: String): Boolean {
+        val res = bridge.call("gateMembers", JSONObject()
+            .put("gate", gate)
+            .put("candidates", org.json.JSONArray(listOf(address.lowercase()))), 30_000)
+        val arr = res.optJSONArray("members") ?: return false
+        for (i in 0 until arr.length()) {
+            val m = arr.optJSONObject(i) ?: continue
+            if (m.optString("address").equals(address, ignoreCase = true)) {
+                return m.optBoolean("isOwner") || m.optBoolean("moderator")
+            }
+        }
+        return false
     }
 
     /**
@@ -3735,9 +4125,9 @@ class ChannelManager(
                         .takeIf { Regex("^0x[0-9a-f]{40}$").matches(it) } ?: return@launch
                     // The author-visibility flag lives in the same metadata
                     // and is immutable — repair it together with the gate.
-                    val mode = if (meta.optInt("m") == 1) "members" else "everyone"
+                    val mode = if (meta.optInt("m") == 1) "sealed" else "visible"
                     _channels.value = _channels.value.map {
-                        if (it.messageStreamId == sid) it.copy(gateAddress = g, authorMode = mode) else it
+                        if (it.messageStreamId == sid) it.copy(gateAddress = g, wireIdentity = mode) else it
                     }
                     store.save(_channels.value)
                     if (_current.value?.messageStreamId == sid) {
@@ -3916,7 +4306,7 @@ class ChannelManager(
                         }
                     }
                     if (!stillCurrent(generation)) return@launch
-                    launch { rotateForPendingBans(channel) }
+                    launch { rotateForLostAccess(channel) }
                 }
                 val loads = launch {
                     listOf(
@@ -3952,6 +4342,9 @@ class ChannelManager(
                 // no live subscription, so after the on-open load this poller
                 // is what catches anything the admin_invalidate signal missed.
                 startAdminPoller(channel, generation)
+                // A member's keys and messages need a raw sweep the owner
+                // does not — see [startMemberCatchUp].
+                startMemberCatchUp(channel, generation)
                 // TTL-aware owner republish of the -3 artifacts (web
                 // _ttlRepublishOnOpen; docs/TTL_REPUBLISH_PLAN.md). Runs after
                 // loadAdminState so adminRevs/adminTs and the moderation flows
@@ -3994,6 +4387,8 @@ class ChannelManager(
             _pins.value = emptyList()
             _hiddenIds.value = emptySet()
             _bannedMembers.value = emptySet()
+            _rosterNames.value = emptyMap()
+            admin.clearDeltas()
             val generation = ++switchGeneration
             oldestTimestamp = 0L
             synchronized(this) { pendingOverrides.clear(); deletedIds.clear() }
@@ -4035,6 +4430,21 @@ class ChannelManager(
                 // Keys stream (-4): live epoch-key protocol for gated channels
                 if (isEpochChannel(channel) && channel.keysStreamId.isNotEmpty()) {
                     subscribeQuiet(channel.keysStreamId, StreamConstants.P_KEY_EXCHANGE)
+                    subscribeQuiet(channel.keysStreamId, StreamConstants.P_REQUESTS)
+                }
+                // Interactions (-5): reactions, which moved off the -1 so a
+                // read-only channel can still have them.
+                if (channel.type != "dm") {
+                    subscribeQuiet(
+                        channel.interactionsStreamId.ifEmpty {
+                            StreamConstants.deriveInteractionsId(channel.messageStreamId)
+                        },
+                        StreamConstants.P_REACTIONS)
+                    // Moderation (-1/P2): the moderators' signed deltas. Only
+                    // gated channels have moderators, so nowhere else does
+                    // this partition carry anything.
+                    subscribeQuiet(channel.messageStreamId, StreamConstants.P_MODERATION)
+                    scope.launch { loadRosterNames(channel, generation) }
                 }
                 android.util.Log.d("PomboPerf",
                     "subscribes ${channel.name}: ${System.currentTimeMillis() - tSub}ms")
@@ -4054,6 +4464,7 @@ class ChannelManager(
         val generation = ++switchGeneration
         presenceJob?.cancel(); presenceJob = null
         adminPollJob?.cancel(); adminPollJob = null
+        memberCatchUpJob?.cancel(); memberCatchUpJob = null
         _current.value = null
         _isPreview.value = false
         unsubscribeAll(channel)
@@ -4103,6 +4514,15 @@ class ChannelManager(
         unsubscribeQuiet(channel.ephemeralStreamId, StreamConstants.EPH_CONTROL)
         if (isEpochChannel(channel) && channel.keysStreamId.isNotEmpty()) {
             unsubscribeQuiet(channel.keysStreamId, StreamConstants.P_KEY_EXCHANGE)
+            unsubscribeQuiet(channel.keysStreamId, StreamConstants.P_REQUESTS)
+        }
+        if (channel.type != "dm") {
+            unsubscribeQuiet(
+                channel.interactionsStreamId.ifEmpty {
+                    StreamConstants.deriveInteractionsId(channel.messageStreamId)
+                },
+                StreamConstants.P_REACTIONS)
+            unsubscribeQuiet(channel.messageStreamId, StreamConstants.P_MODERATION)
         }
         if (media.hasActiveTransfers(channel.messageStreamId)) {
             Log.i(TAG, "keeping media partitions alive for ${channel.messageStreamId}")
@@ -4128,6 +4548,15 @@ class ChannelManager(
                 subscribeQuiet(channel.ephemeralStreamId, StreamConstants.EPH_CONTROL)
                 if (isEpochChannel(channel) && channel.keysStreamId.isNotEmpty()) {
                     subscribeQuiet(channel.keysStreamId, StreamConstants.P_KEY_EXCHANGE)
+                    subscribeQuiet(channel.keysStreamId, StreamConstants.P_REQUESTS)
+                }
+                if (channel.type != "dm") {
+                    subscribeQuiet(
+                        channel.interactionsStreamId.ifEmpty {
+                            StreamConstants.deriveInteractionsId(channel.messageStreamId)
+                        },
+                        StreamConstants.P_REACTIONS)
+                    subscribeQuiet(channel.messageStreamId, StreamConstants.P_MODERATION)
                 }
             }
             // Every stream with a live transfer, not just this channel's: the
@@ -4209,7 +4638,7 @@ class ChannelManager(
     }
 
     /**
-     * Delete the channel ON-CHAIN: all three streams, then drop it locally.
+     * Delete the channel ON-CHAIN: every stream, then drop it locally.
      *
      * Distinct from [removeChannel], which only forgets the channel on this
      * device and leaves the streams standing so anyone (including you) can
@@ -4218,6 +4647,10 @@ class ChannelManager(
      * Each stream is deleted separately and failures are collected rather than
      * aborting: a partial delete is a real outcome, and the user needs to know
      * which streams are still out there instead of seeing one generic error.
+     *
+     * @return the streams that are still standing — empty means the channel is
+     *   gone. While that list is non-empty the channel stays on this device,
+     *   because it is the only handle left for deleting the rest.
      */
     suspend fun deleteChannel(messageStreamId: String): List<String> {
         val channel = _channels.value.firstOrNull { it.messageStreamId == messageStreamId }
@@ -4226,14 +4659,11 @@ class ChannelManager(
         if (channel != null && !amOwner(channel)) {
             throw IllegalStateException("Only the channel owner can delete it")
         }
-        val ids = listOfNotNull(
-            messageStreamId,
-            channel?.ephemeralStreamId,
-            channel?.adminStreamId,
-            channel?.takeIf { isEpochChannel(it) }?.let {
-                it.keysStreamId.ifEmpty { StreamConstants.deriveKeysId(messageStreamId) }
-            }
-        ).distinct()
+        // The message stream goes LAST: while it stands the channel still
+        // opens, so a run that dies halfway leaves something the owner can
+        // come back to instead of a husk.
+        val ids = channelStreams(messageStreamId, channel)
+            .sortedBy { if (it == messageStreamId) 1 else 0 }
         val failed = mutableListOf<String>()
         for (id in ids) {
             try {
@@ -4243,11 +4673,11 @@ class ChannelManager(
                 failed.add(id)
             }
         }
-        // Nothing was deleted at all (no gas, RPC down): keep the channel —
-        // forgetting it locally would hide a still fully working channel and
-        // read as success. Partial failure still drops it, because a channel
-        // whose message stream is gone just fails on every open.
-        if (failed.size == ids.size && ids.isNotEmpty()) return failed
+        // Anything left standing keeps the channel here, because dropping it
+        // locally is what makes the leftovers unreachable: the delete screen
+        // is the retry, and deleting again only pays for what is still there
+        // (a stream already gone answers as deleted).
+        if (failed.isNotEmpty()) return failed
         removeChannel(messageStreamId)
         return failed
     }
@@ -4357,11 +4787,14 @@ class ChannelManager(
         partition: Int,
         last: Int,
         budgetMs: Int,
-        timeoutMs: Long
+        timeoutMs: Long,
+        /** Which stream to read; defaults to the channel's -1. Reactions on a
+         *  gated channel come from the -5 instead. */
+        streamId: String = channel.messageStreamId
     ): HistoryPage? = try {
         val t0 = System.currentTimeMillis()
         val args = JSONObject()
-            .put("streamId", channel.messageStreamId)
+            .put("streamId", streamId)
             .put("partition", partition)
             .put("last", last)
             .put("budgetMs", budgetMs)
@@ -4408,6 +4841,8 @@ class ChannelManager(
      * original order means the common case never has to rely on that.
      */
     private suspend fun loadHistory(channel: Channel, generation: Int) {
+        var reactionsPage: HistoryPage? = null
+        var moderationPage: HistoryPage? = null
         val (content, overrides) = coroutineScope {
             val c = async {
                 fetchHistoryPage(
@@ -4418,7 +4853,27 @@ class ChannelManager(
             val o = async {
                 fetchHistoryPage(channel, StreamConstants.P_CONTROL, 50, 20_000, 30_000)
             }
-            c.await() to o.await()
+            // Reactions moved to the -5 — without this read a reopened channel
+            // would render messages with no reactions. Same predicate as the
+            // subscription and the pagination: every channel but a DM.
+            val r = if (channel.type != "dm") async {
+                fetchHistoryPage(
+                    channel, StreamConstants.P_REACTIONS,
+                    StreamConstants.INITIAL_MESSAGES, 20_000, 30_000,
+                    streamId = channel.interactionsStreamId.ifEmpty {
+                        StreamConstants.deriveInteractionsId(channel.messageStreamId)
+                    })
+            } else null
+            // Moderator deltas (-1/P2): what a moderator did while the owner
+            // was away has to be there on open, not only when it happens.
+            val m = if (channel.type == "gated") async {
+                fetchHistoryPage(
+                    channel, StreamConstants.P_MODERATION, 300, 20_000, 30_000)
+            } else null
+            val pair = c.await() to o.await()
+            reactionsPage = r?.await()
+            moderationPage = m?.await()
+            pair
         }
         // The resends can take tens of seconds on a slow network — long enough
         // for several channel switches. Without this the whole of A's history
@@ -4448,6 +4903,26 @@ class ChannelManager(
                 val meta = entry.optJSONObject("meta") ?: JSONObject()
                 handleContent(
                     channel, overrides.contents[i], meta,
+                    historical = true, generation = generation
+                )
+            }
+        }
+        moderationPage?.let { page ->
+            for (i in 0 until page.entries.length()) {
+                val entry = page.entries.optJSONObject(i) ?: continue
+                val meta = entry.optJSONObject("meta") ?: JSONObject()
+                handleContent(
+                    channel, page.contents[i], meta,
+                    historical = true, generation = generation
+                )
+            }
+        }
+        reactionsPage?.let { page ->
+            for (i in 0 until page.entries.length()) {
+                val entry = page.entries.optJSONObject(i) ?: continue
+                val meta = entry.optJSONObject("meta") ?: JSONObject()
+                handleContent(
+                    channel, page.contents[i], meta,
                     historical = true, generation = generation
                 )
             }
@@ -4499,6 +4974,20 @@ class ChannelManager(
                 emptyRetry++
             }
             val overrides = resendOlder(channel.messageStreamId, StreamConstants.P_CONTROL, before, channel.password)
+            // Reactions moved to the -5, so paging only the -1 brings older
+            // messages back stripped of them. Same window; a channel with no
+            // -5 reads as empty and costs one call.
+            val reactionsId = if (channel.type == "dm") "" else {
+                channel.interactionsStreamId.ifEmpty {
+                    StreamConstants.deriveInteractionsId(channel.messageStreamId)
+                }
+            }
+            val reactions = if (reactionsId.isEmpty()) null else try {
+                resendOlder(reactionsId, StreamConstants.P_REACTIONS, before, channel.password)
+            } catch (e: Exception) {
+                Log.d(TAG, "loadMoreHistory: interactions page failed: ${e.message}")
+                null
+            }
 
             // Discard if the user switched channels while we were fetching.
             if (!stillCurrent(generationAtStart)) return 0
@@ -4506,7 +4995,8 @@ class ChannelManager(
             // Content first, then overrides — an edit/delete needs its target
             // present, so each partition gets its own batch rather than one
             // batch around both: the overrides must see the merged content.
-            for (partition in listOf(content, overrides)) {
+            // Reactions last, for the same reason.
+            for (partition in listOf(content, overrides, reactions)) {
                 val arr = partition?.optJSONArray("messages") ?: continue
                 val contents = predecrypt(arr, channel.password)
                 batchingMerges {
@@ -4652,6 +5142,9 @@ class ChannelManager(
     /** Web dedup key `streamId:messageId:emoji:action` -> last send time. */
     private val recentReactions = HashMap<String, Long>()
 
+    /** Interactions streams a publish already proved absent (web `_interactionsMissing`). */
+    private val interactionsMissing = java.util.concurrent.ConcurrentHashMap.newKeySet<String>()
+
     /** channels.js sendReaction format — no signature; authorship = publisherId. */
     suspend fun sendReaction(messageId: String, emoji: String, add: Boolean) {
         val channel = _current.value ?: return
@@ -4681,7 +5174,29 @@ class ChannelManager(
         // stream accepts public publishes, so the emoji and the message it
         // points at were readable by anyone. Seal it like every other DM
         // payload (web sendReaction takes the same branch).
-        publishForChannel(channel, channel.messageStreamId, StreamConstants.P_MESSAGES, reaction)
+        // Reactions live on the -5 in every channel type: it is where
+        // members participate, so a read-only channel still has them and the
+        // -1 goes back to being conversation only. A channel created before
+        // the -5 existed has none, and there the -1/P0 stays the home.
+        val interactionsId = if (channel.type == "dm") "" else {
+            channel.interactionsStreamId.ifEmpty {
+                StreamConstants.deriveInteractionsId(channel.messageStreamId)
+            }
+        }
+        var sent = false
+        if (interactionsId.isNotEmpty() && !interactionsMissing.contains(interactionsId)) {
+            try {
+                publishForChannel(channel, interactionsId, StreamConstants.P_REACTIONS, reaction)
+                sent = true
+            } catch (e: Exception) {
+                if (!STREAM_ABSENT.containsMatchIn(e.message ?: "")) throw e
+                interactionsMissing.add(interactionsId)
+                Log.w(TAG, "No interactions stream on this channel — reacting on the -1")
+            }
+        }
+        if (!sent) {
+            publishForChannel(channel, channel.messageStreamId, StreamConstants.P_MESSAGES, reaction)
+        }
         // A DM reaction goes to the PEER's inbox and never comes back from any
         // resend; a write-only channel is never resubscribed at all. The local
         // record is the only copy (web addSentReaction), and it is a sync
@@ -4849,7 +5364,13 @@ class ChannelManager(
         if (isAdminStream && !isEpochChannel(channel)) {
             return publishContent(streamId, partition, payload, password)
         }
-        if (channel != null && channel.readOnly && streamId == channel.messageStreamId) {
+        // Non-gated read-only: the owner publishes -1 under the account, whose
+        // stream grant is the write restriction. A GATED read-only channel must
+        // NOT take this shortcut — it would skip the epoch layer and go out
+        // under the SDK's own group key, which members cannot open; there the
+        // restriction is the gate's read-only filter, on the epoch path below.
+        if (channel != null && channel.readOnly && !isEpochChannel(channel) &&
+            streamId == channel.messageStreamId) {
             return publishContent(streamId, partition, payload, password)
         }
         // GATED channels (N-A/N-C): encrypt with the channel's epoch key and
@@ -4875,10 +5396,27 @@ class ChannelManager(
             // Fail-closed on both halves: no publish key or no wallet means
             // NO publish, never a fallback to the clone (which would put the
             // account on the wire).
-            val membersOnly = channel.authorMode == "members" && !isAdminStream
+            val membersOnly = channel.wireIdentity == "sealed" && !isAdminStream
+            // Which shared key carries this depends on the STREAM, not on the
+            // author's role: the -1 is where you publish (content key, which a
+            // read-only channel withholds from members) and the -2/-5 is where
+            // you participate (interactions key, held by every member).
+            val participates = streamId != channel.messageStreamId
             var sharedKeyHex: String? = null
             if (membersOnly) {
-                var pub = epochKeys.publishKeyFor(channel.messageStreamId)
+                // The -5 grants publish to the interactions key ALONE, so
+                // there is no falling back to the content key there: the
+                // network would drop the message and the reaction would
+                // vanish with no error. The -2 still accepts both, which is
+                // what keeps channels created before the split working.
+                val interactionsOnly = streamId == channel.interactionsStreamId.ifEmpty {
+                    StreamConstants.deriveInteractionsId(channel.messageStreamId)
+                }
+                var pub = if (participates) {
+                    epochKeys.interactionsKeyFor(channel.messageStreamId)
+                        ?: if (interactionsOnly) null
+                        else epochKeys.publishKeyFor(channel.messageStreamId)
+                } else epochKeys.publishKeyFor(channel.messageStreamId)
                 if (pub == null) {
                     // A member can hold the epoch key (reads decrypt fine)
                     // while the PUB_WRAP never arrived — the epoch-gated
@@ -4899,7 +5437,10 @@ class ChannelManager(
                     } catch (e: Exception) {
                         Log.w(TAG, "publish-key recovery failed", e)
                     }
-                    pub = epochKeys.publishKeyFor(channel.messageStreamId)
+                    pub = if (participates) {
+                        epochKeys.interactionsKeyFor(channel.messageStreamId)
+                            ?: epochKeys.publishKeyFor(channel.messageStreamId)
+                    } else epochKeys.publishKeyFor(channel.messageStreamId)
                 }
                 if (pub == null) throw IllegalStateException(
                     "No publish key for ${channel.messageStreamId} — cannot publish on a Members-only channel (waiting for PUB_WRAP)")
@@ -4982,7 +5523,13 @@ class ChannelManager(
                 // clone, so the admin's own KEY_ANNOUNCE is rejected as
                 // non-admin and its wraps are discarded.
                 (it.type == "gated" &&
-                    StreamConstants.deriveKeysId(it.messageStreamId) == streamId)
+                    StreamConstants.deriveKeysId(it.messageStreamId) == streamId) ||
+                // The -5 must resolve too, or reactions arriving there would
+                // find no channel and be dropped at the funnel. Every type
+                // but a DM has one.
+                (it.type != "dm" &&
+                    (it.interactionsStreamId == streamId ||
+                        StreamConstants.deriveInteractionsId(it.messageStreamId) == streamId))
         }
         // Preview channels live only in _current, never in _channels — the
         // gated paths (epoch ingest, clone transport, gate checks) must still
@@ -5026,11 +5573,18 @@ class ChannelManager(
         val publisher = meta.optString("publisherId").lowercase()
         if (streamId.endsWith(StreamConstants.SUFFIX_ADMIN)) {
             // -3 as the ACCOUNT: the owner publishes the admin stream under
-            // their own address — the transport validated the plain EVM
-            // signature, and the namespace prefix IS the authority. The
+            // their own address, and the namespace prefix IS the authority.
+            // The signature is checked rather than taken on trust: a raw read
+            // skips the SDK validation, and on the gated path the bridge's
+            // envelope-authenticity check does not run either. The
             // clone-published path below stays for pre-switch history.
             val admin = channel.messageStreamId.substringBefore('/').lowercase()
-            if (publisher == admin) return publisher
+            if (publisher == admin) {
+                val signed = meta.optString("signer").lowercase()
+                if (signed == admin) return publisher
+                Log.w(TAG, "gated: -3 envelope not signed by the admin — dropping")
+                return null
+            }
         }
         if (publisher != gate) return null
         val signer = meta.optString("signer").lowercase().ifEmpty { null } ?: run {
@@ -5124,7 +5678,7 @@ class ChannelManager(
             if (content is JSONObject && com.pombo.android.core.EpochKeyCrypto.isEpochEnvelope(content)) {
                 val ch = channelByStream(streamId)
                 if (ch != null && isEpochChannel(ch)) {
-                    val membersOnly = ch.type == "gated" && ch.authorMode == "members"
+                    val membersOnly = ch.type == "gated" && ch.wireIdentity == "sealed"
                     // Everyone-mode gated: the on-wire publisher is the CLONE —
                     // the seeder/leecher identity the media controller needs is
                     // the envelope signer, never the transport publisher.
@@ -5181,7 +5735,14 @@ class ChannelManager(
         val content = try { JSONTokener(contentRaw).nextValue() } catch (e: Exception) { return }
         val isMsgStream = streamId == channel.messageStreamId
         val isEphStream = streamId == channel.ephemeralStreamId
-        if (!isMsgStream && !isEphStream) return
+        // The -5 carries this channel's reactions, so it belongs here as much
+        // as the -1 and the -2 do. Every type but a DM has one, and gating
+        // this on gated dropped every live reaction elsewhere.
+        val isIntStream = channel.type != "dm" && streamId == (
+            channel.interactionsStreamId.ifEmpty {
+                StreamConstants.deriveInteractionsId(channel.messageStreamId)
+            })
+        if (!isMsgStream && !isEphStream && !isIntStream) return
         scope.launch {
             handleContent(
                 channel, content, meta, historical = false,
@@ -5214,7 +5775,7 @@ class ChannelManager(
                 // hash from an AUTHORED announce — the piece carries the
                 // shared address as its identity, and the assembly path
                 // validates bytes by hash exactly as before.
-                val author = if (channel.authorMode == "members") {
+                val author = if (channel.wireIdentity == "sealed") {
                     meta.optString("publisherId").lowercase().ifEmpty { null }
                 } else if (gated) {
                     gatedAuthor(channel, streamId, meta) ?: return@launch
@@ -5371,6 +5932,11 @@ class ChannelManager(
         var innerAuthor: String? = null
         if (com.pombo.android.core.EpochKeyCrypto.isEpochEnvelope(data)) {
             if (!isEpochChannel(channel)) return
+            // The epoch this was written under, read off the kid that travels
+            // in the clear: moderation hides a banned author from their ban
+            // onward, and unlike the payload timestamp this is not theirs to
+            // choose.
+            val kidEpoch = data.optString("k").substringBefore('.').toIntOrNull()
             val keysId = channel.keysStreamId.ifEmpty {
                 StreamConstants.deriveKeysId(channel.messageStreamId)
             }
@@ -5387,13 +5953,25 @@ class ChannelManager(
             // nothing). A sealed message without a valid wrapper has no
             // author and drops; lapsed members cut live, exactly like the
             // Everyone mode cuts them on the envelope signer.
-            if (channel.authorMode == "members") {
+            if (channel.wireIdentity == "sealed") {
                 val opened = com.pombo.android.core.Authorship.open(channel.messageStreamId, data)
                     ?: return
                 if (!historical && !liveGateAccessAllows(channel, opened.author)) return
                 innerAuthor = opened.author
                 data = opened.payload
             }
+            if (kidEpoch != null) data.put("_epoch", kidEpoch)
+        }
+        // Timestamp forgery clamps: the payload timestamp is what the
+        // UI orders and pages by, and the publisher writes it freely. Reject a
+        // payload dated ahead of the wall clock or ahead of its own signed
+        // envelope beyond clock skew. One-sided on purpose: a payload OLDER
+        // than its envelope is a legitimate republish.
+        val payloadTs = data.optLong("timestamp", 0L)
+        if (payloadTs > 0) {
+            val envTs = meta.optLong("timestamp", 0L)
+            if (payloadTs > System.currentTimeMillis() + TIMESTAMP_TOLERANCE_MS) return
+            if (envTs > 0 && payloadTs > envTs + TIMESTAMP_TOLERANCE_MS) return
         }
         // Single gate for every write below — messages, images, reactions and
         // overrides all funnel through here, from both the resend and the live
@@ -5448,6 +6026,31 @@ class ChannelManager(
             signer
         } else meta.optString("publisherId")
         val account = attachAccount(data, author)
+
+        // A moderator's delta: self-contained and verified by its own
+        // signature, so it never depends on who carried it.
+        if (data.optString("t") == com.pombo.android.core.ModAction.TYPE) {
+            admin.ingestModAction(channel, data)
+            return
+        }
+
+        // Read-only is enforced by READERS in Visible channels: the contract
+        // deliberately validates a member's signature (their reactions,
+        // presence and key requests must pass), so a member-authored MESSAGE
+        // on the message stream is dropped here instead — reactions stay. In
+        // Sealed the content-key distribution already makes this unreachable.
+        if (channel.readOnly && channel.type == "gated" &&
+            streamId == channel.messageStreamId &&
+            data.optString("type") != "reaction"
+        ) {
+            val writer = account ?: author
+            if (writer.isNullOrEmpty()) return
+            val ownerAddr = channel.createdBy?.lowercase()
+                ?: channel.messageStreamId.substringBefore('/', "").lowercase()
+            if (!writer.equals(ownerAddr, ignoreCase = true) &&
+                !readOnlyWriterAllowed(channel, writer)
+            ) return
+        }
 
         when (data.optString("type")) {
             "text" -> handleText(channel, data, historical)
@@ -5598,6 +6201,7 @@ class ChannelManager(
             mine = mine,
             ensName = ensStore.cachedName(sender),
             ensAvatar = ensStore.cachedAvatar(sender),
+            epoch = data.optInt("_epoch", -1).takeIf { it >= 0 },
             replyTo = data.optJSONObject("replyTo")?.let {
                 val rid = it.optString("id")
                 if (rid.isEmpty()) null else ReplyRef(
@@ -5824,6 +6428,8 @@ class ChannelManager(
 
     companion object {
         private const val TAG = "PomboChannels"
+        /** A publish rejected because the stream itself is not on chain (web publishReaction). */
+        private val STREAM_ABSENT = Regex("not found|does not exist|NOT_FOUND", RegexOption.IGNORE_CASE)
         /** Canonical wrapped-native on Polygon (WPOL) — bridge `_WRAPPED_NATIVE`. */
         const val WRAPPED_NATIVE = "0x0d500b1d8e8ef31e21c99d1db9a6444d3adf1270"
         /** PomboGate.Mode — ABI order, never reorder (NONE=0, TOKEN=1, NFT=2, PAID=3). */
@@ -5842,6 +6448,12 @@ class ChannelManager(
         const val PREVIEW_PRESENCE_INTERVAL_MS = 20_000L
         /** Web config.js subscriptions.adminPollIntervalMs. */
         const val ADMIN_POLL_INTERVAL_MS = 30_000L
+        /** Web config.js subscriptions.memberCatchUp*. */
+        const val MEMBER_CATCHUP_INTERVAL_MS = 30_000L
+        const val MEMBER_CATCHUP_COUNT = 30
+        /** Allowed clock skew of a payload timestamp ahead of now / of its
+         *  signed envelope (web config gate.timestampSkewMs). One-sided: a
+         *  payload older than its envelope is a legitimate republish. */
         const val TIMESTAMP_TOLERANCE_MS = 5 * 60_000L
         /** Web isRecentMessage: only messages under 30s old get the replay check. */
         const val RECENT_MESSAGE_MS = 30_000L
@@ -5992,13 +6604,66 @@ class ChannelManager(
         fun needsNodeRemove(stream: StoredStream, address: String): Boolean =
             !stream.read || stream.carries(address)
 
-        fun storedStreams(channel: Channel): List<String> = buildList {
-            add(channel.messageStreamId)
-            if (channel.adminStreamId.isNotEmpty()) add(channel.adminStreamId)
+        fun storedStreams(channel: Channel): List<String> =
+            storedStreamsByKind(channel).map { it.first }
+
+        /**
+         * EVERY stream the channel owns, stored or not — what a delete has to
+         * destroy, and the figure the prompt for it must quote. The ephemeral
+         * -2 belongs here and not in [storedStreams]: it is deleted like the
+         * rest, it just never takes storage.
+         */
+        fun channelStreams(messageStreamId: String, channel: Channel?): List<String> =
+            listOfNotNull(
+                messageStreamId,
+                channel?.ephemeralStreamId,
+                channel?.adminStreamId,
+                channel?.takeIf { it.type == "gated" }?.let {
+                    it.keysStreamId.ifEmpty { StreamConstants.deriveKeysId(messageStreamId) }
+                },
+                // The -5 goes too, or the reactions and their paid storage
+                // stay standing after the channel is gone.
+                channel?.takeIf { it.type != "dm" }?.let {
+                    it.interactionsStreamId.ifEmpty {
+                        StreamConstants.deriveInteractionsId(messageStreamId)
+                    }
+                }
+            ).distinct()
+
+        /**
+         * The stored streams paired with what each one is. The kind cannot be
+         * inferred from the position: a channel with no -4 makes the third
+         * entry the -5, and reading the list positionally labelled it "keys".
+         */
+        fun storedStreamsByKind(channel: Channel): List<Pair<String, String>> = buildList {
+            add(channel.messageStreamId to "message")
+            if (channel.adminStreamId.isNotEmpty()) add(channel.adminStreamId to "admin")
             if (channel.type == "gated") {
-                add(channel.keysStreamId.ifEmpty { StreamConstants.deriveKeysId(channel.messageStreamId) })
+                add(channel.keysStreamId.ifEmpty {
+                    StreamConstants.deriveKeysId(channel.messageStreamId)
+                } to "keys")
+            }
+            // Reactions live here, and they have to survive a reopen — which
+            // is why they moved off the storage-less -2. Every type has one.
+            if (channel.type != "dm") {
+                add(channel.interactionsStreamId.ifEmpty {
+                    StreamConstants.deriveInteractionsId(channel.messageStreamId)
+                } to "interactions")
             }
         }
+
+        /**
+         * Does this message belong in the conversation being shown?
+         *
+         * The sent slice holds MY messages and the received one holds this
+         * PEER's, so a record naming anyone else landed in the wrong slice —
+         * an old build filed a received message in the sent one and the state
+         * sync carried it to every device since. A record naming nobody is
+         * kept: the oldest entries predate the account field, and unknown
+         * provenance is not grounds for erasing history.
+         */
+        fun dmTimelineKeeps(sender: String, expected: String): Boolean =
+            sender.isEmpty() || sender.equals(expected, ignoreCase = true)
 
         fun retentionInSync(vararg values: Int?): Boolean {
             val known = values.filterNotNull().filter { it > 0 }

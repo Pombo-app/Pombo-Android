@@ -16,6 +16,8 @@ import com.pombo.android.ChannelManager.GateEntryInfo
 import com.pombo.android.ChannelManager.GateMemberFlags
 import com.pombo.android.ChannelManager.MemberRow
 import com.pombo.android.ChannelManager.Pin
+import com.pombo.android.core.ModAction
+import com.pombo.android.core.ModComposition
 import com.pombo.android.core.PomboCrypto
 import com.pombo.android.core.StreamConstants
 import com.pombo.android.data.Channel
@@ -69,8 +71,26 @@ internal class Moderation(private val manager: ChannelManager) {
     }
 
     internal val _pins = MutableStateFlow<List<Pin>>(emptyList())
+
+    // What the UI renders: the owner's snapshot with the moderators' pending
+    // deltas already folded in. The snapshot itself is kept apart because a
+    // publish must build on the owner's own word, never on the composition.
     internal val _hiddenIds = MutableStateFlow<Set<String>>(emptySet())
     internal val _bannedMembers = MutableStateFlow<Set<String>>(emptySet())
+    /** address -> epoch the ban starts from; null hides everything. */
+    internal val _banSince = MutableStateFlow<Map<String, Int?>>(emptyMap())
+
+    private var snapHidden: Set<String> = emptySet()
+    private var snapBanned: Map<String, Int?> = emptyMap()
+    private var absorbedThrough: Long = 0L
+
+    /** Deltas held for the OPEN channel, keyed to drop duplicates. */
+    internal val deltas = LinkedHashMap<String, JSONObject>()
+    /** Signers already answered by the gate, and which of them moderate. */
+    private val deltaSignersAsked = HashSet<String>()
+    private val deltaModerators = HashSet<String>()
+    /** Signers the gate has answered for, either way. */
+    private val deltaSignersSettled = HashSet<String>()
     /**
      * Last ADMIN_STATE revision applied, keyed by admin stream — NOT a single
      * counter. Revisions are per channel, so one shared field let a late
@@ -114,8 +134,18 @@ internal class Moderation(private val manager: ChannelManager) {
         // knownBanned: the ban drops them from `members` and the roster stops
         // carrying them, so without it a banned address falls out of the
         // candidate set and Moderation loses the entry it exists to show.
+        // On Closed gates the contract's own enumeration completes the set —
+        // candidates no longer depend on what this client happened to see.
+        val onChain = try {
+            val info = bridge.call("gateInfo", JSONObject().put("gate", gate))
+            if (info.optInt("mode", -1) == GATE_MODE_NONE) {
+                val res = bridge.call("gateListMembers", JSONObject().put("gate", gate), 60_000)
+                val arr = res.optJSONArray("members")
+                (0 until (arr?.length() ?: 0)).mapNotNull { arr?.optString(it)?.ifEmpty { null } }
+            } else emptyList()
+        } catch (e: Exception) { emptyList() }
         val candidates = (channel.members + channel.knownBanned +
-            epochKeys.seenRequesters(channel.messageStreamId) + roster)
+            epochKeys.seenRequesters(channel.messageStreamId) + roster + onChain)
             .map { it.lowercase() }.distinct()
         return try {
             val res = bridge.call("gateMembers", JSONObject()
@@ -132,8 +162,7 @@ internal class Moderation(private val manager: ChannelManager) {
                     moderator = m.optBoolean("moderator"),
                     access = m.optBoolean("access"),
                     banned = m.optBoolean("banned"),
-                    everMember = m.optBoolean("everMember"),
-                    erased = m.optBoolean("erased"),
+                    allowed = m.optBoolean("allowed"),
                     paidUntil = m.optLong("paidUntil", 0L)
                 ))
             }
@@ -170,38 +199,57 @@ internal class Moderation(private val manager: ChannelManager) {
         gateMemberFlags().filter { it.banned }.map { it.address }
 
     /**
-     * Rotate the epoch for bans this device never rotated for.
+     * Rotate the epoch for anyone who LOST access since the last sweep —
+     * bans made while the admin was away, expired PAID subscriptions, sold
+     * tokens/NFTs, Closed revokes.
      *
-     * Only the channel admin can announce an epoch, so a moderator's ban cuts
-     * key distribution immediately but leaves the banned member holding the
-     * current key until an admin shows up. Comparing the gate's banned set
-     * with the one we last rotated for closes that window on the admin's next
-     * open, whoever did the banning and whenever. No event scan: free RPCs cap
-     * eth_getLogs at 10k blocks, and the flags read is one we already make.
+     * Only the channel admin can announce an epoch, so a cut elsewhere leaves
+     * the ex-member holding the current key until an admin shows up. The
+     * flags read is the one the members panel already makes; comparing it
+     * with the previous sweep's snapshot closes the window on the admin's
+     * next open. No event scan: free RPCs cap eth_getLogs at 10k blocks.
+     *
+     * Two triggers, deliberately different: a ban rotates even without a
+     * snapshot (explicit intent); anything else only when the address was in
+     * the last snapshot WITH access. A candidate who never had access
+     * (refused requester) never triggers.
      */
-    internal suspend fun rotateForPendingBans(channel: Channel) {
+    internal suspend fun rotateForLostAccess(channel: Channel) {
         if (channel.type != "gated" || channel.gateAddress == null) return
         val me = myAddress()?.lowercase() ?: return
         if (me != channel.messageStreamId.substringBefore('/').lowercase()) return
 
-        val banned = try { gateBannedMembers().map { it.lowercase() } }
-            catch (e: Exception) { return }
-        if (banned.isEmpty()) return
-        val covered = channel.rotatedForBanned.map { it.lowercase() }.toSet()
-        if (banned.all { it in covered }) return
+        val flags = try { gateMemberFlags() } catch (e: Exception) { return }
+        if (flags.isEmpty()) return   // unreadable gate — judge nothing
+
+        val withAccess = flags.filter { it.access }.map { it.address.lowercase() }.toSet()
+        val noAccessNow = flags.filter { !it.access && !it.isOwner }.map { it.address.lowercase() }
+        val bannedNow = flags.filter { it.banned }.map { it.address.lowercase() }
+        val previously = channel.accessSnapshot.map { it.lowercase() }.toSet()
+
+        // Regained access clears the cover, so losing it AGAIN rotates again.
+        val covered = channel.rotatedForNoAccess.map { it.lowercase() }
+            .filterNot { it in withAccess }.toSet()
+
+        val pending = (noAccessNow.filter { it in previously } + bannedNow)
+            .distinct().filterNot { it in covered }
 
         val keysId = channel.keysStreamId.ifEmpty { StreamConstants.deriveKeysId(channel.messageStreamId) }
         try {
-            epochKeys.rotateEpoch(channel.messageStreamId, keysId)
-            val updated = channel.copy(rotatedForBanned = banned)
+            if (pending.isNotEmpty()) {
+                epochKeys.rotateEpoch(channel.messageStreamId, keysId)
+                Log.i(TAG, "Rotated the epoch for lost access (${pending.size} address(es))")
+            }
+            val updated = channel.copy(
+                rotatedForNoAccess = (covered + pending).toList(),
+                accessSnapshot = withAccess.toList())
             _channels.value = _channels.value.map {
                 if (it.messageStreamId == updated.messageStreamId) updated else it
             }
             store.save(_channels.value)
             if (_current.value?.messageStreamId == updated.messageStreamId) _current.value = updated
-            Log.i(TAG, "Rotated the epoch for bans made while the admin was away")
         } catch (e: Exception) {
-            Log.w(TAG, "Deferred rotation for pending bans failed (will retry next open): ${e.message}")
+            Log.w(TAG, "Deferred rotation for lost access failed (will retry next open): ${e.message}")
         }
     }
 
@@ -403,8 +451,8 @@ internal class Moderation(private val manager: ChannelManager) {
     }
 
     /**
-     * Grants a member access on all three streams — sequential, because
-     * parallel on-chain writes from one account collide on the nonce.
+     * Grants a member access on the streams that need a grant — sequential,
+     * because parallel on-chain writes from one account collide on the nonce.
      * Admin stream is subscribe-only: members read moderation, owner writes it.
      */
     suspend fun addMember(address: String) {
@@ -417,9 +465,9 @@ internal class Moderation(private val manager: ChannelManager) {
             throw IllegalStateException("Address is already a member")
         }
 
-        // Gated (N-C): membership is ONE gate transaction — allow() marks the
-        // address allowlisted + everMember. No stream grants: access is proven
-        // per-message via ERC-1271.
+        // Gated (N-C): membership is ONE gate transaction — allow() on the
+        // Closed gate. No stream grants: access is proven per-message via
+        // ERC-1271.
         if (channel.type == "gated") {
             val gate = channel.gateAddress
                 ?: throw IllegalStateException("Gate address unknown (repair pending)")
@@ -467,11 +515,12 @@ internal class Moderation(private val manager: ChannelManager) {
         }
 
         // Gated: removing takes the address off the allowlist WITHOUT the ban
-        // mark, so re-adding later is a plain allow(). The rotation below cuts
-        // their reads, and the contract's sticky isValidSignature keeps their
-        // history readable for everyone else (Q10). Only Closed gates have an
-        // allowlist: elsewhere membership is the asset or the subscription, and
-        // Ban is the only way to cut it.
+        // mark, so re-adding later is a plain allow(). The single gate cuts
+        // their transport at ingest, the rotation below cuts their reads, and
+        // their history stays readable in Pombo clients because reads validate
+        // at ingest and never revalidate. Only Closed gates have an allowlist:
+        // elsewhere membership is the asset or the subscription, and Ban is
+        // the only way to cut it.
         if (channel.type == "gated") {
             val gate = channel.gateAddress
                 ?: throw IllegalStateException("Gate address unknown (repair pending)")
@@ -520,6 +569,24 @@ internal class Moderation(private val manager: ChannelManager) {
     }
 
     /**
+     * Manual epoch rotation (§3.5): issues a new channel key now. Free — no
+     * transaction — unlike [rekeyPublishKey]. Admin only: nobody else's
+     * announce is accepted on -4.
+     */
+    suspend fun rotateEpochManual() {
+        val channel = _current.value?.takeIf { it.type == "gated" }
+            ?: throw IllegalStateException("No gated channel open")
+        val keysId = channel.keysStreamId.ifEmpty { StreamConstants.deriveKeysId(channel.messageStreamId) }
+        epochKeys.rotateEpoch(channel.messageStreamId, keysId)
+    }
+
+    /** When the weekly rotation falls due for the open channel, or null. */
+    suspend fun nextRotationAt(): Long? {
+        val channel = _current.value?.takeIf { it.type == "gated" } ?: return null
+        return epochKeys.nextRotationAt(channel.messageStreamId)
+    }
+
+    /**
      * Replaces the shared publish key of a Members-only channel: grants the
      * new key's address and revokes the old one on `-1`/`-2` (one transaction
      * per stream), then announces the new key on `-4`. Members pick it up
@@ -527,7 +594,7 @@ internal class Moderation(private val manager: ChannelManager) {
      */
     suspend fun rekeyPublishKey(): Int {
         val channel = _current.value ?: throw IllegalStateException("No channel open")
-        check(channel.type == "gated" && channel.authorMode == "members") {
+        check(channel.type == "gated" && channel.wireIdentity == "sealed") {
             "the publish key only exists on Members-only channels"
         }
         val keysId = channel.keysStreamId.ifEmpty { StreamConstants.deriveKeysId(channel.messageStreamId) }
@@ -617,6 +684,12 @@ internal class Moderation(private val manager: ChannelManager) {
     /** streamId -> (address that was checked, verdict). */
     private val permCache = HashMap<String, Pair<String, ChannelPerms>>()
 
+    /** The stream lives under this account's own address, so it created it. */
+    internal fun namespaceOwner(streamId: String, address: String?): Boolean {
+        val ns = streamId.substringBefore('/', "")
+        return ns.isNotEmpty() && ns.equals(address, ignoreCase = true)
+    }
+
     internal fun refreshModerationPermission(channel: Channel, preview: Boolean) {
         val me = myAddress()?.lowercase()
         // A DM has no moderation surface, and a preview is read-only until the
@@ -633,21 +706,45 @@ internal class Moderation(private val manager: ChannelManager) {
         }
         _perms.value = ChannelPerms()
         scope.launch {
-            val verdict = try {
+            // A moderator holds nothing on the stream, so this is a separate
+            // read against the gate.
+            val moderatesGate = channel.gateAddress?.let { gate ->
+                try {
+                    bridge.call("gateIsModerator", JSONObject()
+                        .put("gate", gate).put("user", me), 30_000)
+                        .optBoolean("moderator", false)
+                } catch (e: Exception) { false }
+            } ?: false
+            // null = the read did not answer, which is not the same as "holds
+            // nothing": caching that would hide the owner's own surfaces for
+            // the rest of the session on one RPC miss (web
+            // Membership.preloadDeletePermission takes the same care).
+            val verdict: ChannelPerms? = if (namespaceOwner(key, me)) {
+                // Nobody else can create a stream under my address, so these
+                // are mine by construction — no RPC, and no way for a flaky
+                // one to lock the owner out of their own channel (web
+                // streamr.js hasDeletePermission short-circuits the same way).
+                ChannelPerms(
+                    canPublish = true, canGrant = true, canEdit = true,
+                    canDelete = true, moderatesGate = moderatesGate
+                )
+            } else try {
                 val r = bridge.call("checkPermissions", JSONObject().put("streamId", key), 30_000)
                 ChannelPerms(
                     canPublish = r.optBoolean("canPublish", false),
                     canGrant = r.optBoolean("canGrant", false),
                     canEdit = r.optBoolean("canEdit", false),
-                    canDelete = r.optBoolean("canDelete", false)
+                    canDelete = r.optBoolean("canDelete", false),
+                    moderatesGate = moderatesGate
                 )
             } catch (e: Exception) {
-                // Fail closed: offering actions we cannot perform is worse than
-                // hiding actions the user might have — the former fails at
-                // publish time with nothing to show for it.
+                // Fail closed for THIS render: offering actions we cannot
+                // perform is worse than hiding actions the user might have.
+                // The next open asks again.
                 Log.w(TAG, "Permission check failed for $key: ${e.message}")
-                ChannelPerms()
+                null
             }
+            if (verdict == null) return@launch
             permCache[key] = me to verdict
             // Only apply if this channel is still the open one — a fast switch
             // must not stamp the previous channel's verdict onto the new one.
@@ -771,13 +868,133 @@ internal class Moderation(private val manager: ChannelManager) {
         adminTs[channel.adminStreamId] = ts
         val state = data.optJSONObject("state") ?: return
         state.optJSONArray("hiddenMessageIds")?.let { arr ->
-            _hiddenIds.value = (0 until arr.length()).mapNotNull { arr.optString(it).ifEmpty { null } }.toSet()
+            snapHidden = (0 until arr.length()).mapNotNull { arr.optString(it).ifEmpty { null } }.toSet()
         }
         state.optJSONArray("bannedMembers")?.let { arr ->
-            _bannedMembers.value = (0 until arr.length()).mapNotNull { arr.optString(it).lowercase().ifEmpty { null } }.toSet()
+            snapBanned = ModComposition.bannedFromJson(arr)
         }
+        absorbedThrough = state.optLong("absorbedThrough", 0L)
         state.optJSONArray("pins")?.let { _pins.value = pinsFromJson(it) }
+        recompose()
     }
+
+    /** Fold the held deltas onto the snapshot and publish the result to the UI. */
+    internal fun recompose() {
+        val effective = ModComposition.compose(
+            snapHidden, snapBanned, absorbedThrough,
+            deltas.values.toList(), deltaModerators)
+        _hiddenIds.value = effective.hiddenMessageIds
+        _bannedMembers.value = effective.bannedMembers.keys
+        _banSince.value = effective.bannedMembers
+    }
+
+    /**
+     * A MOD_ACTION arrived, live or from history. The signature is checked
+     * here; whether the signer still moderates is asked once per signer and
+     * recomposes when it answers, so an unknown signer simply does not count
+     * until the gate says otherwise.
+     */
+    internal fun ingestModAction(channel: Channel, payload: JSONObject?): Boolean {
+        val signer = ModAction.verify(channel.messageStreamId, payload) ?: return false
+        val d = payload!!
+        val key = "${d.optLong("ts")}|$signer|${d.optString("op")}|${d.optString("target")}"
+        if (deltas.containsKey(key)) return false
+        deltas[key] = JSONObject(d.toString()).put("mod", signer)
+        resolveDeltaModerator(channel, signer)
+        recompose()
+        return true
+    }
+
+    private fun resolveDeltaModerator(channel: Channel, signer: String) {
+        val gate = channel.gateAddress ?: return
+        if (channelOwner(channel) == signer) {
+            deltaModerators.add(signer)
+            deltaSignersSettled.add(signer)
+            return
+        }
+        if (!deltaSignersAsked.add(signer)) return
+        scope.launch {
+            val isMod = try {
+                bridge.call("gateIsModerator", JSONObject()
+                    .put("gate", gate).put("user", signer), 30_000)
+                    .optBoolean("moderator", false)
+            } catch (e: Exception) {
+                deltaSignersAsked.remove(signer)
+                return@launch
+            }
+            deltaSignersSettled.add(signer)
+            if (!isMod) return@launch
+            deltaModerators.add(signer)
+            if (_current.value?.messageStreamId == channel.messageStreamId) recompose()
+        }
+    }
+
+    /** Drop what belongs to the channel being left. */
+    internal fun clearDeltas() {
+        deltas.clear()
+        deltaSignersAsked.clear()
+        deltaModerators.clear()
+        deltaSignersSettled.clear()
+        snapHidden = emptySet()
+        snapBanned = emptyMap()
+        absorbedThrough = 0L
+        _banSince.value = emptyMap()
+    }
+
+    /**
+     * Publish a delta as a moderator. The owner never takes this path: their
+     * snapshot is stronger and needs nobody's ratification.
+     */
+    suspend fun publishModAction(op: String, target: String, sinceEpoch: Int? = null) {
+        val channel = _current.value ?: throw IllegalStateException("No channel open")
+        val priv = manager.myPrivateKey()
+            ?: throw IllegalStateException("No wallet available to sign the moderation action")
+        val payload = ModAction.build(channel.messageStreamId, op, target, priv, sinceEpoch)
+        // Applied locally first, like a sent message: the moderator sees their
+        // own action without waiting for the round trip.
+        ingestModAction(channel, payload)
+        publishForChannel(
+            channel, channel.messageStreamId, StreamConstants.P_MODERATION, payload)
+    }
+
+    /**
+     * Owner only: turn the moderators' deltas into the owner's own snapshot.
+     * `absorbedThrough` advances only to what was actually read, so a delta
+     * still in flight is never silently reverted.
+     */
+    suspend fun absorbModActions() {
+        val channel = _current.value ?: throw IllegalStateException("No channel open")
+        if (!amOwner(channel)) throw IllegalStateException("Only the channel admin can confirm")
+        val unabsorbed = deltas.values.filter { it.optLong("ts") > absorbedThrough }
+        if (unabsorbed.isEmpty()) return
+        // Every pending delta needs a settled verdict on its author first.
+        // Absorbing while the gate has not answered writes absorbedThrough
+        // over a composition that still counts nobody: the ratification
+        // lands, the moderation it was ratifying disappears, and the delta
+        // stops counting for good.
+        val unsettled = unabsorbed.map { it.optString("mod").lowercase() }
+            .distinct().filter { it !in deltaSignersSettled }
+        if (unsettled.isNotEmpty()) {
+            unsettled.forEach { resolveDeltaModerator(channel, it) }
+            throw IllegalStateException(
+                "Still checking who moderates this channel — try again in a moment")
+        }
+        val through = unabsorbed.maxOf { it.optLong("ts") }
+        snapHidden = _hiddenIds.value
+        snapBanned = _banSince.value
+        absorbedThrough = through
+        publishAdminState(channel)
+        recompose()
+    }
+
+    /**
+     * Moderator actions still waiting for the owner. Absorbing deletes
+     * nothing — the -1/P2 is append-only and `absorbedThrough` is what stops a
+     * delta counting — so the surface has to measure the unabsorbed ones, or
+     * it keeps offering work already done.
+     */
+    fun pendingModActions(): Int =
+        deltas.values.count { it.optLong("ts") > absorbedThrough }
 
     /** Publishes the full ADMIN_STATE with an incremented rev (owner only). */
     internal suspend fun publishAdminState(channel: Channel) {
@@ -791,10 +1008,13 @@ internal class Moderation(private val manager: ChannelManager) {
             runCatching { loadAdminState(channel, switchGeneration) }
         }
         val rev = (adminRevs[channel.adminStreamId] ?: 0) + 1
+        // The owner's own word, never the composition: publishing the
+        // composed view would silently ratify deltas they never looked at.
         val state = JSONObject()
-            .put("bannedMembers", JSONArray(_bannedMembers.value.toList()))
-            .put("hiddenMessageIds", JSONArray(_hiddenIds.value.toList()))
+            .put("bannedMembers", ModComposition.bannedToJson(snapBanned))
+            .put("hiddenMessageIds", JSONArray(snapHidden.toList()))
             .put("pins", pinsToJson(_pins.value))
+            .put("absorbedThrough", absorbedThrough)
         val msg = JSONObject()
             .put("type", "ADMIN_STATE").put("rev", rev)
             .put("ts", System.currentTimeMillis()).put("createdBy", addr)
@@ -843,10 +1063,38 @@ internal class Moderation(private val manager: ChannelManager) {
         }
     }
 
+    /**
+     * Publish an owner snapshot with the given change already applied, rolling
+     * the local state back when the publish fails. Same contract as [moderate],
+     * for the fields that live outside a flow.
+     */
+    private suspend fun moderateSnapshot(channel: Channel, apply: () -> Unit) {
+        val prevHidden = snapHidden
+        val prevBanned = snapBanned
+        apply()
+        recompose()
+        try {
+            publishAdminState(channel)
+        } catch (e: Exception) {
+            snapHidden = prevHidden
+            snapBanned = prevBanned
+            recompose()
+            throw e
+        }
+    }
+
     suspend fun hideMessage(messageId: String, hide: Boolean) {
         val channel = _current.value ?: throw IllegalStateException("No channel open")
-        if (!amOwner(channel)) throw IllegalStateException("Only the channel admin can moderate")
-        moderate(channel, _hiddenIds, if (hide) _hiddenIds.value + messageId else _hiddenIds.value - messageId)
+        // A moderator has no permission on the admin stream, so their hide
+        // travels as a signed delta instead of the owner's snapshot.
+        if (!amOwner(channel)) {
+            if (!isModeratorHere()) throw IllegalStateException("Only the channel admin can moderate")
+            publishModAction(if (hide) "hide" else "unhide", messageId)
+            return
+        }
+        moderateSnapshot(channel) {
+            snapHidden = if (hide) snapHidden + messageId else snapHidden - messageId
+        }
     }
 
     suspend fun pinMessage(messageId: String, pin: Boolean) {
@@ -869,13 +1117,25 @@ internal class Moderation(private val manager: ChannelManager) {
 
     suspend fun banMember(address: String, ban: Boolean = true) {
         val channel = _current.value ?: throw IllegalStateException("No channel open")
-        if (!amOwner(channel)) throw IllegalStateException("Only the channel admin can moderate")
         val addr = address.lowercase()
-        moderate(
-            channel, _bannedMembers,
-            if (ban) _bannedMembers.value + addr else _bannedMembers.value - addr
-        )
+        // Stamped with the epoch in force, so the ban silences the author from
+        // here on instead of erasing what they wrote before it.
+        val since = if (ban) epochKeys.currentEpoch(channel.messageStreamId) else null
+        if (!amOwner(channel)) {
+            if (!isModeratorHere()) throw IllegalStateException("Only the channel admin can moderate")
+            publishModAction(if (ban) "ban" else "unban", addr, since)
+            return
+        }
+        moderateSnapshot(channel) {
+            snapBanned = if (ban) snapBanned + (addr to since) else snapBanned - addr
+        }
+        // A ban the owner lifts must beat a moderator's delta that still
+        // asserts it, and a delta is only ever overruled by absorption.
+        if (!ban && deltas.isNotEmpty()) runCatching { absorbModActions() }
     }
+
+    /** Does this account moderate the open channel's gate (cached read)? */
+    private fun isModeratorHere(): Boolean = _perms.value.moderatesGate
 
     /**
      * The two enforcement levels behind one Ban action.
@@ -883,7 +1143,8 @@ internal class Moderation(private val manager: ChannelManager) {
      * CLIENT is the ADMIN_STATE ban: every client hides the author's messages,
      * free and reversible, and only the creator may publish it. PROTOCOL is
      * the gate ban: `checkAccess` goes false, so no responder hands out keys,
-     * and the epoch rotation that follows cuts reads from here on. Costs gas.
+     * the single gate cuts their transport at ingest, and the epoch rotation
+     * that follows cuts reads from here on. Costs gas.
      */
     suspend fun banMemberLevels(address: String, client: Boolean, protocol: Boolean) {
         val channel = _current.value ?: throw IllegalStateException("No channel open")
@@ -895,10 +1156,10 @@ internal class Moderation(private val manager: ChannelManager) {
             val gate = channel.gateAddress
                 ?: throw IllegalStateException("Only gated channels have a protocol-level ban")
             bridge.call("gateBan", JSONObject()
-                .put("gate", gate).put("user", addr).put("erase", false), 180_000)
+                .put("gate", gate).put("user", addr), 180_000)
             gateManageCache.clear()
             val keysId = channel.keysStreamId.ifEmpty { StreamConstants.deriveKeysId(channel.messageStreamId) }
-            var rotated = channel.rotatedForBanned
+            var rotated = channel.rotatedForNoAccess
             try {
                 epochKeys.rotateEpoch(channel.messageStreamId, keysId)
                 // Covered: the deferred pass must not rotate again for this one.
@@ -908,7 +1169,7 @@ internal class Moderation(private val manager: ChannelManager) {
             }
             val updated = channel.copy(
                 members = channel.members.filterNot { it.equals(addr, ignoreCase = true) },
-                rotatedForBanned = rotated,
+                rotatedForNoAccess = rotated,
                 knownBanned = (channel.knownBanned + addr.lowercase()).distinct()
             )
             _channels.value = _channels.value.map { if (it.messageStreamId == updated.messageStreamId) updated else it }

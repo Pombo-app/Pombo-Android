@@ -67,6 +67,8 @@ class EpochKeyManager(
      * disables the v2 path — everything degrades to v1.
      */
     private val myPrivateKey: () -> String? = { null },
+    /** Display name announced in the hello, so a silent member still has one. */
+    private val myUsername: () -> String? = { null },
     /** Publish to the -4 roster partition (P1). No-op wiring = roster off. */
     private val publishRoster: suspend (keysStreamId: String, data: JSONObject) -> Unit =
         { _, _ -> },
@@ -89,11 +91,35 @@ class EpochKeyManager(
      * joiner needs (and what answers hand out). Ungated / Everyone channels
      * return false.
      */
-    private val sharedPublishFor: suspend (messageStreamId: String) -> Boolean = { false }
+    private val sharedPublishFor: suspend (messageStreamId: String) -> Boolean = { false },
+    /**
+     * Read-only channels: may this requester hold the shared publish key?
+     * There the key IS the write capability, so it only goes to the owner
+     * and the moderators; everyone else reads with the epoch keys alone.
+     * Default true — non-read-only channels hand it to every member.
+     */
+    private val mayHoldPublishKey: suspend (messageStreamId: String, requester: String) -> Boolean =
+        { _, _ -> true },
+    /**
+     * True when THIS account may never hold the publish key (plain member of
+     * a read-only channel) — stops it requesting a wrap nobody may answer.
+     * Unknown role keeps asking; the responders refuse, which is harmless.
+     */
+    private val pubKeyBlockedForSelf: (messageStreamId: String) -> Boolean = { false },
+    /**
+     * True while this channel is open as a non-persisted preview. Peeking
+     * requests keys like a member (live-holding gates answer), but must not
+     * publish a MEMBER_HELLO — the roster feeds the members panel.
+     */
+    private val isPreviewChannel: (messageStreamId: String) -> Boolean = { false }
 ) {
     data class Entry(val data: JSONObject, val publisherId: String?, val timestamp: Long)
 
-    data class RosterMember(val account: String, val spk: String?, val ts: Long)
+    data class RosterMember(
+        val account: String, val spk: String?, val ts: Long,
+        /** Display name the member announced, or null if they never did. */
+        val name: String? = null
+    )
 
     private class EpochEntry(val keyHex: String, val keyHash: String, val epoch: Int)
     private class Announce(
@@ -140,6 +166,9 @@ class EpochKeyManager(
         val pendingRequests = LinkedHashMap<String, PendingId>()
         /** Epochs we already published a MEMBER_HELLO for — persisted. */
         val helloEpochs = LinkedHashSet<Int>()
+        /** Name the last hello carried, and when — the next one chains it. */
+        var helloName: String? = null
+        var helloTs: Long = 0L
         /** -4 partition-count probe result; null = not probed yet. */
         var rosterPartitions: Int? = null
         /** (at, members) — rosterMembers result cache. */
@@ -154,6 +183,15 @@ class EpochKeyManager(
         var pubAnnounce: PubAnnounce? = null
         /** Newest pub_announce timestamp seen in storage (TTL re-announce). */
         var pubAnnounceFreshness = 0L
+        /**
+         * The channel's second shared key: INTERACTIONS. Same mechanics as
+         * [pubKey], wider distribution — every member with access holds it,
+         * read-only included, because it carries the -2 and the -5 where
+         * members participate rather than publish.
+         */
+        var intKey: PubKey? = null
+        var intAnnounce: PubAnnounce? = null
+        var intAnnounceFreshness = 0L
         /**
          * Session pseudonym for our own publishes: (priv, pub, bindProof) —
          * MEMORY ONLY; members resolve the account from the bind proof, so
@@ -182,6 +220,37 @@ class EpochKeyManager(
     private val mutex = Mutex()
 
     companion object {
+        /**
+         * Fold one verified hello into the roster being built. Dedupe is by
+         * account: `ts` and `spk` come from the newest hello, while the NAME
+         * comes from the newest hello that actually carried one — a later
+         * name-less hello must not erase a name someone announced.
+         */
+        internal fun mergeHello(
+            members: MutableMap<String, RosterMember>,
+            nameTs: MutableMap<String, Long>,
+            account: String,
+            hello: JSONObject,
+            envelopeTs: Long
+        ) {
+            val ts = hello.optLong("ts", envelopeTs)
+            val spk = hello.optString("spk").ifEmpty { null }
+            val name = hello.optString("name").trim().ifEmpty { null }?.take(64)
+            val prev = members[account]
+            if (prev == null) {
+                members[account] = RosterMember(account, spk, ts, name)
+                if (name != null) nameTs[account] = ts
+                return
+            }
+            var merged = prev
+            if (ts > prev.ts) merged = merged.copy(spk = spk, ts = ts)
+            if (name != null && ts >= (nameTs[account] ?: 0L)) {
+                merged = merged.copy(name = name)
+                nameTs[account] = ts
+            }
+            members[account] = merged
+        }
+
         private const val TAG = "PomboEpochKeys"
         private const val REQUEST_MIN_INTERVAL_MS = 60_000L
         /**
@@ -277,6 +346,8 @@ class EpochKeyManager(
                 }
             }
         }
+        persisted.optString("helloName").ifEmpty { null }?.let { s.helloName = it }
+        persisted.optLong("helloTs", 0L).takeIf { it > 0L }?.let { s.helloTs = it }
         persisted.optJSONArray("helloEpochs")?.let { arr ->
             for (i in 0 until arr.length()) {
                 val epoch = arr.optInt(i, 0)
@@ -297,6 +368,21 @@ class EpochKeyManager(
                     pa.optString("keyId"), pa.optString("keyHash"),
                     pa.optString("address"), pa.optInt("rev"),
                     pa.optString("publisher"), pa.optLong("timestamp"))
+            }
+        }
+        persisted.optJSONObject("intKey")?.let { ik ->
+            if (ik.optInt("rev") > (s.intKey?.rev ?: 0)) {
+                s.intKey = PubKey(
+                    ik.optString("keyId"), ik.optString("keyHex"),
+                    ik.optString("address"), ik.optInt("rev"))
+            }
+        }
+        persisted.optJSONObject("intAnnounce")?.let { ia ->
+            if (ia.optInt("rev") > (s.intAnnounce?.rev ?: 0)) {
+                s.intAnnounce = PubAnnounce(
+                    ia.optString("keyId"), ia.optString("keyHash"),
+                    ia.optString("address"), ia.optInt("rev"),
+                    ia.optString("publisher"), ia.optLong("timestamp"))
             }
         }
     }
@@ -326,10 +412,22 @@ class EpochKeyManager(
         val out = JSONObject()
             .put("epochs", epochs).put("announces", announces).put("currentEpoch", s.currentEpoch)
             .put("pendingRequests", pendingRequests).put("helloEpochs", helloEpochs)
+            .put("helloName", s.helloName ?: JSONObject.NULL).put("helloTs", s.helloTs)
         s.pubKey?.let {
             out.put("pubKey", JSONObject()
                 .put("keyId", it.keyId).put("keyHex", it.keyHex)
                 .put("address", it.address).put("rev", it.rev))
+        }
+        s.intKey?.let {
+            out.put("intKey", JSONObject()
+                .put("keyId", it.keyId).put("keyHex", it.keyHex)
+                .put("address", it.address).put("rev", it.rev))
+        }
+        s.intAnnounce?.let {
+            out.put("intAnnounce", JSONObject()
+                .put("keyId", it.keyId).put("keyHash", it.keyHash)
+                .put("address", it.address).put("rev", it.rev)
+                .put("publisher", it.publisher).put("timestamp", it.timestamp))
         }
         s.pubAnnounce?.let {
             out.put("pubAnnounce", JSONObject()
@@ -446,7 +544,8 @@ class EpochKeyManager(
             haveKeys = s.epochs.isNotEmpty()
             toBootstrap = s.announces.isEmpty() && isOwnAdmin(messageStreamId)
             toRequest = s.announces.isNotEmpty()
-                && (missingEpochsLocked(s).isNotEmpty() || needsPubKeyLocked(s))
+                && (missingEpochsLocked(s).isNotEmpty() || needsPubKeyLocked(messageStreamId, s)
+                    || needsInteractionsKeyLocked(s))
             if (!toBootstrap && isOwnAdmin(messageStreamId)) {
                 val cur = s.announces[s.currentEpoch]
                 if (cur != null && s.epochs.containsKey(cur.keyId)) {
@@ -480,6 +579,7 @@ class EpochKeyManager(
         if (isOwnAdmin(messageStreamId)) {
             try {
                 maybeAnnouncePub(messageStreamId, keysStreamId, retentionDays)
+                maybeAnnounceInteractions(messageStreamId, keysStreamId, retentionDays)
             } catch (e: Exception) {
                 Log.w(TAG, "pub announce self-heal failed: ${e.message}")
             }
@@ -499,10 +599,9 @@ class EpochKeyManager(
         // pubkey have no age limit (the v2 wrap opens in any later session);
         // without one, only recent requests are alive.
         if (haveKeys) {
-            val me = myAddress()?.lowercase()
             val now = System.currentTimeMillis()
             for (entry in storedRequests) {
-                if (entry.publisherId?.lowercase() == me) continue
+                if (isOwnRequestLocked(messageStreamId, entry.data.optString("requestId"))) continue
                 val spk = entry.data.optString("spk").ifEmpty { null }
                 if (spk == null && now - entry.timestamp > REQUEST_ANSWER_WINDOW_MS) continue
                 val requestId = entry.data.optString("requestId")
@@ -654,9 +753,18 @@ class EpochKeyManager(
     }
 
     /** Caller holds the lock. A Members-only channel is not writable until
-     *  the announced publish key (at its announced rev) is held. */
-    private fun needsPubKeyLocked(s: ChannelState): Boolean =
-        s.pubAnnounce != null && s.pubKey?.keyId != s.pubAnnounce?.keyId
+     *  the announced publish key (at its announced rev) is held. A plain
+     *  member of a read-only channel never qualifies for it, so once the
+     *  role is known they stop asking for a wrap nobody may answer. */
+    private fun needsPubKeyLocked(messageStreamId: String, s: ChannelState): Boolean =
+        !pubKeyBlockedForSelf(messageStreamId) &&
+            s.pubAnnounce != null && s.pubKey?.keyId != s.pubAnnounce?.keyId
+
+    /** No read-only exemption here: every member with access holds the
+     *  interactions key, which is what makes reactions and presence work in
+     *  a channel where they cannot post. */
+    private fun needsInteractionsKeyLocked(s: ChannelState): Boolean =
+        s.intAnnounce != null && s.intKey?.keyId != s.intAnnounce?.keyId
 
     /**
      * Validate and apply a publish-key announce (Members-only channels).
@@ -684,14 +792,16 @@ class EpochKeyManager(
         // announce that storage lost, or no session would ever republish it
         // and members would stay unable to write until retention aged the
         // old copy out.
-        val heldRev = s.pubAnnounce?.rev ?: 0
-        if (rev > heldRev) {
-            s.pubAnnounceFreshness = timestamp
-        } else if (rev == heldRev && timestamp > s.pubAnnounceFreshness) {
-            s.pubAnnounceFreshness = timestamp
+        // Two shared keys travel on the same announce type, told apart by
+        // `k`: content (absent, the default) and interactions ('i').
+        val isInteractions = data.optString("k") == "i"
+        val heldRev = (if (isInteractions) s.intAnnounce else s.pubAnnounce)?.rev ?: 0
+        if (rev > heldRev || (rev == heldRev &&
+                timestamp > (if (isInteractions) s.intAnnounceFreshness else s.pubAnnounceFreshness))) {
+            if (isInteractions) s.intAnnounceFreshness = timestamp else s.pubAnnounceFreshness = timestamp
         }
 
-        val existing = s.pubAnnounce
+        val existing = if (isInteractions) s.intAnnounce else s.pubAnnounce
         if (existing != null) {
             if (existing.rev > rev) return false
             if (existing.rev == rev) {
@@ -700,9 +810,17 @@ class EpochKeyManager(
                 if (keep) return false
             }
         }
-        s.pubAnnounce = PubAnnounce(keyId, keyHash, addr, rev, publisherId.lowercase(), timestamp)
+        val incoming = PubAnnounce(keyId, keyHash, addr, rev, publisherId.lowercase(), timestamp)
         // A held key of an older keyId is superseded — stop publishing under
         // it and let the request cycle fetch the new one.
+        if (isInteractions) {
+            s.intAnnounce = incoming
+            if (s.intKey != null && s.intKey!!.keyId != keyId && s.intKey!!.rev < rev) {
+                s.intKey = null
+            }
+            return true
+        }
+        s.pubAnnounce = incoming
         if (s.pubKey != null && s.pubKey!!.keyId != keyId && s.pubKey!!.rev < rev) {
             s.pubKey = null
         }
@@ -722,9 +840,11 @@ class EpochKeyManager(
             val rid = data.optString("requestId")
             val keyId = data.optString("keyId")
             if (rid.isNotEmpty() && keyId.isNotEmpty()) recordSeenWrapLocked(s, rid, keyId)
-            val announce = s.pubAnnounce ?: return
+            // Routed by the same `k` marker the announce carried.
+            val isInteractions = data.optString("k") == "i"
+            val announce = (if (isInteractions) s.intAnnounce else s.pubAnnounce) ?: return
             if (keyId.isEmpty() || keyId != announce.keyId) return
-            if (s.pubKey?.keyId == keyId) return                        // already held
+            if ((if (isInteractions) s.intKey else s.pubKey)?.keyId == keyId) return   // already held
             val tag = data.optString("tag").ifEmpty { return }
 
             val keyHex = if (data.optInt("v", 1) == 2) {
@@ -757,7 +877,8 @@ class EpochKeyManager(
                 Log.w(TAG, "pub wrap REJECTED — key does not match the announced address")
                 return
             }
-            s.pubKey = PubKey(keyId, keyHex, announce.address, announce.rev)
+            val adopted = PubKey(keyId, keyHex, announce.address, announce.rev)
+            if (isInteractions) s.intKey = adopted else s.pubKey = adopted
             persist(messageStreamId, s)
             adoptedKeyId = keyId
         }
@@ -797,6 +918,36 @@ class EpochKeyManager(
             persist(messageStreamId, s)
         }
         Log.i(TAG, "publish key announced on ${keysStreamId.takeLast(30)}")
+        retainAnnounce(messageStreamId, keysStreamId, ann)
+    }
+
+    /** Same self-heal for the interactions key's anchor (k = 'i'). */
+    private suspend fun maybeAnnounceInteractions(messageStreamId: String, keysStreamId: String, retentionDays: Int) {
+        var announce: JSONObject? = null
+        mutex.withLock {
+            val s = state[messageStreamId] ?: return
+            val held = s.intKey ?: return
+            if ((s.intAnnounce?.rev ?: 0) > held.rev) return
+            val retentionMs = retentionDays.toLong() * 86_400_000L
+            if (s.intAnnounceFreshness != 0L &&
+                System.currentTimeMillis() - s.intAnnounceFreshness < (retentionMs * 0.8).toLong()) return
+            announce = JSONObject()
+                .put("t", StreamConstants.PUB_ANNOUNCE)
+                .put("k", "i")
+                .put("keyId", held.keyId)
+                .put("keyHash", EpochKeyCrypto.computeKeyHash(held.keyHex))
+                .put("addr", held.address)
+                .put("rev", held.rev)
+        }
+        val ann = announce ?: return
+        publishKeys(keysStreamId, ann)
+        mutex.withLock {
+            val s = getState(messageStreamId)
+            applyPubAnnounceLocked(messageStreamId, s, ann, myAddress(), System.currentTimeMillis())
+            s.intAnnounceFreshness = System.currentTimeMillis()
+            persist(messageStreamId, s)
+        }
+        Log.i(TAG, "interactions key announced on ${keysStreamId.takeLast(30)}")
         retainAnnounce(messageStreamId, keysStreamId, ann)
     }
 
@@ -922,7 +1073,7 @@ class EpochKeyManager(
                     if (!s.loaded) { loadPersisted(messageStreamId, s); s.loaded = true }
                     val changed = applyPubAnnounceLocked(messageStreamId, s, data, publisherId, timestamp)
                     if (changed) persist(messageStreamId, s)
-                    changed && needsPubKeyLocked(s)
+                    changed && needsPubKeyLocked(messageStreamId, s)
                 }
                 if (needRequest) sendKeyRequest(messageStreamId, keysStreamId)
             }
@@ -971,14 +1122,27 @@ class EpochKeyManager(
      * (§7.10, N-B). Anything we hear on -4 already passed the stream's
      * on-chain permission check.
      */
+    /** A request this session sent: answering it would be talking to itself. */
+    private suspend fun isOwnRequestLocked(messageStreamId: String, requestId: String): Boolean {
+        if (requestId.isEmpty()) return false
+        return mutex.withLock {
+            val s = state[messageStreamId] ?: return@withLock false
+            s.pendingRequests.containsKey(requestId) || s.pendingRequest?.requestId == requestId
+        }
+    }
+
     private suspend fun handleRequest(
         messageStreamId: String, keysStreamId: String,
         data: JSONObject, publisherId: String?, memberCount: Int
     ) {
         mutex.withLock { recordRequesterLocked(getState(messageStreamId), publisherId) }
-        if (publisherId?.lowercase() == myAddress()?.lowercase()) return  // our own
         val pubkey = data.optString("pubkey").ifEmpty { return }
         val requestId = data.optString("requestId").ifEmpty { return }
+        // Skip only what THIS session asked for, by requestId. Skipping every
+        // request from our own account left a second device of the same
+        // account unable to ever get the keys: nobody else answers a request
+        // that names an address they can see is not theirs.
+        if (isOwnRequestLocked(messageStreamId, requestId)) return
         val haveKeys = mutex.withLock { getState(messageStreamId).epochs.isNotEmpty() }
         if (!haveKeys) return
         scheduleAnswer(
@@ -1100,8 +1264,11 @@ class EpochKeyManager(
         }
 
         // Members-only: the shared publish key rides along with the epochs —
-        // a joiner needs both before the channel is writable for them.
-        val pub = if (sharedPublishFor(messageStreamId)) {
+        // a joiner needs both before the channel is writable for them. In a
+        // read-only channel that key IS the write capability, so it only goes
+        // to the owner and the moderators (fail-closed in the wiring).
+        val pub = if (sharedPublishFor(messageStreamId)
+            && mayHoldPublishKey(messageStreamId, requester)) {
             mutex.withLock {
                 val s = getState(messageStreamId)
                 val held = s.pubKey
@@ -1136,6 +1303,47 @@ class EpochKeyManager(
                 sent += 1
             } catch (e: Exception) {
                 Log.w(TAG, "failed to wrap the publish key for request $requestId: ${e.message}")
+            }
+        }
+        // The interactions key goes to EVERY member with access — no
+        // read-only role check. That asymmetry with the publish key above is
+        // the whole point: in a read-only channel members react and show
+        // presence, they just do not post.
+        val inter = if (sharedPublishFor(messageStreamId)) {
+            mutex.withLock {
+                val s2 = getState(messageStreamId)
+                val held = s2.intKey
+                if (held != null && s2.intAnnounce?.keyId == held.keyId
+                    && held.keyId !in (s2.seenWraps[requestId] ?: emptySet<String>())
+                ) held else null
+            }
+        } else null
+        if (inter != null) {
+            try {
+                val envelope = if (staticKey != null) {
+                    val wrapped = EpochKeyCrypto.wrapEpochKeyToStatic(inter.keyHex, staticKey)
+                    JSONObject()
+                        .put("t", StreamConstants.PUB_WRAP).put("k", "i").put("v", 2)
+                        .put("requestId", requestId).put("keyId", inter.keyId)
+                        .put("tag", EpochKeyCrypto.computeWrapTagV2(requestId, inter.keyId))
+                        .put("epk", wrapped.getString("epk"))
+                        .put("iv", wrapped.getString("iv"))
+                        .put("ct", wrapped.getString("ct"))
+                } else {
+                    val wrapped = EpochKeyCrypto.wrapEpochKey(inter.keyHex, pubkey)
+                    JSONObject()
+                        .put("t", StreamConstants.PUB_WRAP).put("k", "i")
+                        .put("requestId", requestId).put("keyId", inter.keyId)
+                        .put("tag", EpochKeyCrypto.computeWrapTag(pubkey, inter.keyId))
+                        .put("epk", wrapped.getString("epk"))
+                        .put("iv", wrapped.getString("iv"))
+                        .put("ct", wrapped.getString("ct"))
+                }
+                publishKeys(keysStreamId, envelope)
+                mutex.withLock { recordSeenWrapLocked(getState(messageStreamId), requestId, inter.keyId) }
+                sent += 1
+            } catch (e: Exception) {
+                Log.w(TAG, "failed to wrap the interactions key for request $requestId: ${e.message}")
             }
         }
         if (sent > 0) Log.d(TAG, "answered request $requestId with $sent ${if (staticKey != null) "v2 " else ""}wrap(s)")
@@ -1264,7 +1472,11 @@ class EpochKeyManager(
                 REQUEST_RETRY_FAST_MS else REQUEST_MIN_INTERVAL_MS
             if (pending != null && System.currentTimeMillis() - pending.sentAt < interval) return
             val missing = missingEpochsLocked(s)
-            if (missing.isEmpty() && !needsPubKeyLocked(s)) return
+            // The interactions key counts too: a device can hold every epoch
+            // key and the publish key and still be unable to react, because the
+            // -5 grants publish to the interactions key alone.
+            if (missing.isEmpty() && !needsPubKeyLocked(messageStreamId, s)
+                && !needsInteractionsKeyLocked(s)) return
             val (priv, pub) = EpochKeyCrypto.generateRequestKeypair()
             val requestId = PomboCrypto.randomHex(16)
             s.pendingRequest = PendingRequest(requestId, priv, pub, System.currentTimeMillis())
@@ -1304,7 +1516,8 @@ class EpochKeyManager(
     suspend fun retryRequestIfWaiting(messageStreamId: String, keysStreamId: String): Boolean {
         val waiting = mutex.withLock {
             val s = state[messageStreamId] ?: return false
-            missingEpochsLocked(s).isNotEmpty() || needsPubKeyLocked(s)
+            missingEpochsLocked(s).isNotEmpty() || needsPubKeyLocked(messageStreamId, s) ||
+                needsInteractionsKeyLocked(s)
         }
         if (waiting) sendKeyRequest(messageStreamId, keysStreamId)
         return waiting
@@ -1346,6 +1559,30 @@ class EpochKeyManager(
         return PubKey("p$rev.${PomboCrypto.randomHex(6)}", priv, EthereumSigner.address(priv), rev)
     }
 
+    /**
+     * Fresh interactions keypair. Same mechanics as the publish key,
+     * different POLICY: it goes to every member with access, read-only
+     * included — reactions and presence are theirs even where messages are
+     * not.
+     */
+    fun mintInteractionsKey(rev: Int = 1): PubKey {
+        val (priv, _) = EpochKeyCrypto.generateRequestKeypair()
+        return PubKey("i$rev.${PomboCrypto.randomHex(6)}", priv, EthereumSigner.address(priv), rev)
+    }
+
+    /** Creation-time adopt of a freshly minted interactions key. */
+    suspend fun adoptInteractionsKey(messageStreamId: String, intKey: PubKey) = mutex.withLock {
+        val s = getState(messageStreamId)
+        if (!s.loaded) { loadPersisted(messageStreamId, s); s.loaded = true }
+        s.intKey = intKey
+        persist(messageStreamId, s)
+    }
+
+    /** The held interactions key, or null while waiting for its wrap. */
+    suspend fun interactionsKeyFor(messageStreamId: String): PubKey? = mutex.withLock {
+        state[messageStreamId]?.intKey
+    }
+
     /** Creation-time adopt of a freshly minted publish key (admin device). */
     suspend fun adoptPublishKey(messageStreamId: String, pubKey: PubKey) = mutex.withLock {
         val s = getState(messageStreamId)
@@ -1357,6 +1594,24 @@ class EpochKeyManager(
     /** The held publish key, or null while waiting for a PUB_WRAP. */
     suspend fun publishKeyFor(messageStreamId: String): PubKey? = mutex.withLock {
         state[messageStreamId]?.pubKey
+    }
+
+    /**
+     * The epoch in force, as a number. Moderation stamps a ban with it so the
+     * ban applies from that epoch onward and leaves earlier messages alone.
+     */
+    suspend fun currentEpoch(messageStreamId: String): Int? = mutex.withLock {
+        state[messageStreamId]?.currentEpoch?.takeIf { it > 0 }
+    }
+
+    /**
+     * When the scheduled rotation is due, in epoch millis. A due date in the
+     * past is honest: the timer only runs while the admin's app does, so an
+     * absent admin leaves the epoch standing until the next channel open.
+     */
+    suspend fun nextRotationAt(messageStreamId: String): Long? = mutex.withLock {
+        val s = state[messageStreamId] ?: return@withLock null
+        s.announces[s.currentEpoch]?.validFrom?.let { it + ROTATION_INTERVAL_MS }
     }
 
     /**
@@ -1447,29 +1702,43 @@ class EpochKeyManager(
     }
 
     /**
-     * One MEMBER_HELLO per epoch, sealed with that epoch's key and published
-     * on first adoption — never for past epochs (a backfilled hello would
-     * fake presence in a window the member did not live). The seal is what
-     * keeps the roster private: the -4 resend is publicly readable over HTTP.
+     * A MEMBER_HELLO per (epoch, name), sealed with that epoch's key and
+     * published on first adoption — never for past epochs (a backfilled hello
+     * would fake presence in a window the member did not live). The seal is
+     * what keeps the roster private: the -4 resend is publicly readable over
+     * HTTP.
+     *
+     * The name travels so a member who never wrote still has one. The old
+     * hello stays — the -4 is append-only and only the node's TTL deletes —
+     * but substitution is infeasible: the roster only accepts a hello whose
+     * envelope signer equals the declared account. `prev` chains the previous
+     * hello's timestamp, an auditable trail for free.
      */
     private suspend fun maybePublishHello(messageStreamId: String, keysStreamId: String, keyId: String) {
+        if (isPreviewChannel(messageStreamId)) return
         val account = myAddress()?.lowercase() ?: return
+        val name = myDisplayName()
         var keyHex = ""
         var epoch = 0
+        var previous = 0L
         val eligible = mutex.withLock {
             val s = state[messageStreamId] ?: return
             val entry = s.epochs[keyId] ?: return
             epoch = entry.epoch
             keyHex = entry.keyHex
-            epoch == s.currentEpoch && epoch !in s.helloEpochs
+            previous = s.helloTs
+            epoch == s.currentEpoch && (epoch !in s.helloEpochs || s.helloName != name)
         }
         if (!eligible) return
         if (!rosterCapable(messageStreamId, keysStreamId)) return
 
+        val ts = System.currentTimeMillis()
         val hello = JSONObject()
             .put("t", StreamConstants.MEMBER_HELLO)
             .put("account", account)
-            .put("ts", System.currentTimeMillis())
+            .put("ts", ts)
+        if (name != null) hello.put("name", name)
+        if (previous > 0L) hello.put("prev", previous)
         myPrivateKey()?.let {
             try { hello.put("spk", EthereumSigner.compressedPublicKey(it)) } catch (e: Exception) { }
         }
@@ -1478,10 +1747,38 @@ class EpochKeyManager(
         mutex.withLock {
             state[messageStreamId]?.let { s ->
                 s.helloEpochs.add(epoch)
+                s.helloName = name
+                s.helloTs = ts
+                s.rosterCache = null
                 persist(messageStreamId, s)
             }
         }
         Log.d(TAG, "member hello published for epoch $epoch on ${keysStreamId.takeLast(30)}")
+    }
+
+    /** The display name that travels in the hello, or null. */
+    private fun myDisplayName(): String? =
+        myUsername()?.trim()?.takeIf { it.isNotEmpty() }?.take(64)
+
+    /**
+     * The name changed: republish the hello on the channels where this account
+     * is already in the roster. Without it a rename waited for the next
+     * rotation, which on a quiet channel is a week.
+     */
+    suspend fun republishHelloForRename(channels: List<Pair<String, String>>) {
+        val name = myDisplayName()
+        for ((messageStreamId, keysStreamId) in channels) {
+            val keyId = mutex.withLock {
+                val s = state[messageStreamId] ?: return@withLock null
+                if (s.currentEpoch == 0 || s.helloName == name) return@withLock null
+                s.announces[s.currentEpoch]?.keyId?.takeIf { s.epochs.containsKey(it) }
+            } ?: continue
+            try {
+                maybePublishHello(messageStreamId, keysStreamId, keyId)
+            } catch (e: Exception) {
+                Log.d(TAG, "hello republish failed: ${e.message}")
+            }
+        }
     }
 
     /**
@@ -1505,6 +1802,7 @@ class EpochKeyManager(
         }
         val entries = try { resendRoster(keysStreamId) } catch (e: Exception) { emptyList() }
         val members = LinkedHashMap<String, RosterMember>()
+        val nameTs = HashMap<String, Long>()
         for (entry in entries) {
             if (!EpochKeyCrypto.isEpochEnvelope(entry.data)) continue
             val hello = tryDecrypt(
@@ -1515,11 +1813,7 @@ class EpochKeyManager(
             val account = hello.optString("account").lowercase()
             if (!ADDR_RE.matches(account)) continue
             if (account != entry.publisherId?.lowercase()) continue
-            val ts = hello.optLong("ts", entry.timestamp)
-            val prev = members[account]
-            if (prev == null || ts > prev.ts) {
-                members[account] = RosterMember(account, hello.optString("spk").ifEmpty { null }, ts)
-            }
+            mergeHello(members, nameTs, account, hello, entry.timestamp)
         }
         val list = members.values.toList()
         mutex.withLock {
@@ -1657,7 +1951,13 @@ class EpochKeyManager(
         s: ChannelState, kid: String, kidEpoch: Int, live: Boolean, timestamp: Long
     ): Boolean {
         val current = s.announces[s.currentEpoch] ?: return true  // no anchor — cannot judge
-        if (kid == current.keyId) return true                     // current epoch always fine
+        if (kid == current.keyId) {
+            // Current epoch — but a history timestamp from before the epoch
+            // existed is backdating under the current key: the kid in
+            // force then was an older one.
+            if (live || timestamp <= 0L) return true
+            return timestamp >= current.validFrom - KID_FRESHNESS_TOLERANCE_MS
+        }
         if (live) {
             // Previous epoch tolerated briefly after a rotation (messages in
             // flight, slow adopters); anything older is stale-key spam.

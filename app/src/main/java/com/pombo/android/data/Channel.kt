@@ -14,6 +14,9 @@ data class Channel(
     val adminStreamId: String,
     /** Keys stream (-4) — gated channels (epoch-key distribution, N-A/N-C). */
     val keysStreamId: String = "",
+    /** Interactions stream (-5) — gated channels: reactions, where members
+     *  participate without publishing on -1 (read-only included). */
+    val interactionsStreamId: String = "",
     val name: String,
     val type: String,                 // 'public' | 'password' | 'native' | 'gated'
     /**
@@ -25,24 +28,28 @@ data class Channel(
      */
     val gateAddress: String? = null,
     /**
-     * Author visibility ('members' | 'everyone'), IMMUTABLE, from the -1
-     * metadata's `m` flag: 'members' publishes -1/-2 under the channel's
+     * Identity on the wire ('sealed' | 'visible'), IMMUTABLE, from the -1
+     * metadata's `m` flag: 'sealed' publishes -1/-2 under the channel's
      * SHARED key with authorship sealed inside the epoch envelope. Null on
      * non-gated channels; a gated channel persisted without it is from
-     * before the mode existed — Everyone by definition.
+     * before the mode existed — Visible by definition.
      */
-    val authorMode: String? = null,
+    val wireIdentity: String? = null,
     val createdAt: Long = System.currentTimeMillis(),
     val createdBy: String? = null,
     val joinedAt: Long? = null,
     val password: String? = null,
     val members: List<String> = emptyList(),
     /**
-     * Bans this device has already rotated the epoch for. Only the admin can
-     * announce an epoch, so a moderator's ban waits for one; without this the
-     * admin would rotate again on every open for the same ban.
+     * Access losses this device has already rotated the epoch for. Only the
+     * admin can announce an epoch, so a cut elsewhere waits for one; without
+     * this the admin would rotate again on every open for the same cut.
+     * (Named rotatedForBanned before the sweep widened it beyond bans.)
      */
-    val rotatedForBanned: List<String> = emptyList(),
+    val rotatedForNoAccess: List<String> = emptyList(),
+    /** Who had gate access at the last sweep — losing it is what triggers the
+     *  deferred rotation. */
+    val accessSnapshot: List<String> = emptyList(),
     /**
      * Addresses banned from this device, kept as gate-read candidates: the ban
      * drops them from [members] and the roster stops carrying them, so without
@@ -55,12 +62,13 @@ data class Channel(
     /**
      * Retention in days per stored stream, as read off-chain. Each stream is
      * configured by its own transaction and any of them can fail alone, so a
-     * single figure cannot speak for all three. [storageDays] is the message
+     * single figure cannot speak for all four. [storageDays] is the message
      * stream (-1); null anywhere means not known, never "the default".
      */
     val storageDays: Int? = null,
     val adminStorageDays: Int? = null,
     val keysStorageDays: Int? = null,
+    val interactionsStorageDays: Int? = null,
     val exposure: String = "hidden",  // 'visible' | 'hidden'
     val description: String = "",
     val language: String = "",
@@ -86,24 +94,27 @@ data class Channel(
         .put("ephemeralStreamId", ephemeralStreamId)
         .put("adminStreamId", adminStreamId)
         .put("keysStreamId", keysStreamId)
+        .put("interactionsStreamId", interactionsStreamId)
         .put("name", name)
         .put("type", type)
         // Same shape as the web ({ address }) — sync merges whole channel
         // objects, so the two platforms must serialize the gate identically.
         .put("gate", gateAddress?.let { JSONObject().put("address", it) } ?: JSONObject.NULL)
-        .put("authorMode", authorMode ?: JSONObject.NULL)
+        .put("wireIdentity", wireIdentity ?: JSONObject.NULL)
         .put("createdAt", createdAt)
         .put("createdBy", createdBy ?: JSONObject.NULL)
         .put("joinedAt", joinedAt ?: JSONObject.NULL)
         .put("password", password ?: JSONObject.NULL)
         .put("members", JSONArray(members))
-        .put("rotatedForBanned", JSONArray(rotatedForBanned))
+        .put("rotatedForNoAccess", JSONArray(rotatedForNoAccess))
+        .put("accessSnapshot", JSONArray(accessSnapshot))
         .put("knownBanned", JSONArray(knownBanned))
         .put("storageEnabled", storageEnabled)
         .put("storageProvider", storageProvider)
         .put("storageDays", storageDays ?: JSONObject.NULL)
         .put("adminStorageDays", adminStorageDays ?: JSONObject.NULL)
         .put("keysStorageDays", keysStorageDays ?: JSONObject.NULL)
+        .put("interactionsStorageDays", interactionsStorageDays ?: JSONObject.NULL)
         .put("exposure", exposure)
         .put("description", description)
         .put("language", language)
@@ -119,9 +130,14 @@ data class Channel(
             o.optJSONArray("members")?.let { arr ->
                 for (i in 0 until arr.length()) arr.optString(i)?.let { members.add(it) }
             }
-            val rotatedForBanned = mutableListOf<String>()
-            o.optJSONArray("rotatedForBanned")?.let { arr ->
-                for (i in 0 until arr.length()) arr.optString(i)?.let { rotatedForBanned.add(it) }
+            val rotatedForNoAccess = mutableListOf<String>()
+            // The older key was "rotatedForBanned" — same set, narrower name.
+            (o.optJSONArray("rotatedForNoAccess") ?: o.optJSONArray("rotatedForBanned"))?.let { arr ->
+                for (i in 0 until arr.length()) arr.optString(i)?.let { rotatedForNoAccess.add(it) }
+            }
+            val accessSnapshot = mutableListOf<String>()
+            o.optJSONArray("accessSnapshot")?.let { arr ->
+                for (i in 0 until arr.length()) arr.optString(i)?.let { accessSnapshot.add(it) }
             }
             val knownBanned = mutableListOf<String>()
             o.optJSONArray("knownBanned")?.let { arr ->
@@ -132,26 +148,37 @@ data class Channel(
                 ephemeralStreamId = o.optString("ephemeralStreamId"),
                 adminStreamId = o.optString("adminStreamId"),
                 keysStreamId = o.optString("keysStreamId"),
+                interactionsStreamId = o.optString("interactionsStreamId"),
                 name = o.optString("name", "channel"),
                 type = o.optString("type", "public"),
                 gateAddress = o.optJSONObject("gate")
                     ?.optString("address")?.lowercase()?.ifEmpty { null },
-                authorMode = if (o.isNull("authorMode")) {
-                    if (o.optString("type") == "gated") "everyone" else null
-                } else o.optString("authorMode").ifEmpty { null },
+                // Records persisted (or synced) before the rename carry
+                // authorMode 'members'/'everyone' — same axis, old names.
+                wireIdentity = when (val raw =
+                    (o.optString("wireIdentity").ifEmpty { null }
+                        ?: o.optString("authorMode").ifEmpty { null })) {
+                    "members" -> "sealed"
+                    "everyone" -> "visible"
+                    null -> if (o.optString("type") == "gated") "visible" else null
+                    else -> raw
+                },
                 createdAt = o.optLong("createdAt", 0L),
                 // isNull first: Android's optString yields the literal "null" for JSON null.
                 createdBy = if (o.isNull("createdBy")) null else o.optString("createdBy").ifEmpty { null },
                 joinedAt = if (o.isNull("joinedAt")) null else o.optLong("joinedAt"),
                 password = if (o.isNull("password")) null else o.optString("password").ifEmpty { null },
                 members = members,
-                rotatedForBanned = rotatedForBanned,
+                rotatedForNoAccess = rotatedForNoAccess,
+                accessSnapshot = accessSnapshot,
                 knownBanned = knownBanned,
                 storageEnabled = o.optBoolean("storageEnabled", false),
                 storageProvider = o.optString("storageProvider", "streamr").ifEmpty { "streamr" },
                 storageDays = if (o.isNull("storageDays")) null else o.optInt("storageDays"),
                 adminStorageDays = if (o.isNull("adminStorageDays")) null else o.optInt("adminStorageDays"),
                 keysStorageDays = if (o.isNull("keysStorageDays")) null else o.optInt("keysStorageDays"),
+                interactionsStorageDays = if (o.isNull("interactionsStorageDays")) null
+                    else o.optInt("interactionsStorageDays"),
                 exposure = o.optString("exposure", "hidden"),
                 description = o.optString("description", ""),
                 language = o.optString("language", ""),

@@ -29,17 +29,18 @@ class StorageStreamsTest {
     // ===== storedStreams =====
 
     @Test
-    fun `a gated channel stores the message, admin and keys streams`() {
+    fun `a gated channel stores the message, admin, keys and interactions streams`() {
         assertEquals(
-            listOf("0xowner/test-1", "0xowner/test-3", "0xowner/test-4"),
+            listOf("0xowner/test-1", "0xowner/test-3", "0xowner/test-4", "0xowner/test-5"),
             ChannelManager.storedStreams(channel("gated"))
         )
     }
 
+    /** No -4 without a gate, but the -5 belongs to every channel type. */
     @Test
-    fun `a public channel has no keys stream to store`() {
+    fun `a public channel stores the message, admin and interactions streams`() {
         assertEquals(
-            listOf("0xowner/test-1", "0xowner/test-3"),
+            listOf("0xowner/test-1", "0xowner/test-3", "0xowner/test-5"),
             ChannelManager.storedStreams(channel("public"))
         )
     }
@@ -55,7 +56,23 @@ class StorageStreamsTest {
     fun `the keys stream is derived when the record does not carry it`() {
         assertEquals(
             "0xowner/test-4",
-            ChannelManager.storedStreams(channel("gated", keysStreamId = "")).last()
+            ChannelManager.storedStreams(channel("gated", keysStreamId = ""))[2]
+        )
+    }
+
+    /**
+     * Kinds used to come from a fixed list read by position, so on a channel
+     * with no -4 the -5 was reported as the keys stream.
+     */
+    @Test
+    fun `each stored stream is labelled by what it is, not by its position`() {
+        assertEquals(
+            listOf("message", "admin", "interactions"),
+            ChannelManager.storedStreamsByKind(channel("public")).map { it.second }
+        )
+        assertEquals(
+            listOf("message", "admin", "keys", "interactions"),
+            ChannelManager.storedStreamsByKind(channel("gated")).map { it.second }
         )
     }
 
@@ -63,8 +80,17 @@ class StorageStreamsTest {
 
     private fun node(
         onMessage: Boolean, onAdmin: Boolean, onKeys: Boolean,
-        hasKeys: Boolean, allStreamsRead: Boolean = true
-    ) = ChannelManager.StorageNode("0xnode", onMessage, onAdmin, onKeys, hasKeys, allStreamsRead)
+        hasKeys: Boolean, allStreamsRead: Boolean = true,
+        onInteractions: Boolean = onKeys
+    ) = ChannelManager.StorageNode(
+        address = "0xnode",
+        onMessage = onMessage,
+        onAdmin = onAdmin,
+        onKeys = onKeys,
+        onInteractions = onInteractions,
+        hasKeys = hasKeys,
+        allStreamsRead = allStreamsRead
+    )
 
     @Test
     fun `a node on every stored stream is complete`() {
@@ -79,6 +105,15 @@ class StorageStreamsTest {
     @Test
     fun `a node missing from the admin stream is partial`() {
         assertTrue(node(onMessage = true, onAdmin = false, onKeys = true, hasKeys = true).partial)
+    }
+
+    /** Reactions live on the -5 and it takes storage like the rest. */
+    @Test
+    fun `a node missing from the interactions stream is partial`() {
+        assertTrue(node(
+            onMessage = true, onAdmin = true, onKeys = true,
+            hasKeys = true, onInteractions = false
+        ).partial)
     }
 
     /** Without a -4, onKeys can never be true and must not read as a gap. */

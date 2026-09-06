@@ -433,6 +433,23 @@ const api = {
         }
     },
 
+    // The single authenticity check every RAW read goes through on NON-gated
+    // streams: the envelope must be signed by the key it claims as publisher.
+    // It replaces the SDK validation that `raw` turns off — without it a raw
+    // reader would accept an envelope carrying someone else's publisherId,
+    // which is authorship forgery wherever the publisher IS the author.
+    // Gated streams never use it: there the publisher is the clone for
+    // everyone and the author is the recovered signer itself.
+    _envelopeIsAuthentic(message) {
+        const signer = api._recoverEnvelopeSigner(message);
+        if (!signer) return false;
+        const sm = (message && message.streamMessage) ? message.streamMessage : message;
+        const publisherId = (message && message.publisherId != null)
+            ? message.publisherId
+            : (sm && sm.messageId ? sm.messageId.publisherId : null);
+        return !!publisherId && String(publisherId).toLowerCase() === signer;
+    },
+
     // Streams whose publish rights are on-chain and owner/member-bound must
     // never see an ephemeral publisher: the admin stream (-3: ADMIN_STATE,
     // CHANNEL_IMAGE, PASSWORD_CHALLENGE) is refused HERE, loudly — a clever
@@ -460,9 +477,9 @@ const api = {
     // switch — peers mid-transfer know the current publisher.
     _channelIdentities: {},
 
-    // All three streams of a channel (-1/-2/-3) share one identity.
+    // Every stream of a channel shares one identity: -1, -2, -3, -4, -5.
     _baseChannelId(streamId) {
-        return String(streamId).replace(/-[123]$/, '');
+        return String(streamId).replace(/-[12345]$/, '');
     },
 
     // Kotlin mints the channel pseudonym natively (ChannelIdentities) and
@@ -783,6 +800,10 @@ const api = {
     async _drainResend(stream, push, deadlineAt, ctx) {
         const iterator = stream[Symbol.asyncIterator]();
         let done = false;
+        // Iteration errors are skipped so one bad row cannot end a read, but
+        // the count travels out: a caller that answers requests must be able
+        // to tell a failed read from an empty one.
+        api._lastDrainErrors = 0;
         while (!done) {
             if (deadlineAt && Date.now() > deadlineAt) {
                 try { if (iterator.return) iterator.return(); } catch (e) { /* best effort */ }
@@ -800,6 +821,7 @@ const api = {
                     // traffic; there is no key recovery any more (P6).
                     continue;
                 }
+                api._lastDrainErrors++;
                 console.warn('resend iteration error: ' +
                     (iterError && iterError.message ? iterError.message : String(iterError)));
                 continue;
@@ -879,21 +901,26 @@ const api = {
     // History via storage-node resend (last N) — returns everything in an array.
     // With `password`, sealed rows are opened during the drain (see
     // _sealedOpener) and come back as parsed objects.
-    // With `raw`, the SDK skips its validation pipeline: stored envelopes are
-    // NOT re-checked against the present gate state (which would erase
-    // ex-members' history) — the Kotlin side establishes authorship from
-    // meta.signer instead, so `raw` must always travel with `recoverSigner`.
+    //
+    // ALWAYS raw: the SDK skips its validation pipeline, so stored envelopes
+    // are not re-checked against the present gate state (which would erase
+    // ex-members' history) and a half-connected node cannot stall the read.
+    // What replaces that validation depends on the caller: gated paths ask
+    // for `recoverSigner` and establish authorship from meta.signer; every
+    // other path gets the envelope-authenticity check here, without which a
+    // raw read would accept an envelope carrying someone else's publisherId.
     async resend(a) {
         if (!client) throw new Error('client not connected');
         const pwKey = a.password ? await api._pwKey(a.password) : null;
         const stream = await client.resend(
             { streamId: a.streamId, partition: a.partition },
-            a.raw ? { last: a.last || 50, raw: true } : { last: a.last || 50 }
+            { last: a.last || 50, raw: true }
         );
         const out = [];
         const opener = api._sealedOpener(pwKey);
         const t0 = Date.now();
         const partial = await api._drainResend(stream, function (msg) {
+            if (!a.recoverSigner && !api._envelopeIsAuthentic(msg)) return;
             const rec = {
                 content: msg.content,
                 meta: {
@@ -911,7 +938,7 @@ const api = {
         // that found no network wait left to hide behind. A large tail means
         // PBKDF2 is the wall, not the storage node.
         return {
-            messages: out, partial: partial,
+            messages: out, partial: partial, errors: api._lastDrainErrors,
             drainMs: tDrain - t0, decryptMs: Date.now() - tDrain
         };
     },
@@ -924,15 +951,15 @@ const api = {
     async resendRange(a) {
         if (!client) throw new Error('client not connected');
         const pwKey = a.password ? await api._pwKey(a.password) : null;
+        // Always raw, same contract as `resend` above.
         const stream = await client.resend(
             { streamId: a.streamId, partition: a.partition },
-            a.raw
-                ? { from: { timestamp: 0 }, to: { timestamp: a.before }, raw: true }
-                : { from: { timestamp: 0 }, to: { timestamp: a.before } }
+            { from: { timestamp: 0 }, to: { timestamp: a.before }, raw: true }
         );
         const all = [];
         const opener = api._sealedOpener(pwKey);
         const partial = await api._drainResend(stream, function (msg) {
+            if (!a.recoverSigner && !api._envelopeIsAuthentic(msg)) return;
             const rec = {
                 content: msg.content,
                 meta: {
@@ -962,12 +989,16 @@ const api = {
         if (!client) throw new Error('client not connected');
         const windowStart = Math.max(0, a.before - a.windowMs);
         const windowEnd = a.before - 1;
+        // Raw — DM inboxes are never gated, so every entry must pass the
+        // envelope check below (the sealed DM adds its own proof downstream;
+        // this is the replay defence the SDK validation used to give).
         const stream = await client.resend(
             { streamId: a.streamId, partition: a.partition },
-            { from: { timestamp: windowStart }, to: { timestamp: windowEnd } }
+            { from: { timestamp: windowStart }, to: { timestamp: windowEnd }, raw: true }
         );
         const out = [];
         const partial = await api._drainResend(stream, function (msg) {
+            if (!api._envelopeIsAuthentic(msg)) return;
             const rec = {
                 content: msg.content,
                 meta: {
@@ -988,11 +1019,16 @@ const api = {
         if (!client) throw new Error('client not connected');
         const stream = await client.getStream(a.streamId);
         if (!stream) throw new Error('Stream not found');
+        // The description also carries the gate ('g') and wire identity ('m'):
+        // writing over a failed read would strip the gate on-chain, so an
+        // unreadable description aborts the update instead of merging into {}.
         let meta = {};
         try {
             const desc = await stream.getDescription();
             meta = desc ? JSON.parse(desc) : {};
-        } catch (e) { meta = {}; }
+        } catch (e) {
+            throw new Error('Channel metadata could not be read; rename aborted to avoid losing the gate');
+        }
         if (typeof a.name === 'string') meta.n = a.name;
         if (typeof a.description === 'string') meta.d = a.description;
         await stream.setDescription(JSON.stringify(meta));
@@ -1324,9 +1360,12 @@ const api = {
     //   -> { rows: [{ timestamp, publisherId, data: b64(sealed [iv][ct]) }] }
     async resendStorageChunksDm(a) {
         if (!client) throw new Error('client not connected');
+        // Raw, no envelope guard: chunk windows are self-verifying downstream
+        // (per-file seal plus the assembled digest), and the native HTTP path
+        // used by password/public downloads never validated either.
         const stream = await client.resend(
             { streamId: a.streamId, partition: a.partition },
-            { from: { timestamp: a.fromTs }, to: { timestamp: a.toTs } }
+            { from: { timestamp: a.fromTs }, to: { timestamp: a.toTs }, raw: true }
         );
         const rows = [];
         await api._drainResend(stream, function (msg) {
@@ -1638,12 +1677,13 @@ const api = {
 
     // ===== PomboGate (N-C gated channels) — port of web gate.js =====
     //
-    // One EIP-1167 clone per channel; the clone is the on-wire publisher and
-    // its checkAccess decides epoch-key distribution and UI state (never
-    // history — that is the sticky isValidSignature's job, consumed by the
-    // SDK). Reads cached 10 min per (gate,user), FAIL-CLOSED on RPC trouble.
-    // Writes are owner/moderator transactions signed by the account wallet.
-    _GATE_FACTORY: '0x14595B5F192fA56714D1F8821BD1651dC5bFd1aB', // v2 (moderators), Polygon PoS
+    // One EIP-1167 clone per channel; the clone is the on-wire publisher.
+    // Since v3 the gate is single: isValidSignature answers the same question
+    // as checkAccess (plus the read-only filter), so lapsed access cuts
+    // publishing at ingest. Reads cached 10 min per (gate,user), FAIL-CLOSED
+    // on RPC trouble. Writes are owner/moderator transactions signed by the
+    // account wallet. No legacy: pre-v3 gates are unsupported by decision.
+    _GATE_FACTORY: '0x38A42115B96A16079F2b0b31bba2Fa183E3f448F', // v3.1 (readOnly is declarative), Polygon PoS
     _GATE_ABI: [
         'function owner() view returns (address)',
         'function mode() view returns (uint8)',
@@ -1651,12 +1691,15 @@ const api = {
         'function minBalance() view returns (uint256)',
         'function price() view returns (uint256)',
         'function duration() view returns (uint64)',
-        'function everMember(address) view returns (bool)',
+        'function wireIdentity() view returns (uint8)',
+        'function readOnly() view returns (bool)',
         'function banned(address) view returns (bool)',
-        'function erased(address) view returns (bool)',
         'function allowlist(address) view returns (bool)',
         'function moderators(address) view returns (bool)',
         'function checkAccess(address user) view returns (bool)',
+        'function states(address[] users) view returns (tuple(bool access, bool banned, bool moderator, bool allowed, uint64 paidUntil)[])',
+        'function membersCount() view returns (uint256)',
+        'function membersAt(uint256 offset, uint256 limit) view returns (address[])',
         'function accessUntil(address user) view returns (uint64)',
         'function paidUntil(address) view returns (uint64)',
         'function allow(address user)',
@@ -1664,13 +1707,14 @@ const api = {
         'function revokeAllow(address user)',
         'function pay()',
         'function payWithPermit(uint256 permitValue, uint256 deadline, uint8 v, bytes32 r, bytes32 s)',
-        'function ban(address user, bool eraseHistory)',
+        'function ban(address user)',
         'function unban(address user)',
-        'function unerase(address user)',
-        'function setModerator(address user, bool enabled)'
+        'function setModerator(address user, bool enabled)',
+        'function setPrice(uint256 price)',
+        'function setDuration(uint64 duration)'
     ],
     _GATE_FACTORY_ABI: [
-        'function createGate(uint8 mode, address token, uint256 minBalance, uint256 price, uint64 duration) returns (address)',
+        'function createGate(uint8 mode, address token, uint256 minBalance, uint256 price, uint64 duration, uint8 wireIdentity, bool readOnly) returns (address)',
         'event GateCreated(address indexed gate, address indexed owner, uint8 mode)'
     ],
     // balanceOf covers ERC-721 too (same selector); decimals/allowance are ERC-20 only.
@@ -1716,11 +1760,14 @@ const api = {
         // Walk the WHOLE list, once. Trying a single alternative left a
         // member refused by a gate they hold access to whenever two endpoints
         // in a row were down, and the settings can inject seven of them.
+        // A revert (CALL_EXCEPTION) is the chain answering, not the endpoint
+        // failing — rotating on it just replays the same revert everywhere.
         let lastError = null;
         for (let attempt = 0; attempt < RPCS.length; attempt++) {
             try {
                 return await op(api._gateProvider());
             } catch (e) {
+                if (e && e.code === 'CALL_EXCEPTION') throw e;
                 lastError = e;
                 api._gateRpcIndex++;
                 api._gateProviderInst = null;
@@ -1751,7 +1798,9 @@ const api = {
         return { ok: true, txHash: tx.hash };
     },
 
-    // { mode, token?, minBalance?, price?, duration? } -> { gate }
+    // { mode, token?, minBalance?, price?, duration?, wireIdentity?, readOnly? }
+    // -> { gate }. wireIdentity: 0 = Visible, 1 = Sealed; both immutable —
+    // the contract is the authority, the -1 metadata flags are cached copies.
     async gateCreate(a) {
         const factory = new window.ethers.Contract(api._GATE_FACTORY, api._GATE_FACTORY_ABI, api._gateSigner());
         const tx = await factory.createGate(
@@ -1759,7 +1808,9 @@ const api = {
             a.token || '0x0000000000000000000000000000000000000000',
             a.minBalance != null ? BigInt(a.minBalance) : 0n,
             a.price != null ? BigInt(a.price) : 0n,
-            a.duration != null ? BigInt(a.duration) : 0n
+            a.duration != null ? BigInt(a.duration) : 0n,
+            a.wireIdentity || 0,
+            !!a.readOnly
         );
         const receipt = await tx.wait();
         var gateAddress = null;
@@ -1797,69 +1848,156 @@ const api = {
         return { access: !!value };
     },
 
-    // { gate } -> { owner, mode, token, minBalance, price, duration }
+    _gateInfoCache: new Map(), // gate -> { info|null, at }; null = not v3
+
+    // { gate, fresh? } -> { owner, mode, token, minBalance, price, duration,
+    // wireIdentity, wireIdentityName, readOnly }. TTL'd: price/duration are
+    // owner-mutable in v3. A revert means a pre-v3 clone — unsupported by
+    // decision; the verdict is cached so a dead channel does not hammer the
+    // RPC re-discovering it.
     async gateInfo(a) {
-        return api._gateWithProvider(async function () {
-            const gate = api._gateRead(a.gate);
-            const r = await Promise.all([
-                gate.owner(), gate.mode(), gate.token(),
-                gate.minBalance(), gate.price(), gate.duration()
-            ]);
-            return {
-                owner: String(r[0]).toLowerCase(), mode: Number(r[1]),
-                token: String(r[2]).toLowerCase(), minBalance: String(r[3]),
-                price: String(r[4]), duration: String(r[5])
-            };
-        });
+        const key = String(a.gate).toLowerCase();
+        const cached = api._gateInfoCache.get(key);
+        if (!a.fresh && cached && Date.now() - cached.at < 10 * 60 * 1000) {
+            if (cached.info === null) throw new Error('gate is not v3 (unsupported)');
+            return cached.info;
+        }
+        let info;
+        try {
+            info = await api._gateWithProvider(async function () {
+                const gate = api._gateRead(a.gate);
+                const r = await Promise.all([
+                    gate.owner(), gate.mode(), gate.token(),
+                    gate.minBalance(), gate.price(), gate.duration(),
+                    gate.wireIdentity(), gate.readOnly()
+                ]);
+                return {
+                    owner: String(r[0]).toLowerCase(), mode: Number(r[1]),
+                    token: String(r[2]).toLowerCase(), minBalance: String(r[3]),
+                    price: String(r[4]), duration: String(r[5]),
+                    wireIdentity: Number(r[6]),
+                    wireIdentityName: Number(r[6]) === 1 ? 'sealed' : 'visible',
+                    readOnly: !!r[7]
+                };
+            });
+        } catch (e) {
+            if (e && e.code === 'CALL_EXCEPTION') {
+                api._gateInfoCache.set(key, { info: null, at: Date.now() });
+                throw new Error('gate is not v3 (unsupported)');
+            }
+            throw e;
+        }
+        api._gateInfoCache.set(key, { info: info, at: Date.now() });
+        return info;
     },
 
     // { gate, candidates: [addr] } -> { members: [{address, isOwner, allowed,
-    // banned, everMember, erased, moderator, paidUntil}] } — candidate flags,
-    // NO event scan (free RPCs cap eth_getLogs at 10k blocks; enumeration →
-    // indexer, N-D). paidUntil (unix seconds) is only read on PAID gates.
+    // banned, moderator, access, paidUntil}] } — one states() call for the
+    // whole candidate set. Its access field is strict (a broken gate token
+    // reverts), so the fallback reads the non-token flags per address and
+    // reports no access — the same fail-closed the rest of the client applies.
     async gateMembers(a) {
+        const owner = String(await api._gateWithProvider(function () {
+            return api._gateRead(a.gate).owner();
+        })).toLowerCase();
+        const gateAddr = String(a.gate).toLowerCase();
+        const set = {};
+        set[owner] = true;
+        (a.candidates || []).forEach(function (c) {
+            const addr = String(c || '').toLowerCase();
+            if (/^0x[0-9a-f]{40}$/.test(addr) && addr !== gateAddr) set[addr] = true;
+        });
+        const addresses = Object.keys(set);
+        let members;
+        try {
+            const states = await api._gateWithProvider(function () {
+                return api._gateRead(a.gate).states(addresses);
+            });
+            members = addresses.map(function (address, i) {
+                return {
+                    address: address, access: !!states[i].access,
+                    banned: !!states[i].banned, moderator: !!states[i].moderator,
+                    allowed: !!states[i].allowed,
+                    paidUntil: Number(states[i].paidUntil),
+                    isOwner: address === owner
+                };
+            });
+            // The states() batch is an authoritative access read — refresh the
+            // per-user cache so a cut this read just revealed refuses keys
+            // immediately instead of after the TTL. (Not on the fallback
+            // path below: its per-flag access is a guess, never cacheable.)
+            members.forEach(function (m) {
+                api._gateAccessCache.set(gateAddr + '|' + m.address,
+                    { value: !!m.access, at: Date.now() });
+            });
+        } catch (e) {
+            console.warn('gate: states() failed, falling back to flag reads: ' + (e && e.message || e));
+            members = await api._gateWithProvider(async function () {
+                const gate = api._gateRead(a.gate);
+                return Promise.all(addresses.map(async function (address) {
+                    const f = await Promise.all([
+                        gate.allowlist(address).catch(function () { return false; }),
+                        gate.banned(address).catch(function () { return false; }),
+                        gate.moderators(address).catch(function () { return false; }),
+                        gate.paidUntil(address).then(function (v) { return Number(v); }).catch(function () { return 0; })
+                    ]);
+                    return {
+                        address: address, allowed: !!f[0], banned: !!f[1],
+                        moderator: !!f[2], paidUntil: f[3],
+                        access: address === owner, isOwner: address === owner
+                    };
+                }));
+            });
+        }
+        members.sort(function (x, y) {
+            return (y.isOwner - x.isOwner) || (y.moderator - x.moderator) ||
+                (y.access - x.access) || x.address.localeCompare(y.address);
+        });
+        return { members: members };
+    },
+
+    // { gate } -> { members: [addr] } — the full allowlist of a Closed (NONE)
+    // gate, paged through membersAt. Completes the loss-of-access candidate
+    // set there instead of limiting it to what this client happened to see.
+    async gateListMembers(a) {
         return api._gateWithProvider(async function () {
             const gate = api._gateRead(a.gate);
-            const r = await Promise.all([gate.owner(), gate.mode().catch(function () { return 0; })]);
-            const owner = String(r[0]).toLowerCase();
-            const isPaid = Number(r[1]) === 3;
-            const gateAddr = String(a.gate).toLowerCase();
-            const set = {};
-            set[owner] = true;
-            (a.candidates || []).forEach(function (c) {
-                const addr = String(c || '').toLowerCase();
-                if (/^0x[0-9a-f]{40}$/.test(addr) && addr !== gateAddr) set[addr] = true;
-            });
-            const addresses = Object.keys(set);
-            const members = await Promise.all(addresses.map(async function (address) {
-                const f = await Promise.all([
-                    gate.allowlist(address), gate.banned(address),
-                    gate.everMember(address), gate.erased(address),
-                    gate.moderators(address).catch(function () { return false; }), // v1 gates predate the getter
-                    // Mode-aware CURRENT membership — `allowed` only means NONE
-                    gate.checkAccess(address).catch(function () { return false; }),
-                    isPaid ? gate.paidUntil(address).then(function (v) { return Number(v); }).catch(function () { return 0; }) : 0
-                ]);
-                return {
-                    address: address, allowed: !!f[0], banned: !!f[1],
-                    everMember: !!f[2], erased: !!f[3], moderator: !!f[4],
-                    access: !!f[5], paidUntil: f[6], isOwner: address === owner
-                };
-            }));
-            members.sort(function (x, y) {
-                return (y.isOwner - x.isOwner) || (y.moderator - x.moderator) ||
-                    (y.access - x.access) || x.address.localeCompare(y.address);
-            });
-            return { members: members };
+            const total = Number(await gate.membersCount());
+            const out = [];
+            for (let offset = 0; offset < total; offset += 500) {
+                const page = await gate.membersAt(offset, 500);
+                for (let i = 0; i < page.length; i++) out.push(String(page[i]).toLowerCase());
+            }
+            return { members: out };
+        });
+    },
+
+    // { gate, user } -> { moderator } — asked per signer of a moderation
+    // delta, since the contract has no moderator enumeration to read.
+    async gateIsModerator(a) {
+        return api._gateWithProvider(async function () {
+            const value = await api._gateRead(a.gate).moderators(a.user)
+                .catch(function () { return false; });
+            return { moderator: !!value };
         });
     },
 
     async gateAllow(a) { return api._gateTx(a.gate, 'allow', [a.user]); },
     async gateRevokeAllow(a) { return api._gateTx(a.gate, 'revokeAllow', [a.user]); },
     async gateAllowBatch(a) { return api._gateTx(a.gate, 'allowBatch', [a.users || []]); },
-    async gateBan(a) { return api._gateTx(a.gate, 'ban', [a.user, !!a.erase]); },
+    async gateBan(a) { return api._gateTx(a.gate, 'ban', [a.user]); },
     async gateUnban(a) { return api._gateTx(a.gate, 'unban', [a.user]); },
     async gateSetModerator(a) { return api._gateTx(a.gate, 'setModerator', [a.user, !!a.enabled]); },
+    async gateSetPrice(a) {
+        const r = await api._gateTx(a.gate, 'setPrice', [BigInt(a.price)]);
+        api._gateInfoCache.delete(String(a.gate).toLowerCase());
+        return r;
+    },
+    async gateSetDuration(a) {
+        const r = await api._gateTx(a.gate, 'setDuration', [BigInt(a.duration)]);
+        api._gateInfoCache.delete(String(a.gate).toLowerCase());
+        return r;
+    },
 
     _gateReadToken(tokenAddress) {
         return new window.ethers.Contract(tokenAddress, api._GATE_TOKEN_ABI, api._gateProvider());
@@ -1925,7 +2063,10 @@ const api = {
         const progress = function (step) {
             try { Native.progress('gatePay', step); } catch (e) { /* shell without the hook */ }
         };
-        const info = await api.gateInfo(a);
+        // Always pay against the LIVE price: the cached one can be stale for
+        // up to the TTL after a setPrice, and approving the old amount would
+        // either revert the transfer or leave a dangling allowance.
+        const info = await api.gateInfo({ gate: a.gate, fresh: true });
         const price = BigInt(info.price);
         const signer = api._gateSigner();
         const token = new window.ethers.Contract(info.token, api._GATE_TOKEN_ABI, signer);

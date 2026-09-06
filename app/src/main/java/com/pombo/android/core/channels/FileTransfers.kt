@@ -405,7 +405,7 @@ internal class FileTransfers(private val manager: ChannelManager) {
             } else null
             // Members-only: chunks travel under the SHARED key; the clone path
             // would stamp the uploader's account onto every stored chunk.
-            val membersOnly = !isDm && channel.authorMode == "members"
+            val membersOnly = !isDm && channel.wireIdentity == "sealed"
             val sharedKeyHex = if (membersOnly) {
                 epochKeys.publishKeyFor(channel.messageStreamId)?.keyHex
                     ?: throw IllegalStateException(

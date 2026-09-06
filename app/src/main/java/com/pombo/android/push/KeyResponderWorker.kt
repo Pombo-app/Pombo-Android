@@ -68,6 +68,11 @@ class KeyResponderWorker(
             )
         }
         val sweepScope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
+        // A read that failed is not "no requests pending". The sweep answers
+        // whoever it SAW, so a storage node that times out turns this worker
+        // into a no-op that reports success — exactly when the requester
+        // needs it most. Tracked here and turned into a retry below.
+        var readFailed = false
         try {
             bridge.awaitConnected(90_000)
 
@@ -80,9 +85,14 @@ class KeyResponderWorker(
                 publishKeys = { keysStreamId, data ->
                     val gate = byKeysStream[keysStreamId]?.gateAddress
                         ?: throw IllegalStateException("Unknown responder channel for $keysStreamId")
+                    // Announces on P0, requests and wraps on P1 — the same
+                    // cadence split the in-app path uses.
+                    val t = data.optString("t")
+                    val partition = if (t == StreamConstants.KEY_ANNOUNCE || t == StreamConstants.PUB_ANNOUNCE)
+                        StreamConstants.P_KEY_EXCHANGE else StreamConstants.P_REQUESTS
                     bridge.call("publishAsGate", JSONObject()
                         .put("streamId", keysStreamId)
-                        .put("partition", StreamConstants.P_KEY_EXCHANGE)
+                        .put("partition", partition)
                         .put("content", data)
                         .put("gateAddress", gate))
                 },
@@ -92,12 +102,23 @@ class KeyResponderWorker(
                     // Raw + recoverSigner, same rationale as the in-app resend:
                     // the ordered pipeline's mesh-side gap-filling stalls on a
                     // half-connected node; authority is the recovered signer.
-                    val res = bridge.call("resend", JSONObject()
-                        .put("streamId", keysStreamId)
-                        .put("partition", StreamConstants.P_KEY_EXCHANGE)
-                        .put("last", 1000)
-                        .put("raw", true)
-                        .put("recoverSigner", true), 30_000)
+                    // Both cadences: P0 for the announces, P1 for the requests
+                    // this worker exists to answer.
+                    for (part in listOf(StreamConstants.P_KEY_EXCHANGE, StreamConstants.P_REQUESTS)) {
+                    val res = try {
+                        bridge.call("resend", JSONObject()
+                            .put("streamId", keysStreamId)
+                            .put("partition", part)
+                            .put("last", 1000)
+                            .put("raw", true)
+                            .put("recoverSigner", true), 30_000)
+                    } catch (e: Exception) {
+                        readFailed = true
+                        throw e
+                    }
+                    if (res.optBoolean("partial", false) || res.optInt("errors", 0) > 0) {
+                        readFailed = true
+                    }
                     val arr = res.optJSONArray("messages")
                     if (arr != null) for (i in 0 until arr.length()) {
                         val entry = arr.optJSONObject(i) ?: continue
@@ -110,6 +131,7 @@ class KeyResponderWorker(
                         if (signer.isEmpty()) continue
                         out.add(com.pombo.android.core.EpochKeyManager.Entry(
                             content, signer, meta.optLong("timestamp", 0L)))
+                    }
                     }
                     out
                 },
@@ -157,12 +179,17 @@ class KeyResponderWorker(
                         gated = false        // no rotation timers on a scope about to die
                     )
                 } catch (e: Exception) {
+                    readFailed = true
                     android.util.Log.w(TAG, "sweep failed on …${entry.messageStreamId.takeLast(20)}: ${e.message}")
                 }
             }
             // Ranked answers are scheduled up to RANK_MAX × 2s out — the wraps
             // publish on sweepScope, which dies with this worker.
             delay(ANSWER_DRAIN_MS)
+            if (readFailed) {
+                android.util.Log.w(TAG, "key stream read incomplete — asking for a retry")
+                return Result.retry()
+            }
             return Result.success()
         } catch (e: Exception) {
             android.util.Log.w(TAG, "key responder worker failed: ${e.message}")

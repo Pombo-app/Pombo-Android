@@ -169,6 +169,9 @@ class AppViewModel(app: Application) : AndroidViewModel(app), PomboBridge.Listen
     val pins get() = manager.pins
     val hiddenIds get() = manager.hiddenIds
     val bannedMembers get() = manager.bannedMembers
+    val banSince get() = manager.banSince
+    val rosterNames get() = manager.rosterNames
+    val moderatesGate get() = manager.moderatesGate
 
     /** Per-channel unread badge counts (web updateUnreadCount). */
     val unreadCounts get() = unreadStore.counts
@@ -258,8 +261,27 @@ class AppViewModel(app: Application) : AndroidViewModel(app), PomboBridge.Listen
      * on the same condition the manager writes on — a hidden channel saves
      * locally and must not be held behind a prompt it can only fail.
      */
+    /**
+     * Settle whether this channel's name is public, correcting a record that
+     * says otherwise. Cheap and cached; the details screen asks on open so the
+     * gas warning is right before the user decides to save.
+     */
+    fun confirmExposureFromChain() = viewModelScope.launch {
+        manager.current.value?.let { manager.writesMetadataOnChain(it) }
+    }
+
     fun updateChannelMetadata(name: String?, description: String?) = viewModelScope.launch {
-        val onChain = manager.current.value?.let { manager.hasPublicMetadata(it) } ?: false
+        val channel = manager.current.value
+        // Saving what is already there is a transaction for nothing: the Save
+        // button does not know whether the user edited anything, so the check
+        // belongs here (web handleSaveChannelName does the same).
+        val nameSame = name == null || name.trim() == channel?.name?.trim()
+        val descSame = description == null || description.trim() == channel?.description?.trim()
+        if (nameSame && descSame) return@launch
+        // The same question the write itself asks, so the prompt and the
+        // transaction never disagree — a local flag left over from an older
+        // build had the owner renaming on-chain with no confirmation shown.
+        val onChain = channel?.let { manager.writesMetadataOnChain(it) } ?: false
         val save: suspend () -> Unit = {
             runWithToast(
                 if (onChain) "Saving on-chain…" else "Saving…",
@@ -418,13 +440,13 @@ class AppViewModel(app: Application) : AndroidViewModel(app), PomboBridge.Listen
      * per device on purpose — serving keys is a duty of the device the owner
      * chose, not of the account.
      */
-    fun setKeyResponder(channel: Channel, on: Boolean) = viewModelScope.launch {
-        val others = settingsStore.keyResponderChannels
-            .filterNot { it.messageStreamId == channel.messageStreamId }
+    fun setKeyResponder(channel: Channel, on: Boolean, quiet: Boolean = false) = viewModelScope.launch {
+        val previous = settingsStore.keyResponderChannels
+        val others = previous.filterNot { it.messageStreamId == channel.messageStreamId }
         if (on) {
             val tag = try { manager.keyResponderTag(channel) } catch (e: Exception) { "" }
             if (tag.isEmpty()) {
-                toast("Could not derive the channel tag", com.pombo.android.ui.ToastKind.WARNING)
+                if (!quiet) toast("Could not derive the channel tag", com.pombo.android.ui.ToastKind.WARNING)
                 return@launch
             }
             settingsStore.keyResponderChannels = others + com.pombo.android.data.KeyResponderEntry(
@@ -435,10 +457,18 @@ class AppViewModel(app: Application) : AndroidViewModel(app), PomboBridge.Listen
                 channel.gateAddress ?: "",
                 tag
             )
-            toast("Key responder on — this device answers key requests", com.pombo.android.ui.ToastKind.INFO)
+            // The relay only wakes tags it holds a row for. Without this the
+            // toggle reads ON and nothing ever wakes unless the channel also
+            // has notifications, which is a different opt-in entirely.
+            runCatching { push.registerWakeTag(tag) }.onFailure {
+                android.util.Log.w("PomboPush", "wake tag registration failed: ${it.message}")
+            }
+            if (!quiet) toast("Key responder on — this device answers key requests", com.pombo.android.ui.ToastKind.INFO)
         } else {
             settingsStore.keyResponderChannels = others
-            toast("Key responder off", com.pombo.android.ui.ToastKind.INFO)
+            previous.firstOrNull { it.messageStreamId == channel.messageStreamId }
+                ?.let { push.forgetWakeTag(it.tag) }
+            if (!quiet) toast("Key responder off", com.pombo.android.ui.ToastKind.INFO)
         }
         _keyResponderRev.value++
         syncKeyResponderSchedule()
@@ -860,7 +890,7 @@ class AppViewModel(app: Application) : AndroidViewModel(app), PomboBridge.Listen
      * states the ceiling rather than a figure that would often be too high.
      */
     private val storedStreamCount: Int
-        get() = if (manager.current.value?.type == "gated") 3 else 2
+        get() = manager.current.value?.let { ChannelManager.storedStreams(it).size } ?: 0
 
     /**
      * Report a storage write by what it actually achieved.
@@ -884,16 +914,16 @@ class AppViewModel(app: Application) : AndroidViewModel(app), PomboBridge.Listen
 
     fun addStorageNode(address: String, onDone: () -> Unit = {}) = viewModelScope.launch {
         chainAction(
-            "Add storage node",
-            "Assigns a storage node to this channel's streams (up to $storedStreamCount transactions; " +
+            "Add Storage Provider",
+            "Assigns a storage provider to this channel's streams (up to $storedStreamCount transactions; " +
                 "only the streams missing it are charged)."
         ) {
-            runWithToast("Adding storage node…", null, "Failed to add storage node") {
+            runWithToast("Adding storage provider…", null, "Failed to add storage provider") {
                 storageOutcomeToast(
                     manager.addStorageNode(address),
-                    nothing = "Storage node already on every stream",
-                    done = "Storage node added",
-                    partial = "Storage node partially added. Try again to sync."
+                    nothing = "Storage provider already on every stream",
+                    done = "Storage provider added",
+                    partial = "Storage provider partially added. Try again to sync."
                 )
             }
         }
@@ -902,16 +932,16 @@ class AppViewModel(app: Application) : AndroidViewModel(app), PomboBridge.Listen
 
     fun removeStorageNode(address: String, onDone: () -> Unit = {}) = viewModelScope.launch {
         chainAction(
-            "Remove storage node",
+            "Remove storage provider",
             "Stops retaining this channel's history on that node (up to $storedStreamCount transactions; " +
                 "only the streams carrying it are charged)."
         ) {
-            runWithToast("Removing storage node…", null, "Failed to remove storage node") {
+            runWithToast("Removing storage provider…", null, "Failed to remove storage provider") {
                 storageOutcomeToast(
                     manager.removeStorageNode(address),
-                    nothing = "Storage node was not on any stream",
-                    done = "Storage node removed",
-                    partial = "Storage node partially removed. Try again to sync."
+                    nothing = "Storage provider was not on any stream",
+                    done = "Storage provider removed",
+                    partial = "Storage provider partially removed. Try again to sync."
                 )
             }
         }
@@ -1028,6 +1058,16 @@ class AppViewModel(app: Application) : AndroidViewModel(app), PomboBridge.Listen
     suspend fun streamPermissions(): List<com.pombo.android.core.GraphApi.StreamPermission> =
         manager.streamPermissions()
 
+    /** Admin-only: manual epoch rotation — free, unlike the re-key below. */
+    suspend fun nextRotationAt(): Long? = manager.nextRotationAt()
+
+    fun rotateEpochNow(onDone: () -> Unit = {}) = viewModelScope.launch {
+        runWithToast("Rotating channel key…", "Channel key rotated", "Failed to rotate channel key") {
+            manager.rotateEpochManual()
+        }
+        onDone()
+    }
+
     /** Admin-only: replaces the shared publish key of a Members-only channel. */
     fun rekeyPublishKey(onDone: () -> Unit = {}) = viewModelScope.launch {
         chainAction(
@@ -1045,7 +1085,7 @@ class AppViewModel(app: Application) : AndroidViewModel(app), PomboBridge.Listen
     fun setMemberGrant(address: String, canGrant: Boolean, onDone: () -> Unit = {}) = viewModelScope.launch {
         chainAction(
             if (canGrant) "Grant admin" else "Revoke admin",
-            "Updates this member's permissions on all three streams (3 transactions)."
+            "Updates this member's permissions on the channel's streams."
         ) {
             runWithToast(
                 if (canGrant) "Granting admin…" else "Revoking admin…",
@@ -1056,9 +1096,9 @@ class AppViewModel(app: Application) : AndroidViewModel(app), PomboBridge.Listen
         onDone()
     }
 
-    /** Owner-only: grants access on all three streams (on-chain, costs gas). */
+    /** Owner-only: grants access on the channel's streams (on-chain, costs gas). */
     fun addMember(address: String, onDone: () -> Unit = {}) = viewModelScope.launch {
-        chainAction("Add member", "Grants access on all three channel streams (3 transactions).") {
+        chainAction("Add member", "Grants access on the channel's streams. One transaction each.") {
             runWithToast("Adding member…", "Member added", "Failed to add member") {
                 manager.addMember(address)
             }
@@ -1068,7 +1108,7 @@ class AppViewModel(app: Application) : AndroidViewModel(app), PomboBridge.Listen
 
     /**
      * Owner-only batch add (web handleBatchAddMembers). Runs the grants one at a
-     * time — each is three on-chain transactions — and reports how many landed,
+     * time — one gate transaction each — and reports how many landed,
      * because a mid-list failure (already a member, gas ran out) must not abort
      * the ones that already succeeded or hide that some did not.
      */
@@ -1089,7 +1129,7 @@ class AppViewModel(app: Application) : AndroidViewModel(app), PomboBridge.Listen
         // whole loop.
         chainAction(
             "Add ${valid.size} member${if (valid.size == 1) "" else "s"}",
-            "Grants access on all three channel streams, ${valid.size * 3} transactions in total."
+            "Grants access on the channel's streams, for ${valid.size} member(s)."
         ) {
             for (addr in valid) {
                 try { manager.addMember(addr); added++ }
@@ -1107,7 +1147,7 @@ class AppViewModel(app: Application) : AndroidViewModel(app), PomboBridge.Listen
 
     /** Owner-only: revokes all permissions for an address. */
     fun removeMember(address: String, onDone: () -> Unit = {}) = viewModelScope.launch {
-        chainAction("Remove member", "Revokes their access on all three channel streams (3 transactions).") {
+        chainAction("Remove member", "Revokes their access on the channel's streams.") {
             runWithToast("Removing member…", "Member removed", "Failed to remove member") {
                 manager.removeMember(address)
             }
@@ -1212,13 +1252,19 @@ class AppViewModel(app: Application) : AndroidViewModel(app), PomboBridge.Listen
 
     /** On-chain channel deletion — irreversible, and not the same as leaving. */
     fun deleteChannelOnChain(messageStreamId: String, name: String) = viewModelScope.launch {
+        // One delete per stream the channel owns: four everywhere (-1, -2, -3,
+        // -5) and five on gated, which is the only type with a keys stream.
+        val streamCount = ChannelManager.channelStreams(
+            messageStreamId,
+            manager.channels.value.firstOrNull { it.messageStreamId == messageStreamId }
+        ).size
         chainAction(
             "Delete channel",
-            "Destroys \"$name\" and its three streams for everyone (3 transactions). This cannot be undone."
+            "Destroys \"$name\" and its $streamCount streams, for everyone. This cannot be undone."
         ) {
         val id = toast(
             "Deleting channel...", com.pombo.android.ui.ToastKind.LOADING, Long.MAX_VALUE,
-            subtitle = "Three on-chain transactions"
+            subtitle = "$streamCount on-chain transactions"
         )
         try {
             val failed = manager.deleteChannel(messageStreamId)
@@ -1226,11 +1272,12 @@ class AppViewModel(app: Application) : AndroidViewModel(app), PomboBridge.Listen
             if (failed.isEmpty()) {
                 toast("Channel \"$name\" deleted", com.pombo.android.ui.ToastKind.SUCCESS)
             } else {
-                // Say which half failed rather than claiming success: the
-                // remaining streams are still live on-chain.
+                // The channel stays in the list precisely so this is
+                // retryable — and the retry only pays for what is left.
                 toast(
-                    "Channel removed here, but ${failed.size} stream(s) could not be deleted on-chain",
-                    com.pombo.android.ui.ToastKind.WARNING, 6000L
+                    "${failed.size} of $streamCount stream(s) could not be deleted. " +
+                        "The channel is still here — delete it again to retry.",
+                    com.pombo.android.ui.ToastKind.WARNING, 7000L
                 )
             }
         } catch (e: Exception) {
@@ -1256,6 +1303,13 @@ class AppViewModel(app: Application) : AndroidViewModel(app), PomboBridge.Listen
     fun banMember(address: String, ban: Boolean = true) = moderationAction(
         if (ban) "User banned" else "User unbanned"
     ) { manager.banMember(address, ban) }
+
+    /** How many moderator deltas the owner has not confirmed yet. */
+    fun pendingModActions(): Int = manager.pendingModActions()
+
+    fun absorbModActions() = moderationAction("Moderator actions confirmed") {
+        manager.absorbModActions()
+    }
 
     /**
      * Ban with the levels the modal offers. The protocol level is a
@@ -2141,6 +2195,9 @@ class AppViewModel(app: Application) : AndroidViewModel(app), PomboBridge.Listen
         _username.value = v
         toast("Name saved", com.pombo.android.ui.ToastKind.SUCCESS)
         sliceTouched("username")
+        // Gated channels carry the name in the roster hello, so a rename has
+        // to be announced or it waits for the next rotation.
+        viewModelScope.launch { manager.republishHelloForRename() }
     }
 
     fun disconnect() {
@@ -2482,7 +2539,7 @@ class AppViewModel(app: Application) : AndroidViewModel(app), PomboBridge.Listen
      * so a wallet that cannot pay never reaches stream creation.
      */
     fun createChannel(spec: com.pombo.android.ui.screens.NewChannel) = viewModelScope.launch {
-        val streamCount = if (spec.type == "gated") 4 else 3
+        val streamCount = if (spec.type == "gated") 5 else 4
         chainAction(
             "Create channel",
             "Creates \"${spec.name}\" — $streamCount streams, their permissions and storage."
@@ -2490,11 +2547,12 @@ class AppViewModel(app: Application) : AndroidViewModel(app), PomboBridge.Listen
 
         // createStream + setPermissions per stream + storage (bridge does
         // addToStorageNode and setStorageDayCount in one call, unlike the web).
-        // Public/password: 3+3+2 = 8. Gated adds the gate deploy and the keys
-        // stream (-4, with storage): 1+4+4+3 = 12.
+        // The -2 is the only stream with no storage. Public/password:
+        // 4+4+3 = 11. Gated adds the gate deploy and the keys stream (-4,
+        // with storage): 1+5+5+4 = 15.
         val totalSteps = when (spec.type) {
-            "gated" -> 12
-            else -> 8
+            "gated" -> 15
+            else -> 11
         }
         val id = toast(
             "Creating channel...", com.pombo.android.ui.ToastKind.LOADING, Long.MAX_VALUE,
@@ -2523,7 +2581,7 @@ class AppViewModel(app: Application) : AndroidViewModel(app), PomboBridge.Listen
                 gateMinBalance = spec.gateMinBalance,
                 gatePrice = spec.gatePrice,
                 gateDuration = spec.gateDurationSeconds,
-                authorMode = spec.authorMode
+                wireIdentity = spec.wireIdentity
             ) {
                 step += 1
                 val label = when {
@@ -2537,6 +2595,10 @@ class AppViewModel(app: Application) : AndroidViewModel(app), PomboBridge.Listen
             toast("Channel created successfully!", com.pombo.android.ui.ToastKind.SUCCESS)
             manager.openChannel(channel.messageStreamId)
             autoEnableChannelPush(channel)
+            // The creator's device answers key requests by default, and the
+            // toggle registers its own wake tag, so the background path needs
+            // nothing else from the user.
+            if (spec.type == "gated") setKeyResponder(channel, on = true, quiet = true)
         } catch (e: Exception) {
             dismissToast(id)
             toast("Failed to create channel: ${e.message ?: "unknown error"}", com.pombo.android.ui.ToastKind.ERROR, 5000L)
@@ -2589,7 +2651,7 @@ class AppViewModel(app: Application) : AndroidViewModel(app), PomboBridge.Listen
         /** Renewing from inside the channel: pay is always offered, no "Enter". */
         val renewal: Boolean = false,
         /** Author visibility ('members' | 'everyone'), when locally known. */
-        val authorMode: String? = null,
+        val wireIdentity: String? = null,
         val retry: suspend () -> Unit
     )
 
@@ -2619,10 +2681,10 @@ class AppViewModel(app: Application) : AndroidViewModel(app), PomboBridge.Listen
         try {
             // Author visibility comes from stream metadata, which the gate
             // contract knows nothing about — resolve it from local caches.
-            val authorMode = manager.channels.value
-                .firstOrNull { it.gateAddress.equals(gateAddress, ignoreCase = true) }?.authorMode
-                ?: _explore.value.firstOrNull { it.gateAddress.equals(gateAddress, ignoreCase = true) }?.authorMode
-            _gateEntry.value = GateEntry(manager.gateEntryInfo(gateAddress), channelName, renewal, authorMode, retry)
+            val wireIdentity = manager.channels.value
+                .firstOrNull { it.gateAddress.equals(gateAddress, ignoreCase = true) }?.wireIdentity
+                ?: _explore.value.firstOrNull { it.gateAddress.equals(gateAddress, ignoreCase = true) }?.wireIdentity
+            _gateEntry.value = GateEntry(manager.gateEntryInfo(gateAddress), channelName, renewal, wireIdentity, retry)
         } catch (e: Exception) {
             toast(
                 "Could not read the gate contract: ${com.pombo.android.core.ChainErrors.friendly(e)}",
@@ -2760,7 +2822,7 @@ class AppViewModel(app: Application) : AndroidViewModel(app), PomboBridge.Listen
                         lastSenderAddress = cached?.senderAddress.orEmpty(),
                         readOnly = info.readOnly,
                         gateAddress = info.gateAddress,
-                        authorMode = info.authorMode
+                        wireIdentity = info.wireIdentity
                     )
                 }
                 _exploreLoading.value = false
@@ -2885,9 +2947,10 @@ class AppViewModel(app: Application) : AndroidViewModel(app), PomboBridge.Listen
     /**
      * Creates my DM inbox on-chain (needs POL) so others can DM me — with the
      * web's step progress (DMModalsUI.handleCreateInbox: Creating Inbox →
-     * Setting Permissions → Setting Storage). The web counts 6 steps because
-     * addToStorageNode and setStorageDayCount are separate there; our bridge
-     * does both in one call, so it is 5 here.
+     * Setting Permissions → Setting Storage). Five steps here against the
+     * web's six because our bridge sends addToStorageNode and
+     * setStorageDayCount in one call — the CHAIN still sees six writes, which
+     * is the figure the confirmation quotes.
      */
     fun setupDmInbox(
         storageProvider: String = "streamr",
@@ -2897,7 +2960,7 @@ class AppViewModel(app: Application) : AndroidViewModel(app), PomboBridge.Listen
         if (!canAffordOrWarn("dmInbox")) return@launch
         chainAction(
             "Create DM inbox",
-            "Creates your inbox streams, permissions and storage (5 transactions)."
+            "Creates your inbox streams, permissions and storage (6 transactions)."
         ) {
         val totalSteps = 5
         val id = toast(
@@ -3103,8 +3166,13 @@ class AppViewModel(app: Application) : AndroidViewModel(app), PomboBridge.Listen
         val inbox = myInboxStreamId() ?: return@launch
         val node = if (provider == "custom" && !customAddress.isNullOrBlank())
             customAddress.trim() else com.pombo.android.ChannelManager.STORAGE_NODE
-        chainAction("Add inbox storage node", "Assigns a storage node to your DM inbox (1 transaction).") {
-            runWithToast("Adding storage node…", "Storage node added", "Failed to add storage node") {
+        chainAction(
+            "Add inbox storage provider",
+            // Assigning the node and setting its retention are two writes,
+            // even though the bridge sends them in one call.
+            "Assigns a storage provider to your DM inbox (2 transactions)."
+        ) {
+            runWithToast("Adding storage provider…", "Storage provider added", "Failed to add storage provider") {
                 bridge.call(
                     "addToStorageNode",
                     JSONObject().put("streamId", inbox).put("nodeAddress", node).put("storageDays", days),
@@ -3119,10 +3187,10 @@ class AppViewModel(app: Application) : AndroidViewModel(app), PomboBridge.Listen
     fun removeInboxStorageNode(nodeAddress: String) = viewModelScope.launch {
         val inbox = myInboxStreamId() ?: return@launch
         chainAction(
-            "Remove inbox storage node",
+            "Remove inbox storage provider",
             "Stops retaining your DM history on that node (1 transaction)."
         ) {
-            runWithToast("Removing storage node…", "Storage node removed", "Failed to remove storage node") {
+            runWithToast("Removing storage provider…", "Storage provider removed", "Failed to remove storage provider") {
                 bridge.call(
                     "removeStorageNode",
                     JSONObject().put("streamId", inbox).put("nodeAddress", nodeAddress),
@@ -3343,7 +3411,10 @@ class AppViewModel(app: Application) : AndroidViewModel(app), PomboBridge.Listen
         }
         // Push relay housekeeping: republish rows after an FCM token rotation
         // (they hold a dead token until then) and at the web's 6h cadence.
-        viewModelScope.launch { push.refreshRegistrationsIfDue() }
+        viewModelScope.launch {
+            push.ensureWakeTags(settingsStore.keyResponderChannels.map { it.tag })
+            push.refreshRegistrationsIfDue()
+        }
         // Cross-device state (channels/contacts/blocks/username changed on the
         // web) — without this pull the sync button was the only way it ever
         // arrived. Deferred a few seconds so the first paint, the inbox replay

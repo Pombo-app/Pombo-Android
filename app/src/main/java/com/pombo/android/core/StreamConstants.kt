@@ -5,15 +5,17 @@ package com.pombo.android.core
  * Pombo web src/js/streamConstants.js) — changing them breaks
  * interoperability with already-published messages.
  *
- * Each channel derives up to 4 streams from the base ID by suffix:
+ * Each channel derives up to 5 streams from the base ID by suffix:
  *   -1 -> messages (with storage)  -2 -> ephemeral (no storage)
- *   -3 -> admin (with storage)     -4 -> epoch keys (native only, with storage)
+ *   -3 -> admin (with storage)     -4 -> epoch keys (gated only, with storage)
+ *   -5 -> interactions (with storage)
  */
 object StreamConstants {
     const val SUFFIX_MESSAGE = "-1"
     const val SUFFIX_EPHEMERAL = "-2"
     const val SUFFIX_ADMIN = "-3"
     const val SUFFIX_KEYS = "-4"
+    const val SUFFIX_INTERACTIONS = "-5"
 
     // Message stream (-1)
     //
@@ -23,10 +25,11 @@ object StreamConstants {
     // partitions carry Persistent File Sharing payloads (uploaded to the
     // channel's storage nodes, read via storage HTTP/resend — NEVER subscribed
     // live). See [STORAGE_FILE] and [storageChunkPartition].
-    const val MSG_PARTITIONS = 11       // regular channels: content + control + 9 chunk partitions
+    const val MSG_PARTITIONS = 12       // regular: content + control + moderation + 9 chunk partitions
     const val MSG_DM_PARTITIONS = 13    // inbox DM: msgs + sync + sync_blobs + notifs + 9 chunk partitions
-    const val P_MESSAGES = 0            // text, reactions, images, announcements
+    const val P_MESSAGES = 0            // text, images, announcements (reactions: -5)
     const val P_CONTROL = 1             // edit/delete overrides
+    const val P_MODERATION = 2          // MOD_ACTION deltas signed by a moderator (gated)
     const val P_SYNC = 1                // cross-device sync (DM inbox only)
     const val P_SYNC_BLOBS = 2          // image blobs (DM inbox only)
     const val P_NOTIFICATIONS = 3       // invites/notifications (DM inbox only)
@@ -40,7 +43,7 @@ object StreamConstants {
     // firstChunkPartition/chunkPartitions, so readers follow the announce, not
     // these local constants. (Mirror of streamConstants.js STORAGE_FILE.)
     const val STORAGE_CHUNK_PARTITIONS = 9
-    const val STORAGE_FIRST_CHUNK_PARTITION = 2      // regular channels (after P0 msgs + P1 control)
+    const val STORAGE_FIRST_CHUNK_PARTITION = 3      // regular (after P0 msgs + P1 control + P2 moderation)
     const val STORAGE_DM_FIRST_CHUNK_PARTITION = 4   // DM inboxes (after P0-P3)
 
     /**
@@ -81,9 +84,12 @@ object StreamConstants {
     // distribution). KEY_ANNOUNCE authority is app-layer: only the admin set
     // (v1: the stream's namespace address), never inferred from stream
     // permissions — which is why -4 cannot fold into the owner-only -3.
-    const val KEYS_PARTITIONS = 2
-    const val P_KEY_EXCHANGE = 0
-    const val P_ROSTER = 1
+    // Partitioned BY CADENCE, not by key type: announces are all read
+    // together on open, so splitting per type would cost one resend each.
+    const val KEYS_PARTITIONS = 4
+    const val P_KEY_EXCHANGE = 0    // announces of every key kind
+    const val P_REQUESTS = 1        // KEY_REQUEST / KEY_WRAP
+    const val P_ROSTER = 2          // MEMBER_HELLO
 
     // Message types on -4 (mirror of web KEYS_MSG_TYPE)
     const val KEY_ANNOUNCE = "key_announce"
@@ -112,4 +118,14 @@ object StreamConstants {
     fun isEphemeralStream(streamId: String): Boolean = streamId.endsWith(SUFFIX_EPHEMERAL)
 
     fun isKeysStream(streamId: String): Boolean = streamId.endsWith(SUFFIX_KEYS)
+
+    /** Interactions stream (-5): reactions, where members participate
+     *  without publishing on -1 — what lets a read-only channel have them. */
+    const val INTERACTIONS_PARTITIONS = 3
+    const val P_REACTIONS = 0
+
+    fun deriveInteractionsId(messageStreamId: String): String =
+        messageStreamId.replace(Regex("-1$"), SUFFIX_INTERACTIONS)
+
+    fun isInteractionsStream(streamId: String): Boolean = streamId.endsWith(SUFFIX_INTERACTIONS)
 }

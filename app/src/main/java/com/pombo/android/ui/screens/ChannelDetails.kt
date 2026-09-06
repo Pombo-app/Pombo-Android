@@ -61,6 +61,7 @@ import androidx.compose.material.icons.outlined.Settings
 import androidx.compose.material.icons.outlined.Notifications
 import androidx.compose.material.icons.filled.Notifications
 import androidx.compose.material.icons.outlined.FileUpload
+import androidx.compose.material.icons.outlined.HelpOutline
 import androidx.compose.material.icons.outlined.Campaign
 import androidx.compose.material.icons.outlined.Key
 import androidx.compose.material.icons.outlined.Lock
@@ -196,6 +197,11 @@ private fun ChannelDetailsMain(
 ) {
     val clipboard = androidx.compose.ui.platform.LocalClipboardManager.current
     val image by vm.channelImage.collectAsState()
+    // The gas warning below reads the record's exposure, which on channels
+    // created before that flag can disagree with the registry. Settle it when
+    // the screen opens rather than when Save is pressed, so the warning is
+    // there before the decision instead of after it.
+    LaunchedEffect(channel.messageStreamId) { vm.confirmExposureFromChain() }
     var editing by remember { mutableStateOf(false) }
     var editName by remember(channel.name) { mutableStateOf(channel.name) }
     var editDesc by remember(channel.description) { mutableStateOf(channel.description) }
@@ -254,7 +260,7 @@ private fun ChannelDetailsMain(
         Spacer(Modifier.width(8.dp))
         Text(
             if (notified) "Notifications On" else "Notifications Off",
-            color = if (notified) PomboColors.Accent else Color.White.copy(alpha = 0.40f),
+            color = if (notified) Color.White else Color.White.copy(alpha = 0.40f),
             fontSize = 14.sp, fontWeight = FontWeight.Medium
         )
     }
@@ -380,17 +386,7 @@ private fun ChannelDetailsMain(
             // the chain), so no caveat there.
             if (channel.exposure == "visible") {
                 Spacer(Modifier.height(10.dp))
-                Row(
-                    Modifier.fillMaxWidth()
-                        .background(Color(0xFFF59E0B).copy(alpha = 0.05f), RoundedCornerShape(12.dp))
-                        .border(1.dp, Color(0xFFF59E0B).copy(alpha = 0.10f), RoundedCornerShape(12.dp))
-                        .padding(12.dp)
-                ) {
-                    Text(
-                        "Saving writes the stream metadata on-chain and costs gas.",
-                        color = Color(0xFFF59E0B).copy(alpha = 0.80f), fontSize = 12.sp
-                    )
-                }
+                GasWarningBanner("Changes require on-chain transactions and gas fees.")
             }
         }
         Spacer(Modifier.height(10.dp))
@@ -503,6 +499,25 @@ private fun ChannelDetailsMain(
         )
     }
 
+    // IDENTITY ON THE WIRE — the gate's own property, immutable for its life,
+    // so it reads under Access and only on gated channels. Group = members
+    // only, globe = everyone: the audience for authorship, never an identity
+    // glyph. Same copy as the web's Channel Details line.
+    if (channel.type == "gated" && !channel.wireIdentity.isNullOrEmpty()) {
+        val sealedWire = channel.wireIdentity == "sealed"
+        Spacer(Modifier.height(20.dp))
+        SectionLabel("Identity on the wire")
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            val wireTint = Color.White.copy(alpha = 0.70f)
+            Icon(
+                if (sealedWire) Icons.Outlined.People else Icons.Outlined.Public,
+                contentDescription = null, tint = wireTint, modifier = Modifier.size(16.dp)
+            )
+            Spacer(Modifier.width(6.dp))
+            Text(if (sealedWire) "Sealed" else "Visible", color = wireTint, fontSize = 14.sp)
+        }
+    }
+
     // Nav rows — the web's #channel-mobile-unified shows exactly three, gated by
     // channel type and permission (showMembersTab/showModerationTab/showDangerTab):
     //   Members   — native (closed / on-chain) channels only. Membership there
@@ -560,8 +575,9 @@ private fun ChannelDetailsMain(
         Spacer(Modifier.height(8.dp))
     }
     if (canModerate) {
-        // Delete Channel has no leading icon in the web.
-        ChannelNavRow("Delete Channel") { onOpenSub(ChannelSubPanel.DESTROY) }
+        ChannelNavRow("Delete Channel", leadingIcon = Icons.Outlined.Delete) {
+            onOpenSub(ChannelSubPanel.DESTROY)
+        }
     }
     // Clear the gesture bar: the last row was flush against it.
     Spacer(Modifier.height(40.dp))
@@ -578,6 +594,33 @@ internal fun SectionLabel(text: String) {
     )
 }
 
+/**
+ * The ⓘ that holds a section's explanation: nothing shows until it is tapped.
+ * The glyph is small on purpose; the box around it is what a finger hits.
+ */
+@Composable
+private fun HintIcon(open: Boolean, onToggle: () -> Unit) {
+    Box(
+        Modifier.size(24.dp).clickableNoRipple(onToggle),
+        contentAlignment = Alignment.Center
+    ) {
+        Icon(
+            Icons.Outlined.HelpOutline, contentDescription = "Details",
+            tint = Color.White.copy(alpha = if (open) 0.60f else 0.30f),
+            modifier = Modifier.size(14.dp)
+        )
+    }
+}
+
+/** The explanation itself, once the ⓘ opens it. */
+@Composable
+private fun HintBody(text: String) {
+    Text(
+        text,
+        color = Color.White.copy(alpha = 0.40f), fontSize = 12.sp, lineHeight = 16.sp
+    )
+}
+
 /** Web: value box — text-sm white/70 on white/5, rounded-lg, px-3 py-2.5. */
 @Composable
 private fun ValueBox(text: String) {
@@ -591,9 +634,36 @@ private fun ValueBox(text: String) {
 }
 
 /**
+ * The amber "this costs gas" notice, one per panel that spends any.
+ *
+ * Centred rather than top-aligned: the copy wraps to two lines on a phone,
+ * and an icon pinned to the first line reads as misplaced against a box that
+ * is twice as tall.
+ */
+@Composable
+internal fun GasWarningBanner(text: String) {
+    Row(
+        Modifier.fillMaxWidth()
+            .background(Color(0xFFF59E0B).copy(alpha = 0.05f), RoundedCornerShape(12.dp))
+            .border(1.dp, Color(0xFFF59E0B).copy(alpha = 0.10f), RoundedCornerShape(12.dp))
+            .padding(12.dp),
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        Icon(
+            Icons.Outlined.WarningAmber, contentDescription = null,
+            tint = Color(0xFFFBBF24).copy(alpha = 0.80f), modifier = Modifier.size(16.dp)
+        )
+        Spacer(Modifier.width(8.dp))
+        Text(
+            text,
+            color = Color(0xFFFBBF24).copy(alpha = 0.80f), fontSize = 12.sp, lineHeight = 17.sp
+        )
+    }
+}
+
+/**
  * Web .channel-mobile-nav-item: white/3 fill, white/5 border, r12, py-4, with a
- * leading icon (18dp, white/40) and a trailing chevron. Members and Moderation
- * carry an icon; Delete Channel does not (index.html:1755 has no leading svg).
+ * leading icon (18dp, white/40) and a trailing chevron.
  */
 @Composable
 private fun ChannelNavRow(
@@ -667,9 +737,10 @@ private fun ChannelMembersPanel(vm: AppViewModel, channel: Channel, canModerate:
     val messages by vm.messages.collectAsState()
     val declaredNames = remember(messages) {
         messages.mapNotNull { m ->
-            m.senderName?.takeIf { it.isNotBlank() }?.let { m.sender.lowercase() to it }
+            m.senderName?.takeIf { it.isNotBlank() }?.let { m.sender.lowercase() to (it to m.timestamp) }
         }.toMap()
     }
+    val rosterNames by vm.rosterNames.collectAsState()
 
     // ── CURRENT MEMBERS ─────────────────────────────────────────────
     Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
@@ -716,7 +787,9 @@ private fun ChannelMembersPanel(vm: AppViewModel, channel: Channel, canModerate:
                 )
                 Spacer(Modifier.width(8.dp))
                 Column(Modifier.weight(1f)) {
-                    MemberLabel(addr, ensName, nicknames[lower], declaredNames[lower])
+                    MemberLabel(
+                        addr, ensName, nicknames[lower], declaredNames[lower]?.first,
+                        rosterNames[lower], declaredNames[lower]?.second ?: 0L)
                     Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.padding(top = 2.dp)) {
                         if (isCreator) MemberBadge("Owner", Color(0xFFEAB308))
                         else if (row.moderator) MemberBadge("Moderator", Color(0xFFA855F7))
@@ -855,21 +928,7 @@ private fun ChannelMembersPanel(vm: AppViewModel, channel: Channel, canModerate:
             ) { Text("Add All Addresses", color = Color.White, fontSize = 14.sp) }
         }
         Spacer(Modifier.height(12.dp))
-        // Same bordered amber box as the storage fees warning.
-        Row(
-            Modifier.fillMaxWidth()
-                .background(Color(0xFFF59E0B).copy(alpha = 0.05f), RoundedCornerShape(12.dp))
-                .border(1.dp, Color(0xFFF59E0B).copy(alpha = 0.10f), RoundedCornerShape(12.dp))
-                .padding(12.dp),
-            verticalAlignment = Alignment.Top
-        ) {
-            Icon(Icons.Outlined.WarningAmber, contentDescription = null, tint = Color(0xFFFBBF24).copy(alpha = 0.80f), modifier = Modifier.size(16.dp))
-            Spacer(Modifier.width(8.dp))
-            Text(
-                "Adding members requires on-chain transactions and gas fees.",
-                color = Color(0xFFFBBF24).copy(alpha = 0.80f), fontSize = 12.sp, lineHeight = 17.sp
-            )
-        }
+        GasWarningBanner("Adding members requires on-chain transactions and gas fees.")
     }
 
     // Revoking is destructive and costs gas — always confirm first.
@@ -950,9 +1009,22 @@ internal fun MemberLabel(
     address: String,
     ensName: String?,
     nickname: String?,
-    declaredName: String?
+    declaredName: String?,
+    /** (name, when they announced it) from the -4 roster, if any. */
+    rosterName: Pair<String, Long>? = null,
+    /** When the declared name was last claimed on a message. */
+    declaredAt: Long = 0L
 ) {
-    val name = ensName ?: nickname ?: declaredName
+    // Same chain the bubbles use: the roster name and the one declared on a
+    // message are the same kind of claim, so the most recent wins. The roster
+    // is what names a member who has never posted here.
+    val announced = when {
+        rosterName != null && declaredName != null ->
+            if (rosterName.second >= declaredAt) rosterName.first else declaredName
+        rosterName != null -> rosterName.first
+        else -> declaredName
+    }
+    val name = ensName ?: nickname ?: announced
     if (name != null) {
         Text(name, color = Color.White.copy(alpha = 0.85f), fontSize = 13.sp, maxLines = 1)
     } else {
@@ -987,11 +1059,13 @@ internal fun BanMemberDialog(
     label: String,
     gated: Boolean,
     canClientBan: Boolean,
+    /** The gate's ban is the owner's alone — a moderator only hides. */
+    canProtocolBan: Boolean = gated,
     onDismiss: () -> Unit,
     onConfirm: (client: Boolean, protocol: Boolean) -> Unit
 ) {
     var client by remember { mutableStateOf(canClientBan) }
-    var protocol by remember { mutableStateOf(gated) }
+    var protocol by remember { mutableStateOf(gated && canProtocolBan) }
     val red = PomboColors.Danger
 
     androidx.compose.ui.window.Dialog(onDismissRequest = onDismiss) {
@@ -1005,9 +1079,9 @@ internal fun BanMemberDialog(
             Spacer(Modifier.height(14.dp))
 
             BanLevelRow(
-                title = "Client enforcement",
+                title = "Hide their messages",
                 detail = if (canClientBan)
-                    "Hides their messages for everyone. Free and reversible."
+                    "Their messages disappear for everyone. Free and reversible."
                 else "Only the channel creator can publish this.",
                 checked = client && canClientBan,
                 enabled = canClientBan
@@ -1016,12 +1090,15 @@ internal fun BanMemberDialog(
             Spacer(Modifier.height(10.dp))
 
             BanLevelRow(
-                title = "Protocol enforcement",
-                detail = if (gated)
-                    "Cuts their access on the gate and rotates the channel key. One transaction."
-                else "Only gated channels have a gate to ban on.",
-                checked = protocol && gated,
-                enabled = gated
+                title = "Cut their access",
+                detail = when {
+                    gated && canProtocolBan ->
+                        "They can no longer write or receive keys; the channel key rotates. One transaction."
+                    gated -> "Only the channel creator can cut access."
+                    else -> "Only gated channels have a gate to ban on."
+                },
+                checked = protocol && gated && canProtocolBan,
+                enabled = gated && canProtocolBan
             ) { protocol = it }
 
             Spacer(Modifier.height(18.dp))
@@ -1034,7 +1111,7 @@ internal fun BanMemberDialog(
                     contentAlignment = Alignment.Center
                 ) { Text("Cancel", color = Color.White.copy(alpha = 0.60f), fontSize = 14.sp) }
                 Spacer(Modifier.width(10.dp))
-                val armed = (client && canClientBan) || (protocol && gated)
+                val armed = (client && canClientBan) || (protocol && gated && canProtocolBan)
                 Box(
                     Modifier.weight(1f)
                         .background(
@@ -1261,23 +1338,7 @@ private fun ChannelStoragePanel(vm: AppViewModel, channel: Channel, canModerate:
     // (web #channel-storage-gas-warning), admin only. The web has no "Storage:
     // Enabled" status line — it goes straight from here to Retention Period.
     if (canModerate) {
-        Row(
-            Modifier.fillMaxWidth()
-                .background(Color(0xFFF59E0B).copy(alpha = 0.05f), RoundedCornerShape(12.dp))
-                .border(1.dp, Color(0xFFF59E0B).copy(alpha = 0.10f), RoundedCornerShape(12.dp))
-                .padding(12.dp),
-            verticalAlignment = Alignment.Top
-        ) {
-            Icon(
-                Icons.Outlined.WarningAmber, contentDescription = null,
-                tint = Color(0xFFFBBF24).copy(alpha = 0.80f), modifier = Modifier.size(16.dp)
-            )
-            Spacer(Modifier.width(8.dp))
-            Text(
-                "Storage changes require on-chain transactions and gas fees.",
-                color = Color(0xFFFBBF24).copy(alpha = 0.80f), fontSize = 12.sp, lineHeight = 17.sp
-            )
-        }
+        GasWarningBanner("Storage changes require on-chain transactions and gas fees.")
         Spacer(Modifier.height(20.dp))
     } else if (info != null && !info!!.enabled) {
         // Non-admins only see a note when there is no storage at all.
@@ -1384,7 +1445,7 @@ private fun ChannelStoragePanel(vm: AppViewModel, channel: Channel, canModerate:
     SectionLabel("Storage Provider")
     val nodes = info?.nodes ?: emptyList()
     if (info != null && nodes.isEmpty()) {
-        Text("No storage nodes", color = Color.White.copy(alpha = 0.40f), fontSize = 14.sp)
+        Text("No storage provider", color = Color.White.copy(alpha = 0.40f), fontSize = 14.sp)
     }
     nodes.forEach { node ->
         Row(
@@ -1418,7 +1479,7 @@ private fun ChannelStoragePanel(vm: AppViewModel, channel: Channel, canModerate:
                 Spacer(Modifier.width(8.dp))
                 // Web: a trash-can icon button, white/40 — not a "Remove" label.
                 Icon(
-                    Icons.Outlined.Delete, contentDescription = "Remove storage node",
+                    Icons.Outlined.Delete, contentDescription = "Remove storage provider",
                     tint = Color.White.copy(alpha = 0.40f),
                     modifier = Modifier.size(18.dp).clickableNoRipple { confirmRemove = node.address }
                 )
@@ -1439,11 +1500,13 @@ private fun ChannelStoragePanel(vm: AppViewModel, channel: Channel, canModerate:
                     tint = Color.White.copy(alpha = 0.60f), modifier = Modifier.size(14.dp)
                 )
                 Spacer(Modifier.width(6.dp))
-                Text("Add storage node", color = Color.White.copy(alpha = 0.60f), fontSize = 13.sp)
+                Text("Add Storage Provider", color = Color.White.copy(alpha = 0.60f), fontSize = 13.sp)
             }
         } else {
-            SectionLabel("Provider")
-            listOf(false to "Pombo", true to "Custom storage node").forEach { (custom, label) ->
+            // No label of its own: the section above it already says what
+            // these two choices are.
+            Spacer(Modifier.height(4.dp))
+            listOf(false to "Pombo", true to "Custom Storage Provider").forEach { (custom, label) ->
                 Row(
                     Modifier.fillMaxWidth().clickableNoRipple { customProvider = custom }
                         .padding(vertical = 8.dp),
@@ -1535,7 +1598,7 @@ private fun ChannelStoragePanel(vm: AppViewModel, channel: Channel, canModerate:
                     .border(1.dp, Color.White.copy(alpha = 0.08f), RoundedCornerShape(20.dp))
                     .padding(20.dp)
             ) {
-                Text("Remove storage node", color = Color.White, fontSize = 17.sp, fontWeight = FontWeight.SemiBold)
+                Text("Remove storage provider", color = Color.White, fontSize = 17.sp, fontWeight = FontWeight.SemiBold)
                 Spacer(Modifier.height(10.dp))
                 Text(
                     "${addr.take(6)}…${addr.takeLast(4)} stops serving this channel's history. " +
@@ -1587,9 +1650,10 @@ private fun ChannelModerationPanel(vm: AppViewModel, channel: Channel, canModera
     val messages by vm.messages.collectAsState()
     val declaredNames = remember(messages) {
         messages.mapNotNull { m ->
-            m.senderName?.takeIf { it.isNotBlank() }?.let { m.sender.lowercase() to it }
+            m.senderName?.takeIf { it.isNotBlank() }?.let { m.sender.lowercase() to (it to m.timestamp) }
         }.toMap()
     }
+    val rosterNames by vm.rosterNames.collectAsState()
 
     LaunchedEffect(channel.messageStreamId, reloadKey) {
         chainBanned = if (channel.type == "gated") vm.gateBannedMembers() else emptyList()
@@ -1603,13 +1667,24 @@ private fun ChannelModerationPanel(vm: AppViewModel, channel: Channel, canModera
     val allBanned = remember(banned, chainSet) {
         (banned.map { it.lowercase() } + chainSet).distinct().sorted()
     }
+    var banHint by remember { mutableStateOf(false) }
     Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
         Text(
             "BANNED MEMBERS", color = Color.White.copy(alpha = 0.40f),
-            fontSize = 12.sp, fontWeight = FontWeight.Medium, letterSpacing = 0.8.sp,
-            modifier = Modifier.weight(1f)
+            fontSize = 12.sp, fontWeight = FontWeight.Medium, letterSpacing = 0.8.sp
         )
+        Spacer(Modifier.width(6.dp))
+        HintIcon(banHint) { banHint = !banHint }
+        Spacer(Modifier.weight(1f))
         Text("${allBanned.size}", color = Color.White.copy(alpha = 0.40f), fontSize = 12.sp)
+    }
+    if (banHint) {
+        Spacer(Modifier.height(8.dp))
+        HintBody(
+            "Client bans hide the author's messages for everyone and cost nothing. " +
+                "Protocol bans cut access on the gate, so the member stops receiving " +
+                "keys, and take a transaction to apply and to lift."
+        )
     }
     Spacer(Modifier.height(10.dp))
 
@@ -1627,7 +1702,9 @@ private fun ChannelModerationPanel(vm: AppViewModel, channel: Channel, canModera
                 Avatar(addr, size = 28.dp, cornerRadiusFraction = 0.5, ensAvatarUrl = ensAvatars[addr])
                 Spacer(Modifier.width(10.dp))
                 Column(Modifier.weight(1f)) {
-                    MemberLabel(addr, ensNames[addr], nicknames[addr], declaredNames[addr])
+                    MemberLabel(
+                        addr, ensNames[addr], nicknames[addr], declaredNames[addr]?.first,
+                        rosterNames[addr], declaredNames[addr]?.second ?: 0L)
                     Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.padding(top = 2.dp)) {
                         if (onChain) MemberBadge("Protocol", Color(0xFFF87171))
                         if (onChain && onClient) Spacer(Modifier.width(4.dp))
@@ -1650,14 +1727,6 @@ private fun ChannelModerationPanel(vm: AppViewModel, channel: Channel, canModera
         }
     }
 
-    Spacer(Modifier.height(12.dp))
-    Text(
-        "Client bans hide the author's messages for everyone and cost nothing. " +
-            "Protocol bans cut access on the gate, so the member stops receiving " +
-            "keys, and take a transaction to apply and to lift.",
-        color = Color.White.copy(alpha = 0.40f), fontSize = 12.sp
-    )
-
     // Pins/hidden counts kept as a small summary below the banned list — not in
     // the web, but a harmless at-a-glance of the rest of the moderation state.
     Spacer(Modifier.height(20.dp))
@@ -1679,58 +1748,161 @@ private fun ChannelModerationPanel(vm: AppViewModel, channel: Channel, canModera
         color = Color.White.copy(alpha = 0.40f), fontSize = 12.sp
     )
 
-    if (canModerate && channel.type == "gated" && channel.authorMode == "members") {
+    val myAddr by vm.address.collectAsState()
+    val isChannelAdmin = myAddr?.lowercase() ==
+        (channel.createdBy ?: channel.messageStreamId.substringBefore('/')).lowercase()
+
+    // Until the owner confirms them, the moderators' actions hold only while
+    // they hold the role — confirming makes them the owner's own word.
+    val pendingMod = vm.pendingModActions()
+    if (isChannelAdmin && channel.type == "gated" && pendingMod > 0) {
+        var confirming by remember { mutableStateOf(false) }
         Spacer(Modifier.height(20.dp))
         Box(Modifier.fillMaxWidth().height(1.dp).background(Color.White.copy(alpha = 0.05f)))
         Spacer(Modifier.height(20.dp))
-        SectionLabel("Reset Publish Key")
+        SectionLabel("Confirm Moderator Actions")
         Spacer(Modifier.height(6.dp))
         Text(
-            "Replaces the channel's shared publish key (2 transactions). Former members " +
-                "who kept the old key lose the ability to write. Current members pick up " +
-                "the new key automatically.",
+            "$pendingMod action(s) by your moderators are in effect but not yet yours. " +
+                "Confirming makes them permanent, even if you dismiss the moderator later. " +
+                "Free — no transaction.",
             color = Color.White.copy(alpha = 0.40f), fontSize = 12.sp
         )
         Spacer(Modifier.height(10.dp))
-        val amber = Color(0xFFFBBF24)
         Box(
-            Modifier
-                .fillMaxWidth()
-                .background(amber.copy(alpha = 0.10f), RoundedCornerShape(12.dp))
-                .border(1.dp, amber.copy(alpha = 0.20f), RoundedCornerShape(12.dp))
-                .clickableNoRipple { vm.rekeyPublishKey() }
+            Modifier.fillMaxWidth()
+                .background(Color.White.copy(alpha = 0.06f), RoundedCornerShape(12.dp))
+                .clickableNoRipple {
+                    if (!confirming) { confirming = true; vm.absorbModActions(); reloadKey++ }
+                }
                 .padding(vertical = 12.dp),
             contentAlignment = Alignment.Center
-        ) { Text("Reset Publish Key", color = amber, fontSize = 13.sp) }
+        ) {
+            Text(
+                if (confirming) "Confirming…" else "Confirm Moderator Actions",
+                color = Color.White.copy(alpha = 0.80f), fontSize = 14.sp
+            )
+        }
     }
 
-    // ── STREAM GRANTEES ──────────────────────────────────────────────
-    // The technical view: who holds a grant on the streams themselves. On a
-    // gated channel that is the clone and the storage node, never the members,
-    // whose access is proven per-message against the contract.
-    if (canModerate && channel.type == "gated") {
+    if (isChannelAdmin && channel.type == "gated") {
+        var rotateHint by remember { mutableStateOf(false) }
+        var rotateDue by remember(channel.messageStreamId) { mutableStateOf<Long?>(null) }
+        LaunchedEffect(channel.messageStreamId, reloadKey) { rotateDue = vm.nextRotationAt() }
         Spacer(Modifier.height(20.dp))
         Box(Modifier.fillMaxWidth().height(1.dp).background(Color.White.copy(alpha = 0.05f)))
         Spacer(Modifier.height(20.dp))
-        Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+        Row(verticalAlignment = Alignment.CenterVertically) {
             Text(
-                "STREAM GRANTEES", color = Color.White.copy(alpha = 0.40f),
-                fontSize = 12.sp, fontWeight = FontWeight.Medium, letterSpacing = 0.8.sp,
-                modifier = Modifier.weight(1f)
+                "ROTATE CHANNEL KEY", color = Color.White.copy(alpha = 0.80f),
+                fontSize = 12.sp, fontWeight = FontWeight.Medium, letterSpacing = 0.8.sp
             )
-            RefreshButton { reloadKey++ }
+            Spacer(Modifier.width(6.dp))
+            HintIcon(rotateHint) { rotateHint = !rotateHint }
+        }
+        if (rotateHint) {
+            Spacer(Modifier.height(8.dp))
+            HintBody(
+                "Issues a new encryption key now. Anyone without current access stops " +
+                    "reading new messages. Free — no transaction."
+            )
+        }
+        rotateDue?.let { due ->
+            val msLeft = due - System.currentTimeMillis()
+            Spacer(Modifier.height(6.dp))
+            Text(
+                if (msLeft > 0) "Next auto-rotate: ${com.pombo.android.core.GateFormat.formatRemaining(msLeft)}"
+                else "Next auto-rotate: due",
+                color = Color.White.copy(alpha = 0.40f), fontSize = 13.sp
+            )
         }
         Spacer(Modifier.height(10.dp))
-        if (permissions.isEmpty()) {
-            Text("Owner only (private)", color = Color.White.copy(alpha = 0.30f), fontSize = 13.sp)
-        } else {
-            LaunchedEffect(permissions) {
-                permissions.forEach { if (!it.isPublic) vm.ensureEns(it.userAddress) }
+        Box(
+            Modifier
+                .fillMaxWidth()
+                .background(Color.White.copy(alpha = 0.05f), RoundedCornerShape(12.dp))
+                .border(1.dp, Color.White.copy(alpha = 0.10f), RoundedCornerShape(12.dp))
+                .clickableNoRipple { vm.rotateEpochNow { reloadKey++ } }
+                .padding(vertical = 12.dp),
+            contentAlignment = Alignment.Center
+        ) { Text("Rotate Now", color = Color.White.copy(alpha = 0.80f), fontSize = 13.sp) }
+    }
+
+    // ── ADVANCED ─────────────────────────────────────────────────────
+    // The grantees and the re-key: neither belongs in a routine visit, so
+    // they live folded at the bottom, the same place the web keeps them.
+    if (canModerate && channel.type == "gated") {
+        var advancedOpen by remember { mutableStateOf(false) }
+        Spacer(Modifier.height(20.dp))
+        Box(Modifier.fillMaxWidth().height(1.dp).background(Color.White.copy(alpha = 0.05f)))
+        Spacer(Modifier.height(16.dp))
+        Text(
+            if (advancedOpen) "▾ Advanced" else "▸ Advanced",
+            color = Color.White.copy(alpha = 0.40f), fontSize = 13.sp,
+            modifier = Modifier.fillMaxWidth()
+                .clickableNoRipple { advancedOpen = !advancedOpen }
+                .padding(vertical = 4.dp)
+        )
+        if (advancedOpen) {
+            // The technical view: who holds a grant on the streams themselves.
+            // On a gated channel that is the clone and the storage node, never
+            // the members, whose access is proven per-message against the
+            // contract.
+            Spacer(Modifier.height(16.dp))
+            Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                Text(
+                    "STREAM GRANTEES", color = Color.White.copy(alpha = 0.40f),
+                    fontSize = 12.sp, fontWeight = FontWeight.Medium, letterSpacing = 0.8.sp,
+                    modifier = Modifier.weight(1f)
+                )
+                RefreshButton { reloadKey++ }
             }
-            val creatorAddr = (channel.createdBy ?: channel.messageStreamId.substringBefore('/')).lowercase()
-            permissions.forEach { p -> StreamPermissionRow(p, creatorAddr, ensNames) }
-            Spacer(Modifier.height(8.dp))
-            PermissionLegend()
+            Spacer(Modifier.height(10.dp))
+            if (permissions.isEmpty()) {
+                Text("Owner only (private)", color = Color.White.copy(alpha = 0.30f), fontSize = 13.sp)
+            } else {
+                LaunchedEffect(permissions) {
+                    permissions.forEach { if (!it.isPublic) vm.ensureEns(it.userAddress) }
+                }
+                val creatorAddr = (channel.createdBy ?: channel.messageStreamId.substringBefore('/')).lowercase()
+                permissions.forEach { p -> StreamPermissionRow(p, creatorAddr, ensNames) }
+                Spacer(Modifier.height(8.dp))
+                PermissionLegend()
+            }
+
+            if (channel.wireIdentity == "sealed") {
+                var rekeyHint by remember { mutableStateOf(false) }
+                Spacer(Modifier.height(20.dp))
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Text(
+                        "RESET PUBLISH KEY", color = Color.White.copy(alpha = 0.80f),
+                        fontSize = 12.sp, fontWeight = FontWeight.Medium, letterSpacing = 0.8.sp
+                    )
+                    Spacer(Modifier.width(6.dp))
+                    HintIcon(rekeyHint) { rekeyHint = !rekeyHint }
+                }
+                if (rekeyHint) {
+                    Spacer(Modifier.height(8.dp))
+                    HintBody(
+                        "Last resort, for cutting off an ex-member who is flooding storage. " +
+                            "Two transactions. Ex-members who kept the old key lose the ability " +
+                            "to write and current members pick up the new one automatically, but " +
+                            "revoking the old key also stops every message published before the " +
+                            "reset from verifying for anyone reading this channel outside Pombo."
+                    )
+                }
+                Spacer(Modifier.height(10.dp))
+                val amber = Color(0xFFFBBF24)
+                Box(
+                    Modifier
+                        .fillMaxWidth()
+                        .background(amber.copy(alpha = 0.10f), RoundedCornerShape(12.dp))
+                        .border(1.dp, amber.copy(alpha = 0.20f), RoundedCornerShape(12.dp))
+                        .clickableNoRipple { vm.rekeyPublishKey() }
+                        .padding(vertical = 12.dp),
+                    contentAlignment = Alignment.Center
+                ) { Text("Reset Publish Key", color = amber, fontSize = 13.sp) }
+            }
         }
     }
 
@@ -1809,12 +1981,10 @@ private fun ChannelDestroyPanel(vm: AppViewModel, channel: Channel, onDismiss: (
     val armed = confirmText.trim().equals(channel.name.trim(), ignoreCase = true)
 
     Text("Delete channel", color = PomboColors.Danger, fontSize = 15.sp, fontWeight = FontWeight.SemiBold)
-    Spacer(Modifier.height(6.dp))
-    Text(
-        "Deletes all three streams on-chain. The channel disappears for every " +
-            "member, its history stops being served, and it cannot be recovered " +
-            "or rejoined. Three transactions, so it costs gas.",
-        color = Color.White.copy(alpha = 0.40f), fontSize = 12.sp, lineHeight = 18.sp
+    Spacer(Modifier.height(10.dp))
+    GasWarningBanner(
+        "Deleting this channel requires on-chain transactions and gas fees. " +
+            "It cannot be reversed."
     )
     Spacer(Modifier.height(14.dp))
     Text(
