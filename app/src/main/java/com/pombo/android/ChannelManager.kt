@@ -5635,6 +5635,28 @@ class ChannelManager(
 
     private val gateWriterCache = java.util.concurrent.ConcurrentHashMap<String, Boolean>()
 
+    /**
+     * Whether this account may publish here, asked of the stream registry
+     * rather than of the stored flag: a channel joined before its permissions
+     * changed, or entered through a path that never learned them, carries
+     * `readOnly = false` forever. Gated channels are not asked, because their
+     * grants belong to the clone and every member would read as refused. An
+     * unread answer keeps the composer.
+     */
+    suspend fun mayPublishHere(channel: Channel): Boolean {
+        if (channel.type == "gated" || channel.type == "dm") return true
+        publishPermCache[channel.messageStreamId]?.let { return it }
+        return try {
+            val perms = bridge.call("checkPermissions",
+                JSONObject().put("streamId", channel.messageStreamId), 15_000)
+            perms.optBoolean("canPublish").also { publishPermCache[channel.messageStreamId] = it }
+        } catch (e: Exception) {
+            true
+        }
+    }
+
+    private val publishPermCache = java.util.concurrent.ConcurrentHashMap<String, Boolean>()
+
     private fun startPresence(channel: Channel) = presence.startPresence(channel)
 
     /** Called by the bridge listener (background thread). */

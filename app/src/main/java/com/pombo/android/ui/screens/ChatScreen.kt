@@ -970,13 +970,16 @@ fun ChatScreen(vm: AppViewModel) {
             it.paidUntil * 1000L <= System.currentTimeMillis() && !it.accessNow
         } == true
         var readOnlyWriter by remember(ch.messageStreamId) { mutableStateOf(false) }
+        var mayPublish by remember(ch.messageStreamId) { mutableStateOf(true) }
         LaunchedEffect(ch.messageStreamId, ch.readOnly) {
             readOnlyWriter = ch.readOnly && ch.type == "gated" && vm.canManageGate()
+            mayPublish = vm.mayPublishHere(ch)
         }
-        val mayWriteHere = !ch.readOnly || readOnlyWriter ||
-            ch.createdBy?.equals(myAddr, ignoreCase = true) == true
-        // A reader of an announcements channel gets no composer at all: a
-        // disabled field is furniture that only says "not for you". An expired
+        val mayWriteHere = mayPublish &&
+            (!ch.readOnly || readOnlyWriter ||
+                ch.createdBy?.equals(myAddr, ignoreCase = true) == true)
+        // Whoever the network would refuse gets no composer at all: a disabled
+        // field is furniture that only says "not for you". An expired
         // subscription keeps its field, because there the placeholder is the
         // instruction for getting it back.
         if (mayWriteHere) {
