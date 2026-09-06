@@ -1054,6 +1054,9 @@ class AppViewModel(app: Application) : AndroidViewModel(app), PomboBridge.Listen
     /** Gate owner or moderator: who may add, remove and ban members. */
     suspend fun canManageGate(): Boolean = manager.canManageGate()
 
+    /** Asks the stream registry whether this account may write in a channel. */
+    suspend fun mayPublishHere(channel: Channel): Boolean = manager.mayPublishHere(channel)
+
     /** On-chain permission matrix for the Moderation panel's grantee table. */
     suspend fun streamPermissions(): List<com.pombo.android.core.GraphApi.StreamPermission> =
         manager.streamPermissions()
