@@ -5602,11 +5602,8 @@ class ChannelManager(
             }
             return signer
         }
-        // Read-only, Everyone mode: the gate hands the same publish grant to
-        // every member (readOnly is a declaration the contract cannot enforce
-        // on a hash), so "members do not post" only holds if readers cut here.
-        // Members-only mode needs nothing: there the publish key never reaches
-        // a plain member.
+        // The gate grants publish to every member, so read-only only holds if
+        // readers cut it. Sealed needs none of this: no publish key, no message.
         if (channel.readOnly && !streamId.endsWith(StreamConstants.SUFFIX_KEYS)
             && !isReadOnlyWriter(channel, gate, signer)) {
             Log.w(TAG, "gated: $signer is not a writer on read-only $streamId — dropping")
@@ -5616,13 +5613,9 @@ class ChannelManager(
     }
 
     /**
-     * Owner + moderators, the only writers a read-only gate has. The owner is
-     * the stream namespace, so the common case needs no chain read at all.
-     *
-     * Cold cache decides NO and fills in the background: deciding yes would
-     * make the cut cosmetic, since the first render is the one that matters.
-     * The cost is a moderator's message staying hidden until the read lands
-     * and the channel is opened again.
+     * Owner + moderators, the only writers a read-only gate has. A cold cache
+     * decides NO and fills in the background: deciding yes would make the cut
+     * cosmetic, since the first render is the one that matters.
      */
     private fun isReadOnlyWriter(channel: Channel, gate: String, signer: String): Boolean {
         if (signer == channel.messageStreamId.substringBefore('/').lowercase()) return true
