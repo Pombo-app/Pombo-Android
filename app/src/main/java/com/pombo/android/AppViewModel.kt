@@ -1068,7 +1068,7 @@ class AppViewModel(app: Application) : AndroidViewModel(app), PomboBridge.Listen
         onDone()
     }
 
-    /** Admin-only: replaces the shared publish key of a Members-only channel. */
+    /** Admin-only: replaces the shared publish key of a Sealed channel. */
     fun rekeyPublishKey(onDone: () -> Unit = {}) = viewModelScope.launch {
         chainAction(
             "Reset publish key",

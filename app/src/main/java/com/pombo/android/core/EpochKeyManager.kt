@@ -86,9 +86,9 @@ class EpochKeyManager(
      */
     private val emitKeysWake: (messageStreamId: String) -> Unit = {},
     /**
-     * Members-only author visibility: true when this channel publishes -1/-2
+     * Sealed: true when this channel publishes -1/-2
      * under the SHARED key, which makes the publish key part of what a
-     * joiner needs (and what answers hand out). Ungated / Everyone channels
+     * joiner needs (and what answers hand out). Ungated / Visryone channels
      * return false.
      */
     private val sharedPublishFor: suspend (messageStreamId: String) -> Boolean = { false },
@@ -183,7 +183,7 @@ class EpochKeyManager(
         /** (at, members) — rosterMembers result cache. */
         var rosterCache: Pair<Long, List<RosterMember>>? = null
         /**
-         * Members-only: the channel's SHARED publish key — persisted+synced
+         * Sealed: the channel's SHARED publish key — persisted+synced
          * (channel key material, like the epochs). Never rotates by routine;
          * a re-key bumps rev.
          */
@@ -787,7 +787,7 @@ class EpochKeyManager(
         return s.announces.keys.filter { it !in adopted }
     }
 
-    /** Caller holds the lock. A Members-only channel is not writable until
+    /** Caller holds the lock. A Sealed channel is not writable until
      *  the announced publish key (at its announced rev) is held. A plain
      *  member of a read-only channel never qualifies for it, so once the
      *  role is known they stop asking for a wrap nobody may answer. */
@@ -802,7 +802,7 @@ class EpochKeyManager(
         s.intAnnounce != null && s.intKey?.keyId != s.intAnnounce?.keyId
 
     /**
-     * Validate and apply a publish-key announce (Members-only channels).
+     * Validate and apply a publish-key announce (Sealed channels).
      * Higher rev wins — a re-key is the admin's escape valve and must
      * supersede everywhere; within the same rev the epoch-announce conflict
      * rule applies. Caller holds the lock.
@@ -1308,7 +1308,7 @@ class EpochKeyManager(
             }
         }
 
-        // Members-only: the shared publish key rides along with the epochs —
+        // Sealed: the shared publish key rides along with the epochs —
         // a joiner needs both before the channel is writable for them. In a
         // read-only channel that key IS the write capability, so it only goes
         // to the owner and the moderators (fail-closed in the wiring).
@@ -1592,10 +1592,10 @@ class EpochKeyManager(
         if (!s.loaded) { loadPersisted(messageStreamId, s); s.loaded = true }
     }
 
-    // ---- Shared publish key (Members-only) ----
+    // ---- Shared publish key (Sealed) ----
 
     /**
-     * Fresh publish keypair for a new Members-only channel. Its ADDRESS gets
+     * Fresh publish keypair for a new Sealed channel. Its ADDRESS gets
      * the PUBLISH grants in the creation batch; the private half is
      * distributed to members via PUB_WRAPs on -4.
      */
@@ -1705,7 +1705,7 @@ class EpochKeyManager(
     }
 
     /**
-     * Session authorship material for our own publishes in a Members-only
+     * Session authorship material for our own publishes in a Sealed
      * channel: pseudonym keypair + account bind proof, minted lazily once
      * per session per channel. Memory only — members resolve the ACCOUNT
      * from the bind proof, so pseudonym churn across sessions is invisible.

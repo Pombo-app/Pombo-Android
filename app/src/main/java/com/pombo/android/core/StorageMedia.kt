@@ -405,7 +405,7 @@ class StorageMedia(
         /** Gated channel: the clone address — chunks and warm-up pings publish
          *  through it (ERC-1271), and verify matches rows against it. */
         gateAddress: String? = null,
-        /** Members-only channel: chunks publish under the SHARED key instead
+        /** Sealed channel: chunks publish under the SHARED key instead
          *  of the clone — the clone path would stamp the uploader's account
          *  onto every stored chunk. */
         sharedPublishKeyHex: String? = null,

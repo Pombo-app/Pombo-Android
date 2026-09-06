@@ -157,8 +157,8 @@ class KeyResponderWorker(
                     }
                 },
                 myPrivateKey = { privateKey },
-                // Members-only detection without the channel store: only
-                // Members-only channels ever persist a publish key or its
+                // Sealed detection without the channel store: only
+                // Sealed channels ever persist a publish key or its
                 // announce in the epoch slice. Without this the headless
                 // answer handed out epochs but never the PUB_WRAP, leaving a
                 // background-served joiner readable-but-unwritable until the

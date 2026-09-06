@@ -3,9 +3,9 @@ package com.pombo.android.core
 import org.json.JSONObject
 
 /**
- * Members-only authorship — byte-exact port of the web's authorship.js.
+ * Sealed authorship — byte-exact port of the web's authorship.js.
  *
- * In a Members-only channel every message publishes under the channel's
+ * In a Sealed channel every message publishes under the channel's
  * SHARED key, so the network learns nothing about who wrote what. Authorship
  * lives INSIDE the epoch-sealed plaintext as a wrapper:
  *
