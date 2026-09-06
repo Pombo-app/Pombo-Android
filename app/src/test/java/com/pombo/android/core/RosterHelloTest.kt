@@ -2,7 +2,6 @@ package com.pombo.android.core
 
 import org.json.JSONObject
 import org.junit.Assert.assertEquals
-import org.junit.Assume.assumeTrue
 import org.junit.Test
 import java.io.File
 
@@ -15,14 +14,18 @@ import java.io.File
  */
 class RosterHelloTest {
 
-    private fun vectors(): JSONObject? {
+    /**
+     * Missing vectors used to skip this test, which made the suite green while
+     * the parity check ran on nothing. Absent is now a failure.
+     */
+    private fun vectors(): JSONObject {
         var dir: File? = File(".").absoluteFile
         while (dir != null) {
             val candidate = File(dir, "docs/GATED-CHANNELS-hello-vectors.json")
             if (candidate.isFile) return JSONObject(candidate.readText())
             dir = dir.parentFile
         }
-        return null
+        throw AssertionError("parity vectors not found: docs/GATED-CHANNELS-hello-vectors.json")
     }
 
     private fun rosterOf(hellos: List<JSONObject>): List<EpochKeyManager.RosterMember> {
@@ -39,8 +42,7 @@ class RosterHelloTest {
     @Test
     fun `composes the roster exactly like the web`() {
         val v = vectors()
-        assumeTrue("hello vectors not found", v != null)
-        val cases = v!!.getJSONArray("vectors")
+        val cases = v.getJSONArray("vectors")
         for (i in 0 until cases.length()) {
             val case = cases.getJSONObject(i)
             val hellos = case.getJSONArray("hellos").let { arr ->

@@ -6,7 +6,6 @@ import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
-import org.junit.Assume.assumeTrue
 import org.junit.Test
 import java.io.File
 
@@ -17,21 +16,25 @@ import java.io.File
  */
 class ModActionTest {
 
-    private fun vectors(name: String): JSONObject? {
+    /**
+     * Missing vectors used to skip these tests, which made the suite green
+     * while the parity checks ran on nothing — the file lived outside the
+     * repository, so that is exactly what CI did. Absent is now a failure.
+     */
+    private fun vectors(name: String): JSONObject {
         var dir: File? = File(".").absoluteFile
         while (dir != null) {
             val candidate = File(dir, "docs/$name")
             if (candidate.isFile) return JSONObject(candidate.readText())
             dir = dir.parentFile
         }
-        return null
+        throw AssertionError("parity vectors not found: docs/$name")
     }
 
     @Test
     fun `verifies every web-generated delta and recovers the moderator`() {
         val v = vectors("GATED-CHANNELS-mod-action-vectors.json")
-        assumeTrue("mod-action vectors not found", v != null)
-        val streamId = v!!.getString("streamId")
+        val streamId = v.getString("streamId")
         val mod = v.getString("mod").lowercase()
         val cases = v.getJSONArray("vectors")
         assertTrue(cases.length() > 0)
@@ -44,8 +47,7 @@ class ModActionTest {
     @Test
     fun `digest matches the web byte for byte`() {
         val v = vectors("GATED-CHANNELS-mod-action-vectors.json")
-        assumeTrue("mod-action vectors not found", v != null)
-        val streamId = v!!.getString("streamId")
+        val streamId = v.getString("streamId")
         val cases = v.getJSONArray("vectors")
         for (i in 0 until cases.length()) {
             val case = cases.getJSONObject(i)
@@ -61,8 +63,7 @@ class ModActionTest {
     @Test
     fun `android signs deltas the web would accept`() {
         val v = vectors("GATED-CHANNELS-mod-action-vectors.json")
-        assumeTrue("mod-action vectors not found", v != null)
-        val streamId = v!!.getString("streamId")
+        val streamId = v.getString("streamId")
         val priv = v.getString("modPriv")
         val web = v.getJSONArray("vectors").getJSONObject(2).getJSONObject("delta")
 
@@ -77,8 +78,7 @@ class ModActionTest {
     @Test
     fun `a tampered field stops the delta verifying`() {
         val v = vectors("GATED-CHANNELS-mod-action-vectors.json")
-        assumeTrue("mod-action vectors not found", v != null)
-        val streamId = v!!.getString("streamId")
+        val streamId = v.getString("streamId")
         val delta = JSONObject(v.getJSONArray("vectors").getJSONObject(0)
             .getJSONObject("delta").toString())
         delta.put("target", "msg-someone-else")
@@ -88,8 +88,7 @@ class ModActionTest {
     @Test
     fun `a delta signed for another stream does not verify here`() {
         val v = vectors("GATED-CHANNELS-mod-action-vectors.json")
-        assumeTrue("mod-action vectors not found", v != null)
-        val delta = v!!.getJSONArray("vectors").getJSONObject(0).getJSONObject("delta")
+        val delta = v.getJSONArray("vectors").getJSONObject(0).getJSONObject("delta")
         assertNotNull(ModAction.verify(v.getString("streamId"), delta))
         assertNull(ModAction.verify("0xdead/other-1", delta))
     }
@@ -97,8 +96,7 @@ class ModActionTest {
     @Test
     fun `composition matches the web on every case`() {
         val v = vectors("GATED-CHANNELS-mod-composition-vectors.json")
-        assumeTrue("mod-composition vectors not found", v != null)
-        val cases = v!!.getJSONArray("cases")
+        val cases = v.getJSONArray("cases")
         assertTrue(cases.length() > 0)
         for (i in 0 until cases.length()) {
             val case = cases.getJSONObject(i)
