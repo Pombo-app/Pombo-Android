@@ -332,7 +332,10 @@ const api = {
         // validating reader ever refuses it. Ask here, as the SDK would; the
         // forced re-read covers a grant written seconds ago (a member just
         // added) that a cached answer would call a forgery.
-        if (!await api._mayPublishAs(streamId, onWirePublisher, true)) {
+        // Only for the conversation: the -2 and -5 go out under per-channel
+        // identities that hold no grant of their own.
+        if (/-1$/.test(streamId)
+            && !await api._mayPublishAs(streamId, onWirePublisher, true)) {
             throw new Error('Refusing to publish to ' + streamId + ': ' +
                 onWirePublisher + ' holds no PUBLISH permission');
         }
@@ -491,6 +494,9 @@ const api = {
     },
 
     async _mayWriteHere(streamId, message) {
+        // Presence and reactions ride per-channel identities that hold no
+        // grant of their own, so those streams are not filtered here.
+        if (/-[25]$/.test(streamId)) return true;
         const sm = (message && message.streamMessage) ? message.streamMessage : message;
         const publisherId = (message && message.publisherId != null)
             ? message.publisherId

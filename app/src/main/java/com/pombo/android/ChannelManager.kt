@@ -5604,7 +5604,9 @@ class ChannelManager(
         }
         // The gate grants publish to every member, so read-only only holds if
         // readers cut it. Sealed needs none of this: no publish key, no message.
-        if (channel.readOnly && !streamId.endsWith(StreamConstants.SUFFIX_KEYS)
+        // Only the conversation is cut: the -2 and -5 are where a member of a
+        // read-only channel takes part.
+        if (channel.readOnly && streamId.endsWith(StreamConstants.SUFFIX_MESSAGE)
             && !isReadOnlyWriter(channel, gate, signer)) {
             Log.w(TAG, "gated: $signer is not a writer on read-only $streamId — dropping")
             return null

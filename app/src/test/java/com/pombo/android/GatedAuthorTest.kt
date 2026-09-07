@@ -108,4 +108,23 @@ class GatedAuthorTest {
         val keysId = StreamConstants.deriveKeysId(streamId)
         assertEquals(stranger, h.manager.gatedAuthor(ro, keysId, meta(gate, stranger)))
     }
+
+    /**
+     * Only the conversation is read-only. Cutting the member off the -5 left
+     * them unable to react AND unable to see anyone else's reactions, which is
+     * the whole of participation in an announcements channel.
+     */
+    @Test
+    fun `a member reaction survives on a read-only channel`() {
+        val ro = channel().copy(readOnly = true)
+        val interactionsId = StreamConstants.deriveInteractionsId(streamId)
+        assertEquals(stranger, h.manager.gatedAuthor(ro, interactionsId, meta(gate, stranger)))
+    }
+
+    @Test
+    fun `a member presence survives on a read-only channel`() {
+        val ro = channel().copy(readOnly = true)
+        val ephemeralId = StreamConstants.deriveEphemeralId(streamId)
+        assertEquals(stranger, h.manager.gatedAuthor(ro, ephemeralId, meta(gate, stranger)))
+    }
 }
