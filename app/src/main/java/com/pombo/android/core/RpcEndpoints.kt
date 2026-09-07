@@ -35,8 +35,9 @@ object RpcEndpoints {
         Endpoint("1rpc", "1RPC (Privacy)", "https://1rpc.io/matic", true)
     )
 
-    /** Enabled out of the box: two providers, so one going down is not an outage. */
-    val DEFAULT_ENABLED = listOf("drpc", "publicnode")
+    /** Enabled out of the box: all known providers, so a lone one going down is
+     * not an outage and access reads can be cross-checked across several. */
+    val DEFAULT_ENABLED = listOf("drpc", "publicnode", "tenderly", "1rpc")
 
     fun byKey(key: String): Endpoint? = ALL.firstOrNull { it.key == key }
 

@@ -140,8 +140,11 @@ class KeyResponderWorker(
                     val gate = byMessageStream[messageStreamId]?.gateAddress
                     if (gate == null) false
                     else try {
-                        bridge.call("gateCheckAccess", JSONObject()
-                            .put("gate", gate).put("user", requester)).optBoolean("access", false)
+                        val res = bridge.call("gateCheckAccessQuorum", JSONObject()
+                            .put("gate", gate).put("user", requester))
+                        val warn = res.optString("warn", "")
+                        if (warn.isNotEmpty()) android.util.Log.w("KeyResponderWorker", warn)
+                        res.optBoolean("access", false)
                     } catch (e: Exception) {
                         false   // fail-closed, like the in-app wiring
                     }

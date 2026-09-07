@@ -1948,6 +1948,58 @@ const api = {
         return { access: !!value };
     },
 
+    async _gateReadAt(url, gate, user) {
+        try {
+            const p = new window.ethers.JsonRpcProvider(url, 137, { staticNetwork: true, batchMaxCount: 1 });
+            return await new window.ethers.Contract(gate, api._GATE_ABI, p).checkAccess(user);
+        } catch (e) {
+            console.warn('gate: quorum read failed: ' + (e && e.message || e));
+            return null;
+        }
+    },
+
+    // checkAccess cross-checked across the enabled RPCs, for the key responder:
+    // an epoch key must not be wrapped on the word of a single endpoint. Only
+    // enabled endpoints (RPCS) are contacted; a lone one is accepted; a
+    // disagreement is tie-broken by the rest; an unbreakable tie fails closed
+    // and returns `warn`. Same cache as gateCheckAccess.
+    async gateCheckAccessQuorum(a) {
+        const cacheKey = String(a.gate).toLowerCase() + '|' + String(a.user).toLowerCase();
+        const cached = api._gateAccessCache.get(cacheKey);
+        if (cached && Date.now() - cached.at < 10 * 60 * 1000) return { access: cached.value };
+        const list = (typeof RPCS !== 'undefined' && RPCS && RPCS.length) ? RPCS : [{ url: 'https://polygon-bor-rpc.publicnode.com' }];
+        const urls = list.map(function (e) { return typeof e === 'string' ? e : e.url; }).filter(Boolean);
+        if (!urls.length) return { access: false, failed: true };
+        function cache(v) {
+            if (api._gateAccessCache.size > 2000) api._gateAccessCache.delete(api._gateAccessCache.keys().next().value);
+            api._gateAccessCache.set(cacheKey, { value: !!v, at: Date.now() });
+        }
+        if (urls.length === 1) {
+            const v = await api._gateReadAt(urls[0], a.gate, a.user);
+            if (v === null) return { access: false, failed: true };
+            cache(v === true); return { access: v === true };
+        }
+        const pair = await Promise.all([
+            api._gateReadAt(urls[0], a.gate, a.user),
+            api._gateReadAt(urls[1], a.gate, a.user)
+        ]);
+        const responded = pair.filter(function (v) { return v !== null; });
+        if (!responded.length) return { access: false, failed: true };
+        if (responded.length === 1) { cache(responded[0] === true); return { access: responded[0] === true }; }
+        if (pair[0] === pair[1]) { cache(pair[0] === true); return { access: pair[0] === true }; }
+        var yes = (pair[0] === true ? 1 : 0) + (pair[1] === true ? 1 : 0);
+        var no = (pair[0] === false ? 1 : 0) + (pair[1] === false ? 1 : 0);
+        for (var i = 2; i < urls.length; i++) {
+            const v = await api._gateReadAt(urls[i], a.gate, a.user);
+            if (v === null) continue;
+            if (v === true) yes++; else no++;
+            if (yes !== no) break;
+        }
+        if (yes !== no) { const access = yes > no; cache(access); return { access: access }; }
+        console.warn('gate: checkAccess quorum unresolved (RPCs disagree)');
+        return { access: false, warn: 'Your RPC endpoints disagree on access to this channel — one may be compromised. Check them in Settings.' };
+    },
+
     _gateInfoCache: new Map(), // gate -> { info|null, at }; null = not v3
 
     // { gate, fresh? } -> { owner, mode, token, minBalance, price, duration,
