@@ -4921,12 +4921,18 @@ class ChannelManager(
             }
         }
         reactionsPage?.let { page ->
+            // Named, not defaulted: a reaction read from history is judged by
+            // the stream it names.
+            val reactionsId = channel.interactionsStreamId.ifEmpty {
+                StreamConstants.deriveInteractionsId(channel.messageStreamId)
+            }
             for (i in 0 until page.entries.length()) {
                 val entry = page.entries.optJSONObject(i) ?: continue
                 val meta = entry.optJSONObject("meta") ?: JSONObject()
                 handleContent(
                     channel, page.contents[i], meta,
-                    historical = true, generation = generation
+                    historical = true, generation = generation,
+                    streamId = reactionsId, partition = StreamConstants.P_REACTIONS
                 )
             }
         }
@@ -4998,8 +5004,14 @@ class ChannelManager(
             // Content first, then overrides — an edit/delete needs its target
             // present, so each partition gets its own batch rather than one
             // batch around both: the overrides must see the merged content.
-            // Reactions last, for the same reason.
-            for (partition in listOf(content, overrides, reactions)) {
+            // Reactions last, for the same reason. Each page carries the
+            // stream it came from, which is what the reader cut judges.
+            val pages = listOf(
+                Triple(content, channel.messageStreamId, StreamConstants.P_MESSAGES),
+                Triple(overrides, channel.messageStreamId, StreamConstants.P_CONTROL),
+                Triple(reactions, reactionsId, StreamConstants.P_REACTIONS)
+            )
+            for ((partition, pageStreamId, pagePartition) in pages) {
                 val arr = partition?.optJSONArray("messages") ?: continue
                 val contents = predecrypt(arr, channel.password)
                 batchingMerges {
@@ -5009,7 +5021,8 @@ class ChannelManager(
                         trackOldest(meta)
                         handleContent(
                             channel, contents[i], meta,
-                            historical = true, generation = generationAtStart
+                            historical = true, generation = generationAtStart,
+                            streamId = pageStreamId, partition = pagePartition
                         )
                     }
                 }
