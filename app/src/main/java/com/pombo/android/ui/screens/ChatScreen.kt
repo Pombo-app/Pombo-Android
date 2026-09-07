@@ -7,10 +7,8 @@ import androidx.compose.animation.core.animateFloat
 import androidx.compose.animation.core.infiniteRepeatable
 import androidx.compose.animation.core.rememberInfiniteTransition
 import androidx.compose.animation.core.tween
-import androidx.compose.animation.expandVertically
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
-import androidx.compose.animation.shrinkVertically
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
@@ -227,6 +225,21 @@ fun ChatScreen(vm: AppViewModel) {
         val moderatesGate by vm.moderatesGate.collectAsState()
         val rosterNames by vm.rosterNames.collectAsState()
         val myAddr = vm.address.collectAsState().value
+
+        // A read-only channel only lets its writers post: the owner always,
+        // and on gated channels the moderators too — the same condition the
+        // gate's isValidSignature applies at ingest, so the composer never
+        // promises a publish the network would refuse. Replying is writing,
+        // so the reply affordances on the bubbles hang off this same answer.
+        var readOnlyWriter by remember(ch.messageStreamId) { mutableStateOf(false) }
+        var mayPublish by remember(ch.messageStreamId) { mutableStateOf(true) }
+        LaunchedEffect(ch.messageStreamId, ch.readOnly) {
+            readOnlyWriter = ch.readOnly && ch.type == "gated" && vm.canManageGate()
+            mayPublish = vm.mayPublishHere(ch)
+        }
+        val mayWriteHere = mayPublish &&
+            (!ch.readOnly || readOnlyWriter ||
+                ch.createdBy?.equals(myAddr, ignoreCase = true) == true)
 
         if (showInfo) ChannelSettingsSheet(vm, ch, canModerate) { showInfo = false }
 
@@ -669,6 +682,7 @@ fun ChatScreen(vm: AppViewModel) {
                         reactions = reactions,
                         myAddress = myAddr,
                         canModerate = canModerate,
+                        canWrite = mayWriteHere,
                         channelCreator = ch.createdBy,
                         listState = listState,
                         // Two items per group counted from the newest end
@@ -902,12 +916,20 @@ fun ChatScreen(vm: AppViewModel) {
         // Held past the clear, or the line would blank out mid-fade-out.
         var lastTypingLabel by remember { mutableStateOf("") }
         LaunchedEffect(typingLabel) { typingLabel?.let { lastTypingLabel = it } }
-        AnimatedVisibility(
-            visible = typing.isNotEmpty(),
-            enter = fadeIn(tween(180)) + expandVertically(tween(180)),
-            exit = fadeOut(tween(140)) + shrinkVertically(tween(140))
+        // The row holds its height whether anyone is typing or not: the
+        // conversation above it must not move. Sized above the line it
+        // carries, since a flush box clips descenders.
+        Box(
+            Modifier.fillMaxWidth().height(32.dp),
+            contentAlignment = Alignment.CenterStart
         ) {
-            TypingIndicator(lastTypingLabel)
+            androidx.compose.animation.AnimatedVisibility(
+                visible = typing.isNotEmpty(),
+                enter = fadeIn(tween(180)),
+                exit = fadeOut(tween(140))
+            ) {
+                TypingIndicator(lastTypingLabel)
+            }
         }
 
         // Reply bar above the composer (web #reply-bar)
@@ -960,24 +982,11 @@ fun ChatScreen(vm: AppViewModel) {
             }
         }
 
-        // A read-only channel only lets its writers post: the owner always,
-        // and on gated channels the moderators too — the same condition the
-        // gate's isValidSignature applies at ingest, so the composer never
-        // promises a publish the network would refuse.
         // Expired subscription cuts the composer too: honest receivers drop
         // the message at ingest — writing into that void is a trap.
         val subExpired = paidStatus?.let {
             it.paidUntil * 1000L <= System.currentTimeMillis() && !it.accessNow
         } == true
-        var readOnlyWriter by remember(ch.messageStreamId) { mutableStateOf(false) }
-        var mayPublish by remember(ch.messageStreamId) { mutableStateOf(true) }
-        LaunchedEffect(ch.messageStreamId, ch.readOnly) {
-            readOnlyWriter = ch.readOnly && ch.type == "gated" && vm.canManageGate()
-            mayPublish = vm.mayPublishHere(ch)
-        }
-        val mayWriteHere = mayPublish &&
-            (!ch.readOnly || readOnlyWriter ||
-                ch.createdBy?.equals(myAddr, ignoreCase = true) == true)
         // Whoever the network would refuse gets no composer at all: a disabled
         // field is furniture that only says "not for you". An expired
         // subscription keeps its field, because there the placeholder is the

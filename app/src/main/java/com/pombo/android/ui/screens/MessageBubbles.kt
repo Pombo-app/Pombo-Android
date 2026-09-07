@@ -358,6 +358,8 @@ internal fun MessageGroup(
     myAddress: String?,
     /** On-chain DELETE permission on this channel (web isAdminUser). */
     canModerate: Boolean,
+    /** Whether this account may post here: no composer, no reply either. */
+    canWrite: Boolean,
     /** Channel creator, who can never be banned. */
     channelCreator: String?,
     /** The list this group lives in, and its item index — for the sticky avatar. */
@@ -524,6 +526,7 @@ internal fun MessageGroup(
                     reactions = reactions[msg.id].orEmpty(),
                     myAddress = myAddress,
                     canModerate = canModerate,
+                    canWrite = canWrite,
                     channelCreator = channelCreator,
                     isHidden = msg.id in hidden,
                     isPinned = pins.any { it.targetId == msg.id },
@@ -570,6 +573,8 @@ private fun MessageBubble(
     reactions: Map<String, Set<String>>,
     myAddress: String?,
     canModerate: Boolean = false,
+    /** Whether this account may post here: no composer, no reply either. */
+    canWrite: Boolean = true,
     /** Channel creator, who can never be banned (web `isCreator`). */
     channelCreator: String? = null,
     isHidden: Boolean = false,
@@ -659,7 +664,7 @@ private fun MessageBubble(
                     modifier = Modifier
                         .align(if (msg.mine) Alignment.CenterStart else Alignment.CenterEnd)
                         .offset(x = if (msg.mine) (-30).dp else 30.dp),
-                    onReply = onReply,
+                    onReply = if (canWrite) onReply else null,
                     onReact = { picker = true }
                 )
                 Column(
@@ -928,9 +933,11 @@ private fun MessageBubble(
                         com.pombo.android.ui.ContextMenuItem(
                             "Copy Address", Icons.Outlined.Badge
                         ) { menu = false; clipboard.setText(androidx.compose.ui.text.AnnotatedString(msg.sender)) }
-                        com.pombo.android.ui.ContextMenuItem(
-                            "Reply", Icons.AutoMirrored.Filled.Reply
-                        ) { menu = false; onReply() }
+                        if (canWrite) {
+                            com.pombo.android.ui.ContextMenuItem(
+                                "Reply", Icons.AutoMirrored.Filled.Reply
+                            ) { menu = false; onReply() }
+                        }
 
                         if (!msg.mine) {
                             com.pombo.android.ui.ContextMenuDivider()
@@ -1172,12 +1179,17 @@ private fun Modifier.bubbleTail(
  * placing outside that slot reproduces the absolute behaviour.
  */
 @Composable
-private fun MessageActionTriggers(modifier: Modifier = Modifier, onReply: () -> Unit, onReact: () -> Unit) {
+private fun MessageActionTriggers(
+    modifier: Modifier = Modifier,
+    /** Null where this account may not post: reacting stays, replying does not. */
+    onReply: (() -> Unit)?,
+    onReact: () -> Unit
+) {
     Column(
         modifier.padding(horizontal = 4.dp),
         verticalArrangement = Arrangement.spacedBy(6.dp)
     ) {
-        Icon(
+        if (onReply != null) Icon(
             Icons.AutoMirrored.Filled.Reply, contentDescription = "Reply",
             tint = Color.White.copy(alpha = 0.60f),
             modifier = Modifier.size(18.dp).clickableNoRipple(onReply)

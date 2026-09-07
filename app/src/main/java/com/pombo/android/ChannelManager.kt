@@ -61,7 +61,7 @@ data class ExploreChannel(
     val gateVerb: String? = null,
     val gateValue: String? = null,
     val gateQualifier: String? = null,
-    /** Author visibility from metadata `m` ('members' | 'everyone'). */
+    /** Wire identity from metadata `m` ('sealed' | 'visible'). */
     val wireIdentity: String? = null
 )
 
@@ -4056,6 +4056,9 @@ class ChannelManager(
                 description = preview.description,
                 language = preview.language,
                 category = preview.category,
+                // Without the mode a Sealed channel is previewed as Visible, and
+                // what is published from here goes out unreadable.
+                wireIdentity = if (gated) preview.wireIdentity else null,
                 exposure = "visible",
                 createdBy = messageStreamId.substringBefore('/')
             ),
@@ -4921,12 +4924,18 @@ class ChannelManager(
             }
         }
         reactionsPage?.let { page ->
+            // Named, not defaulted: a reaction read from history is judged by
+            // the stream it names.
+            val reactionsId = channel.interactionsStreamId.ifEmpty {
+                StreamConstants.deriveInteractionsId(channel.messageStreamId)
+            }
             for (i in 0 until page.entries.length()) {
                 val entry = page.entries.optJSONObject(i) ?: continue
                 val meta = entry.optJSONObject("meta") ?: JSONObject()
                 handleContent(
                     channel, page.contents[i], meta,
-                    historical = true, generation = generation
+                    historical = true, generation = generation,
+                    streamId = reactionsId, partition = StreamConstants.P_REACTIONS
                 )
             }
         }
@@ -4998,8 +5007,14 @@ class ChannelManager(
             // Content first, then overrides — an edit/delete needs its target
             // present, so each partition gets its own batch rather than one
             // batch around both: the overrides must see the merged content.
-            // Reactions last, for the same reason.
-            for (partition in listOf(content, overrides, reactions)) {
+            // Reactions last, for the same reason. Each page carries the
+            // stream it came from, which is what the reader cut judges.
+            val pages = listOf(
+                Triple(content, channel.messageStreamId, StreamConstants.P_MESSAGES),
+                Triple(overrides, channel.messageStreamId, StreamConstants.P_CONTROL),
+                Triple(reactions, reactionsId, StreamConstants.P_REACTIONS)
+            )
+            for ((partition, pageStreamId, pagePartition) in pages) {
                 val arr = partition?.optJSONArray("messages") ?: continue
                 val contents = predecrypt(arr, channel.password)
                 batchingMerges {
@@ -5009,7 +5024,8 @@ class ChannelManager(
                         trackOldest(meta)
                         handleContent(
                             channel, contents[i], meta,
-                            historical = true, generation = generationAtStart
+                            historical = true, generation = generationAtStart,
+                            streamId = pageStreamId, partition = pagePartition
                         )
                     }
                 }
@@ -5442,7 +5458,8 @@ class ChannelManager(
                     }
                     pub = if (participates) {
                         epochKeys.interactionsKeyFor(channel.messageStreamId)
-                            ?: epochKeys.publishKeyFor(channel.messageStreamId)
+                            ?: if (interactionsOnly) null
+                            else epochKeys.publishKeyFor(channel.messageStreamId)
                     } else epochKeys.publishKeyFor(channel.messageStreamId)
                 }
                 if (pub == null) throw IllegalStateException(
@@ -5604,7 +5621,9 @@ class ChannelManager(
         }
         // The gate grants publish to every member, so read-only only holds if
         // readers cut it. Sealed needs none of this: no publish key, no message.
-        if (channel.readOnly && !streamId.endsWith(StreamConstants.SUFFIX_KEYS)
+        // Only the conversation is cut: the -2 and -5 are where a member of a
+        // read-only channel takes part.
+        if (channel.readOnly && streamId.endsWith(StreamConstants.SUFFIX_MESSAGE)
             && !isReadOnlyWriter(channel, gate, signer)) {
             Log.w(TAG, "gated: $signer is not a writer on read-only $streamId — dropping")
             return null

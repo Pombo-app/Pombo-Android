@@ -62,4 +62,38 @@ class ParkedWrapTest {
         EpochKeyManager.parkWrap(p, 0, wrap("k0"))
         assertTrue(p.isEmpty())
     }
+
+    /**
+     * The shared keys race the same way, and losing that race is worse: a
+     * member who never adopts the interactions key cannot react at all, in a
+     * read-only channel where reacting is the whole of participation.
+     */
+    @Test
+    fun `a shared-key wrap waits for its announce`() {
+        val p = LinkedHashMap<String, MutableList<JSONObject>>()
+        EpochKeyManager.parkPubWrap(p, "int-1", wrap("int-1"))
+
+        assertTrue("another key's announce does not release it",
+            EpochKeyManager.takeParkedPubWraps(p, "pub-1").isEmpty())
+        val released = EpochKeyManager.takeParkedPubWraps(p, "int-1")
+        assertEquals(1, released.size)
+        assertEquals("int-1", released[0].getString("keyId"))
+        assertTrue(EpochKeyManager.takeParkedPubWraps(p, "int-1").isEmpty())
+    }
+
+    @Test
+    fun `a shared-key wrap without a keyId is not a wait list`() {
+        val p = LinkedHashMap<String, MutableList<JSONObject>>()
+        EpochKeyManager.parkPubWrap(p, "", wrap(""))
+        assertTrue(p.isEmpty())
+    }
+
+    @Test
+    fun `the shared-key wait list is bounded`() {
+        val p = LinkedHashMap<String, MutableList<JSONObject>>()
+        repeat(50) { EpochKeyManager.parkPubWrap(p, "int-1", wrap("int-1")) }
+        assertEquals(4, EpochKeyManager.takeParkedPubWraps(p, "int-1").size)
+        for (i in 1..40) EpochKeyManager.parkPubWrap(p, "k$i", wrap("k$i"))
+        assertEquals(8, p.size)
+    }
 }

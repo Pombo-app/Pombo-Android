@@ -173,6 +173,8 @@ class EpochKeyManager(
          * wrap is worth nothing until the announce says what it should hash to.
          */
         val parkedWraps = LinkedHashMap<Int, MutableList<JSONObject>>()
+        /** The same wait list for the shared keys, addressed by keyId. */
+        val parkedPubWraps = LinkedHashMap<String, MutableList<JSONObject>>()
         /** Epochs we already published a MEMBER_HELLO for — persisted. */
         val helloEpochs = LinkedHashSet<Int>()
         /** Name the last hello carried, and when — the next one chains it. */
@@ -245,18 +247,36 @@ class EpochKeyManager(
             parked: LinkedHashMap<Int, MutableList<JSONObject>>, epoch: Int, wrap: JSONObject
         ) {
             if (epoch < 1) return
-            val forEpoch = parked.getOrPut(epoch) { mutableListOf() }
-            if (forEpoch.size >= MAX_PARKED_WRAPS_PER_EPOCH) return
-            forEpoch.add(wrap)
-            while (parked.size > MAX_PARKED_EPOCHS) {
-                parked.remove(parked.keys.first())
-            }
+            park(parked, epoch, wrap)
         }
 
         /** The wraps waiting on this epoch's announce, removed as they are handed over. */
         internal fun takeParkedWraps(
             parked: LinkedHashMap<Int, MutableList<JSONObject>>, epoch: Int
         ): List<JSONObject> = parked.remove(epoch).orEmpty()
+
+        /** The shared keys ride PUB_WRAP and are addressed by keyId, not epoch. */
+        internal fun parkPubWrap(
+            parked: LinkedHashMap<String, MutableList<JSONObject>>, keyId: String, wrap: JSONObject
+        ) {
+            if (keyId.isEmpty()) return
+            park(parked, keyId, wrap)
+        }
+
+        internal fun takeParkedPubWraps(
+            parked: LinkedHashMap<String, MutableList<JSONObject>>, keyId: String
+        ): List<JSONObject> = parked.remove(keyId).orEmpty()
+
+        private fun <K> park(
+            parked: LinkedHashMap<K, MutableList<JSONObject>>, key: K, wrap: JSONObject
+        ) {
+            val forKey = parked.getOrPut(key) { mutableListOf() }
+            if (forKey.size >= MAX_PARKED_WRAPS_PER_EPOCH) return
+            forKey.add(wrap)
+            while (parked.size > MAX_PARKED_EPOCHS) {
+                parked.remove(parked.keys.first())
+            }
+        }
 
         internal fun mergeHello(
             members: MutableMap<String, RosterMember>,
@@ -877,8 +897,15 @@ class EpochKeyManager(
             if (rid.isNotEmpty() && keyId.isNotEmpty()) recordSeenWrapLocked(s, rid, keyId)
             // Routed by the same `k` marker the announce carried.
             val isInteractions = data.optString("k") == "i"
-            val announce = (if (isInteractions) s.intAnnounce else s.pubAnnounce) ?: return
-            if (keyId.isEmpty() || keyId != announce.keyId) return
+            val announce = if (isInteractions) s.intAnnounce else s.pubAnnounce
+            if (keyId.isEmpty()) return
+            // Same race as the epoch wraps: the responder answers the moment
+            // it hears the request, so on a cold subscribe the wrap overtakes
+            // the announce that says what it should hash to.
+            if (announce == null || keyId != announce.keyId) {
+                parkPubWrap(s.parkedPubWraps, keyId, data)
+                return
+            }
             if ((if (isInteractions) s.intKey else s.pubKey)?.keyId == keyId) return   // already held
             val tag = data.optString("tag").ifEmpty { return }
 
@@ -918,7 +945,8 @@ class EpochKeyManager(
             adoptedKeyId = keyId
         }
         adoptedKeyId?.let {
-            Log.i(TAG, "adopted the publish key on ${messageStreamId.takeLast(30)}")
+            val which = if (data.optString("k") == "i") "interactions" else "publish"
+            Log.i(TAG, "adopted the $which key on ${messageStreamId.takeLast(30)}")
             onKeyAdopted(messageStreamId, it)
         }
     }
@@ -961,6 +989,9 @@ class EpochKeyManager(
         var announce: JSONObject? = null
         mutex.withLock {
             val s = state[messageStreamId] ?: return
+            // Never mint one here: the -2 and -5 grant PUBLISH to the address
+            // of the key minted at channel creation. A lost key needs a
+            // re-key, which is on-chain work.
             val held = s.intKey ?: return
             if ((s.intAnnounce?.rev ?: 0) > held.rev) return
             val retentionMs = retentionDays.toLong() * 86_400_000L
@@ -1109,13 +1140,20 @@ class EpochKeyManager(
             StreamConstants.KEY_REQUEST -> handleRequest(messageStreamId, keysStreamId, data, publisherId, memberCount)
             StreamConstants.KEY_WRAP -> handleWrap(messageStreamId, keysStreamId, data)
             StreamConstants.PUB_ANNOUNCE -> {
+                var replay: List<JSONObject> = emptyList()
                 val needRequest = mutex.withLock {
                     val s = getState(messageStreamId)
                     if (!s.loaded) { loadPersisted(messageStreamId, s); s.loaded = true }
                     val changed = applyPubAnnounceLocked(messageStreamId, s, data, publisherId, timestamp)
-                    if (changed) persist(messageStreamId, s)
-                    changed && needsPubKeyLocked(messageStreamId, s)
+                    if (changed) {
+                        persist(messageStreamId, s)
+                        replay = takeParkedPubWraps(s.parkedPubWraps, data.optString("keyId"))
+                    }
+                    // The interactions key needs asking for too: without it a
+                    // member holds every epoch and still cannot react.
+                    changed && (needsPubKeyLocked(messageStreamId, s) || needsInteractionsKeyLocked(s))
                 }
+                for (wrap in replay) handlePubWrap(messageStreamId, wrap)
                 if (needRequest) sendKeyRequest(messageStreamId, keysStreamId)
             }
             StreamConstants.PUB_WRAP -> handlePubWrap(messageStreamId, data)
