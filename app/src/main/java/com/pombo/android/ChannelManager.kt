@@ -5455,7 +5455,8 @@ class ChannelManager(
                     }
                     pub = if (participates) {
                         epochKeys.interactionsKeyFor(channel.messageStreamId)
-                            ?: epochKeys.publishKeyFor(channel.messageStreamId)
+                            ?: if (interactionsOnly) null
+                            else epochKeys.publishKeyFor(channel.messageStreamId)
                     } else epochKeys.publishKeyFor(channel.messageStreamId)
                 }
                 if (pub == null) throw IllegalStateException(
