@@ -228,6 +228,21 @@ fun ChatScreen(vm: AppViewModel) {
         val rosterNames by vm.rosterNames.collectAsState()
         val myAddr = vm.address.collectAsState().value
 
+        // A read-only channel only lets its writers post: the owner always,
+        // and on gated channels the moderators too — the same condition the
+        // gate's isValidSignature applies at ingest, so the composer never
+        // promises a publish the network would refuse. Replying is writing,
+        // so the reply affordances on the bubbles hang off this same answer.
+        var readOnlyWriter by remember(ch.messageStreamId) { mutableStateOf(false) }
+        var mayPublish by remember(ch.messageStreamId) { mutableStateOf(true) }
+        LaunchedEffect(ch.messageStreamId, ch.readOnly) {
+            readOnlyWriter = ch.readOnly && ch.type == "gated" && vm.canManageGate()
+            mayPublish = vm.mayPublishHere(ch)
+        }
+        val mayWriteHere = mayPublish &&
+            (!ch.readOnly || readOnlyWriter ||
+                ch.createdBy?.equals(myAddr, ignoreCase = true) == true)
+
         if (showInfo) ChannelSettingsSheet(vm, ch, canModerate) { showInfo = false }
 
         // Messages (hidden ones are dropped for non-owners; greyed for the owner).
@@ -669,6 +684,7 @@ fun ChatScreen(vm: AppViewModel) {
                         reactions = reactions,
                         myAddress = myAddr,
                         canModerate = canModerate,
+                        canWrite = mayWriteHere,
                         channelCreator = ch.createdBy,
                         listState = listState,
                         // Two items per group counted from the newest end
@@ -960,24 +976,11 @@ fun ChatScreen(vm: AppViewModel) {
             }
         }
 
-        // A read-only channel only lets its writers post: the owner always,
-        // and on gated channels the moderators too — the same condition the
-        // gate's isValidSignature applies at ingest, so the composer never
-        // promises a publish the network would refuse.
         // Expired subscription cuts the composer too: honest receivers drop
         // the message at ingest — writing into that void is a trap.
         val subExpired = paidStatus?.let {
             it.paidUntil * 1000L <= System.currentTimeMillis() && !it.accessNow
         } == true
-        var readOnlyWriter by remember(ch.messageStreamId) { mutableStateOf(false) }
-        var mayPublish by remember(ch.messageStreamId) { mutableStateOf(true) }
-        LaunchedEffect(ch.messageStreamId, ch.readOnly) {
-            readOnlyWriter = ch.readOnly && ch.type == "gated" && vm.canManageGate()
-            mayPublish = vm.mayPublishHere(ch)
-        }
-        val mayWriteHere = mayPublish &&
-            (!ch.readOnly || readOnlyWriter ||
-                ch.createdBy?.equals(myAddr, ignoreCase = true) == true)
         // Whoever the network would refuse gets no composer at all: a disabled
         // field is furniture that only says "not for you". An expired
         // subscription keeps its field, because there the placeholder is the
