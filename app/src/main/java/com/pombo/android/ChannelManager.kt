@@ -61,7 +61,7 @@ data class ExploreChannel(
     val gateVerb: String? = null,
     val gateValue: String? = null,
     val gateQualifier: String? = null,
-    /** Author visibility from metadata `m` ('members' | 'everyone'). */
+    /** Wire identity from metadata `m` ('sealed' | 'visible'). */
     val wireIdentity: String? = null
 )
 
@@ -4056,6 +4056,9 @@ class ChannelManager(
                 description = preview.description,
                 language = preview.language,
                 category = preview.category,
+                // Without the mode a Sealed channel is previewed as Visible, and
+                // what is published from here goes out unreadable.
+                wireIdentity = if (gated) preview.wireIdentity else null,
                 exposure = "visible",
                 createdBy = messageStreamId.substringBefore('/')
             ),
