@@ -7,10 +7,8 @@ import androidx.compose.animation.core.animateFloat
 import androidx.compose.animation.core.infiniteRepeatable
 import androidx.compose.animation.core.rememberInfiniteTransition
 import androidx.compose.animation.core.tween
-import androidx.compose.animation.expandVertically
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
-import androidx.compose.animation.shrinkVertically
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
@@ -918,12 +916,20 @@ fun ChatScreen(vm: AppViewModel) {
         // Held past the clear, or the line would blank out mid-fade-out.
         var lastTypingLabel by remember { mutableStateOf("") }
         LaunchedEffect(typingLabel) { typingLabel?.let { lastTypingLabel = it } }
-        AnimatedVisibility(
-            visible = typing.isNotEmpty(),
-            enter = fadeIn(tween(180)) + expandVertically(tween(180)),
-            exit = fadeOut(tween(140)) + shrinkVertically(tween(140))
+        // The row holds its height whether anyone is typing or not: the
+        // conversation above it must not move. Sized above the line it
+        // carries, since a flush box clips descenders.
+        Box(
+            Modifier.fillMaxWidth().height(32.dp),
+            contentAlignment = Alignment.CenterStart
         ) {
-            TypingIndicator(lastTypingLabel)
+            androidx.compose.animation.AnimatedVisibility(
+                visible = typing.isNotEmpty(),
+                enter = fadeIn(tween(180)),
+                exit = fadeOut(tween(140))
+            ) {
+                TypingIndicator(lastTypingLabel)
+            }
         }
 
         // Reply bar above the composer (web #reply-bar)
