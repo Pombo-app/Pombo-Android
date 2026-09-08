@@ -472,7 +472,7 @@ internal class ChannelImages(private val manager: ChannelManager) {
             mergeMessages(listOf(UiMessage(
                 id = messageId, text = "", sender = sender,
                 senderName = data.optStringOrNull("senderName"),
-                timestamp = data.optLong("timestamp", 0L), mine = mine,
+                timestamp = data.messageTime(), mine = mine,
                 isImage = true, imageId = imageId, imageMime = data.optString("finalMime", "image/jpeg"),
                 // Same ENS treatment as handleText: seed from the cache and
                 // resolve below. Without both, a sender whose only message on
