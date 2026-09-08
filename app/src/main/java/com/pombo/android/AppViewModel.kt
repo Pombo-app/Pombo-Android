@@ -1574,6 +1574,7 @@ class AppViewModel(app: Application) : AndroidViewModel(app), PomboBridge.Listen
         com.pombo.android.ui.EnsAvatarsSetting.set(settingsStore.ensAvatars)
         // Any local mutation coalesces into one push after a quiet period.
         manager.onLocalStateChanged = { sync.scheduleAutoPush() }
+        manager.onGateWarning = { toast(it, com.pombo.android.ui.ToastKind.WARNING, 8000L) }
         // Slice timestamps for changes born inside the manager (dmLeftAt).
         manager.onSliceTouched = { sliceTouched(it) }
         // A verified FCM wake arriving while the app is on screen becomes an

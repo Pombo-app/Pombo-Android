@@ -15,6 +15,13 @@ class RpcEndpointsTest {
         selection.rows.filter { it.on }.map { it.key }
 
     @Test
+    fun defaultEnabled_isEveryKnownProvider() {
+        // The responder cross-checks access across the enabled set, so all known
+        // providers ship enabled to give the quorum members to work with.
+        assertEquals(RpcEndpoints.ALL.map { it.key }, RpcEndpoints.DEFAULT_ENABLED)
+    }
+
+    @Test
     fun endpoints_areUniqueAndReachable() {
         val keys = RpcEndpoints.ALL.map { it.key }
         assertEquals(keys.size, keys.toSet().size)

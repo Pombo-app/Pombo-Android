@@ -248,8 +248,10 @@ class ChannelManager(
                 val gate = channel.gateAddress
                 if (gate == null) false // fail-closed: unknown gate wraps nothing
                 else try {
-                    val res = bridge.call("gateCheckAccess", JSONObject()
+                    val res = bridge.call("gateCheckAccessQuorum", JSONObject()
                         .put("gate", gate).put("user", requester))
+                    val warn = res.optString("warn", "")
+                    if (warn.isNotEmpty()) onGateWarning?.invoke(warn)
                     // The bridge reports WHY it says no. Reading only `access`
                     // turned every RPC outage into "refused by gate", which
                     // reads as policy and sent us hunting for bans that were
@@ -4696,6 +4698,9 @@ class ChannelManager(
 
     /** Set by the ViewModel to schedule a debounced sync push. */
     @Volatile var onLocalStateChanged: () -> Unit = {}
+
+    /** Shown when the gate quorum cannot resolve access (RPCs disagree). */
+    @Volatile var onGateWarning: ((String) -> Unit)? = null
 
     /** Stamps a sync slice's mutation timestamp (ViewModel sliceTouched) —
      *  a slice never stamped always loses the latest-wins merge. */
