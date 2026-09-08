@@ -76,6 +76,7 @@ class ChannelManagerHarness(
             inviteStore = mockk(relaxed = true),
             unreadStore = unreadStore,
             epochKeyStore = mockk(relaxed = true),
+            adminFloorStore = mockk(relaxed = true),
             transferDir = java.io.File(System.getProperty("java.io.tmpdir"), "pombo-tests"),
             isTrustedContact = { addr -> addr.lowercase() in trustedContacts }
         )
