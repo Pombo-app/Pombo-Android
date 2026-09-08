@@ -131,6 +131,8 @@ class ChannelManager(
     private val unreadStore: com.pombo.android.data.UnreadStore,
     /** Persisted epoch keys for gated channels (-4 protocol, N-A). */
     private val epochKeyStore: com.pombo.android.data.EpochKeyStore,
+    /** Local moderation floor: the last ADMIN_STATE applied per channel. */
+    internal val adminFloorStore: com.pombo.android.core.AdminFloorStore,
     /**
      * Where partial file transfers live. filesDir, never cacheDir: the system
      * may evict a cache directory at any moment, and a half-evicted transfer

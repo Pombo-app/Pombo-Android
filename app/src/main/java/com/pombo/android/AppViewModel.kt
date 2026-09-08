@@ -44,6 +44,7 @@ class AppViewModel(app: Application) : AndroidViewModel(app), PomboBridge.Listen
     private val sentDmStore = com.pombo.android.data.SentDmStore(app)
     private val sentReactionsStore = com.pombo.android.data.SentReactionsStore(app)
     private val epochKeyStore = com.pombo.android.data.EpochKeyStore(app)
+    private val adminFloorStore = com.pombo.android.core.AdminFloorStore(app)
     private val notifier = com.pombo.android.core.Notifier(app)
 
     /** Set from the Activity lifecycle; notifications are suppressed while visible. */
@@ -127,6 +128,7 @@ class AppViewModel(app: Application) : AndroidViewModel(app), PomboBridge.Listen
         inviteStore = inviteStore,
         unreadStore = unreadStore,
         epochKeyStore = epochKeyStore,
+        adminFloorStore = adminFloorStore,
         transferDir = java.io.File(app.filesDir, "transfers"),
         isTrustedContact = { addr -> _contacts.value.any { it.address.equals(addr, ignoreCase = true) } },
         isBlockedPeer = { addr -> addr.lowercase() in settingsStore.blockedPeers },

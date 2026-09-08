@@ -46,6 +46,7 @@ internal class Moderation(private val manager: ChannelManager) {
     private val store get() = manager.store
     private val scope get() = manager.scope
     private val myAddress get() = manager.myAddress
+    private val adminFloorStore get() = manager.adminFloorStore
     private val epochKeys get() = manager.epochKeys
     private val _current get() = manager._current
     private val _channels get() = manager._channels
@@ -752,7 +753,44 @@ internal class Moderation(private val manager: ChannelManager) {
         }
     }
 
+    private fun floorKey(channel: Channel) =
+        "${(myAddress() ?: "").lowercase()}|${channel.adminStreamId}"
+
+    private fun applySnapshotState(state: JSONObject) {
+        state.optJSONArray("hiddenMessageIds")?.let { arr ->
+            snapHidden = (0 until arr.length()).mapNotNull { arr.optString(it).ifEmpty { null } }.toSet()
+        }
+        state.optJSONArray("bannedMembers")?.let { arr ->
+            snapBanned = ModComposition.bannedFromJson(arr)
+        }
+        absorbedThrough = state.optLong("absorbedThrough", 0L)
+        state.optJSONArray("pins")?.let { _pins.value = pinsFromJson(it) }
+    }
+
+    // Seed the open channel from the persisted floor before the bootstrap
+    // resend, so the (rev, ts) check then refuses anything older.
+    private fun seedFloor(channel: Channel) {
+        val saved = adminFloorStore.get(floorKey(channel)) ?: return
+        val rev = saved.optInt("rev", 0)
+        val ts = saved.optLong("ts", 0L)
+        val curRev = adminRevs[channel.adminStreamId] ?: 0
+        val curTs = adminTs[channel.adminStreamId] ?: 0L
+        if (rev < curRev || (rev == curRev && ts <= curTs)) return
+        val state = saved.optJSONObject("state") ?: return
+        adminRevs[channel.adminStreamId] = rev
+        adminTs[channel.adminStreamId] = ts
+        applySnapshotState(state)
+        recompose()
+        adminLoaded.add(channel.adminStreamId)
+    }
+
+    private fun persistFloor(channel: Channel, rev: Int, ts: Long, state: JSONObject) {
+        adminFloorStore.put(floorKey(channel), JSONObject()
+            .put("rev", rev).put("ts", ts).put("state", state))
+    }
+
     internal suspend fun loadAdminState(channel: Channel, generation: Int) {
+        seedFloor(channel)
         try {
             // Password channels seal ADMIN_STATE too, and applyAdminMessage's
             // fallback opens it with PomboCrypto — Bouncy Castle PBKDF2, ~1s per
@@ -867,15 +905,9 @@ internal class Moderation(private val manager: ChannelManager) {
         adminRevs[channel.adminStreamId] = rev
         adminTs[channel.adminStreamId] = ts
         val state = data.optJSONObject("state") ?: return
-        state.optJSONArray("hiddenMessageIds")?.let { arr ->
-            snapHidden = (0 until arr.length()).mapNotNull { arr.optString(it).ifEmpty { null } }.toSet()
-        }
-        state.optJSONArray("bannedMembers")?.let { arr ->
-            snapBanned = ModComposition.bannedFromJson(arr)
-        }
-        absorbedThrough = state.optLong("absorbedThrough", 0L)
-        state.optJSONArray("pins")?.let { _pins.value = pinsFromJson(it) }
+        applySnapshotState(state)
         recompose()
+        persistFloor(channel, rev, ts, state)
     }
 
     /** Fold the held deltas onto the snapshot and publish the result to the UI. */
