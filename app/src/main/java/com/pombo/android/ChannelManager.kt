@@ -12,6 +12,7 @@ import com.pombo.android.core.channels.MessageVerification
 import com.pombo.android.core.channels.Moderation
 import com.pombo.android.core.channels.PresenceTracker
 import com.pombo.android.core.channels.optStringOrNull
+import com.pombo.android.core.channels.messageTime
 import com.pombo.android.data.Channel
 import com.pombo.android.data.ChannelStore
 import kotlinx.coroutines.CoroutineScope
@@ -3737,7 +3738,7 @@ class ChannelManager(
             text = data.optString("text"),
             sender = sender,
             senderName = data.optStringOrNull("senderName"),
-            timestamp = data.optLong("timestamp", 0L),
+            timestamp = data.messageTime(),
             mine = sender.equals(me, ignoreCase = true),
             isImage = isImage,
             imageId = imageId,
@@ -6044,17 +6045,19 @@ class ChannelManager(
             }
             if (kidEpoch != null) data.put("_epoch", kidEpoch)
         }
-        // Timestamp forgery clamps: the payload timestamp is what the
-        // UI orders and pages by, and the publisher writes it freely. Reject a
-        // payload dated ahead of the wall clock or ahead of its own signed
-        // envelope beyond clock skew. One-sided on purpose: a payload OLDER
-        // than its envelope is a legitimate republish.
+        // Clamp a payload dated ahead of the wall clock or its own signed
+        // envelope beyond skew (a payload OLDER than its envelope is a
+        // legitimate republish). Then stash the unforgeable envelope time in a
+        // sidecar field the UI orders, pages and dates by, WITHOUT touching the
+        // payload timestamp — the signature's canonical hash is over the
+        // payload, so overwriting it would fail verification.
         val payloadTs = data.optLong("timestamp", 0L)
+        val envTs = meta.optLong("timestamp", 0L)
         if (payloadTs > 0) {
-            val envTs = meta.optLong("timestamp", 0L)
             if (payloadTs > System.currentTimeMillis() + TIMESTAMP_TOLERANCE_MS) return
             if (envTs > 0 && payloadTs > envTs + TIMESTAMP_TOLERANCE_MS) return
         }
+        if (envTs > 0) data.put("_timestamp", envTs)
         // Single gate for every write below — messages, images, reactions and
         // overrides all funnel through here, from both the resend and the live
         // subscription. Nothing reaches the open channel's state past this line
@@ -6279,7 +6282,7 @@ class ChannelManager(
             text = data.optString("text"),
             sender = sender,
             senderName = data.optStringOrNull("senderName"),
-            timestamp = data.optLong("timestamp", 0L),
+            timestamp = data.messageTime(),
             mine = mine,
             ensName = ensStore.cachedName(sender),
             ensAvatar = ensStore.cachedAvatar(sender),
