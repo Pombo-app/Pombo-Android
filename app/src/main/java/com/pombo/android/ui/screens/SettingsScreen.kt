@@ -1407,7 +1407,7 @@ private fun PolygonRpcCard(vm: AppViewModel) {
 
         Spacer(Modifier.height(12.dp))
         Text(
-            "Checked endpoints are the ones used, in this order. The first is preferred.",
+            "Checked endpoints are the ones used, in this order.",
             color = Color.White.copy(alpha = 0.25f), fontSize = 12.sp
         )
         Spacer(Modifier.height(10.dp))
