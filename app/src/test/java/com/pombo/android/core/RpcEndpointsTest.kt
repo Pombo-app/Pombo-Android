@@ -15,10 +15,15 @@ class RpcEndpointsTest {
         selection.rows.filter { it.on }.map { it.key }
 
     @Test
-    fun defaultEnabled_isEveryKnownProvider() {
-        // The responder cross-checks access across the enabled set, so all known
-        // providers ship enabled to give the quorum members to work with.
-        assertEquals(RpcEndpoints.ALL.map { it.key }, RpcEndpoints.DEFAULT_ENABLED)
+    fun defaultEnabled_isTheReliableProviders_notOneRpc() {
+        // Several providers ship enabled so the responder's quorum has members to
+        // cross-check with; 1RPC (privacy relay) is available but opt-in.
+        assertTrue("1rpc" in RpcEndpoints.ALL.map { it.key })
+        assertFalse("1rpc" in RpcEndpoints.DEFAULT_ENABLED)
+        assertEquals(
+            RpcEndpoints.ALL.map { it.key }.filter { it != "1rpc" },
+            RpcEndpoints.DEFAULT_ENABLED
+        )
     }
 
     @Test
