@@ -371,6 +371,34 @@ object StorageHttp {
         return out
     }
 
+    /**
+     * Features a node announces on `GET /capabilities` (Pombo storage node
+     * fork). Null on 404, which is a vanilla node.
+     * @throws HttpStatusException on any other non-2xx response.
+     */
+    suspend fun fetchCapabilities(base: String): Set<String>? = withContext(Dispatchers.IO) {
+        val conn = open("${base.trimEnd('/')}/capabilities")
+        try {
+            val code = conn.responseCode
+            if (code == 404) return@withContext null
+            if (code / 100 != 2) throw HttpStatusException(code)
+            parseCapabilities(conn.inputStream.bufferedReader(Charsets.UTF_8).use { it.readText() })
+        } finally {
+            conn.disconnect()
+        }
+    }
+
+    /** `{"features":[...]}` → the string entries; anything malformed is an empty set. */
+    fun parseCapabilities(body: String): Set<String> {
+        val arr = runCatching { JSONObject(body).optJSONArray("features") }.getOrNull() ?: return emptySet()
+        val out = LinkedHashSet<String>()
+        for (i in 0 until arr.length()) {
+            val f = arr.opt(i)
+            if (f is String) out.add(f)
+        }
+        return out
+    }
+
     private fun JSONObject.optStringOrNull(key: String): String? =
         if (isNull(key) || !has(key)) null else optString(key)
 }

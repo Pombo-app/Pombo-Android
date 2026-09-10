@@ -26,6 +26,27 @@ class StorageHttpTest {
         return out
     }
 
+    // ================= parseCapabilities =================
+
+    @Test
+    fun `parseCapabilities keeps the string features in order`() {
+        assertEquals(
+            listOf("metadata", "storedAt", "purge", "signedReads"),
+            StorageHttp.parseCapabilities(
+                """{"name":"pombo-storage-node","features":["metadata","storedAt","purge","signedReads"]}"""
+            ).toList()
+        )
+    }
+
+    @Test
+    fun `parseCapabilities drops non-string entries and tolerates malformed bodies`() {
+        assertEquals(setOf("purge"), StorageHttp.parseCapabilities("""{"features":["purge",7,null]}"""))
+        assertTrue(StorageHttp.parseCapabilities("""{"features":"purge"}""").isEmpty())
+        assertTrue(StorageHttp.parseCapabilities("""{}""").isEmpty())
+        assertTrue(StorageHttp.parseCapabilities("not json").isEmpty())
+        assertTrue(StorageHttp.parseCapabilities("").isEmpty())
+    }
+
     // ================= hexToBytes =================
 
     @Test

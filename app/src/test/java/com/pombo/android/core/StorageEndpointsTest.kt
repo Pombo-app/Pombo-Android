@@ -183,4 +183,127 @@ class StorageEndpointsTest {
         ep.setMetaFormatSupport("https://a.example.com", true)
         assertEquals(true, ep.supportsMetaFormat("https://a.example.com/"))
     }
+
+    // ================= GET /capabilities =================
+
+    private val FORK = setOf("metadata", "storedAt", "purge", "signedReads")
+
+    @Test
+    fun `probeCapabilities caches the announced features per url and answers hasFeature`() = runBlocking {
+        val calls = AtomicInteger(0)
+        val ep = StorageEndpoints(
+            fetcher = { emptyList() },
+            capabilityFetcher = { calls.incrementAndGet(); FORK }
+        )
+        assertEquals(FORK, ep.probeCapabilities("https://a.example.com/"))
+        assertTrue(ep.hasFeature("https://a.example.com", "purge"))
+        assertFalse(ep.hasFeature("https://a.example.com", "teleport"))
+        ep.probeCapabilities("https://a.example.com")
+        assertEquals("cached within ttl", 1, calls.get())
+    }
+
+    @Test
+    fun `a 404 is remembered as announcing nothing and leaves the metadata probe alone`() = runBlocking {
+        val calls = AtomicInteger(0)
+        val ep = StorageEndpoints(
+            fetcher = { emptyList() },
+            capabilityFetcher = { calls.incrementAndGet(); null }
+        )
+        assertEquals(emptySet<String>(), ep.probeCapabilities("https://vanilla.example.com"))
+        assertFalse(ep.hasFeature("https://vanilla.example.com", "metadata"))
+        // Production nodes carry format=metadata without /capabilities: the
+        // engine's own 400 probe still decides.
+        assertNull(ep.supportsMetaFormat("https://vanilla.example.com"))
+        ep.probeCapabilities("https://vanilla.example.com")
+        assertEquals(1, calls.get())
+    }
+
+    @Test
+    fun `a failed probe is not cached`() = runBlocking {
+        val calls = AtomicInteger(0)
+        val ep = StorageEndpoints(
+            fetcher = { emptyList() },
+            capabilityFetcher = {
+                if (calls.incrementAndGet() == 1) throw StorageHttp.HttpStatusException(503)
+                setOf("purge")
+            }
+        )
+        assertNull(ep.probeCapabilities("https://a.example.com"))
+        assertNull(ep.capabilitiesOf("https://a.example.com"))
+        assertFalse(ep.hasFeature("https://a.example.com", "purge"))
+        assertEquals(setOf("purge"), ep.probeCapabilities("https://a.example.com"))
+        assertTrue(ep.hasFeature("https://a.example.com", "purge"))
+        assertEquals(2, calls.get())
+    }
+
+    @Test
+    fun `capabilities expire with the ttl`() = runBlocking {
+        val clock = Clock(1_000L)
+        val calls = AtomicInteger(0)
+        val ep = StorageEndpoints(
+            fetcher = { emptyList() },
+            ttlMs = 10_000L,
+            clock = clock,
+            capabilityFetcher = { calls.incrementAndGet(); FORK }
+        )
+        ep.probeCapabilities("https://a.example.com")
+        clock.t = 1_000L + 9_999L
+        ep.probeCapabilities("https://a.example.com")
+        assertEquals(1, calls.get())
+        clock.t = 1_000L + 10_001L
+        ep.probeCapabilities("https://a.example.com")
+        assertEquals(2, calls.get())
+    }
+
+    @Test
+    fun `announced metadata support feeds supportsMetaFormat and a recorded 400 wins over it`() = runBlocking {
+        val ep = StorageEndpoints(fetcher = { emptyList() }, capabilityFetcher = { FORK })
+        ep.probeCapabilities("https://a.example.com")
+        assertEquals(true, ep.supportsMetaFormat("https://a.example.com/"))
+        ep.setMetaFormatSupport("https://a.example.com", false)
+        assertEquals(false, ep.supportsMetaFormat("https://a.example.com"))
+    }
+
+    @Test
+    fun `probeStream unions features per provider and providersWith keeps only announcing urls`() = runBlocking {
+        // Provider A fronts a cluster: one URL upgraded, one still vanilla.
+        val calls = AtomicInteger(0)
+        val ep = StorageEndpoints(
+            fetcher = {
+                listOf(
+                    node("0xA", "https://a1.example.com", "https://a2.example.com"),
+                    node("0xB", "https://b.example.com")
+                )
+            },
+            capabilityFetcher = { url -> calls.incrementAndGet(); if (url == "https://a1.example.com") FORK else null }
+        )
+        val providers = ep.probeStream("s")
+        assertEquals(2, providers.size)
+        assertEquals(FORK, providers[0].features)
+        assertEquals(emptySet<String>(), providers[1].features)
+        assertEquals(3, calls.get())
+
+        assertEquals(
+            listOf(StorageEndpoints.Node("0xa", listOf("https://a1.example.com"))),
+            ep.providersWith("s", "purge")
+        )
+        assertTrue(ep.providersWith("s", "teleport").isEmpty())
+        assertEquals("second pass served from the cache", 3, calls.get())
+    }
+
+    @Test
+    fun `probeStream on a stream without storage probes nothing`() = runBlocking {
+        val calls = AtomicInteger(0)
+        val ep = StorageEndpoints(fetcher = { emptyList() }, capabilityFetcher = { calls.incrementAndGet(); FORK })
+        assertTrue(ep.probeStream("s").isEmpty())
+        assertEquals(0, calls.get())
+    }
+
+    @Test
+    fun `clear forgets probed capabilities`() = runBlocking {
+        val ep = StorageEndpoints(fetcher = { emptyList() }, capabilityFetcher = { FORK })
+        ep.probeCapabilities("https://a.example.com")
+        ep.clear()
+        assertNull(ep.capabilitiesOf("https://a.example.com"))
+    }
 }
