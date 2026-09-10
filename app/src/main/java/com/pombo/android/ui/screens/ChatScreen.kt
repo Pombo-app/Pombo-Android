@@ -562,6 +562,22 @@ fun ChatScreen(vm: AppViewModel) {
             }
         }
 
+        // What is on screen came from the local cache; the storage node
+        // refused to serve more, and the reader should know why.
+        historyError?.takeIf { visible.isNotEmpty() }?.let { refusal ->
+            val (title, detail) = historyErrorText(refusal, isPreview)
+            Column(
+                Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 8.dp),
+                horizontalAlignment = Alignment.CenterHorizontally
+            ) {
+                Text(title, color = Color.White.copy(alpha = 0.40f), fontSize = 13.sp)
+                Text(
+                    detail, color = Color.White.copy(alpha = 0.25f), fontSize = 11.sp,
+                    textAlign = androidx.compose.ui.text.style.TextAlign.Center
+                )
+            }
+        }
+
         Box(Modifier.weight(1f).fillMaxWidth()) {
             // Web renderMessages: while any loading signal is still live the
             // area shows a centred spinner; only once everything is quiescent

@@ -146,7 +146,7 @@ const storageFetch = (function () {
     const capabilities = new Map();   // base → { at, features: Set }
     const probes = new Map();         // base → in-flight promise
     const storedAt = new Map();       // stream|partition|ts|seq → storedAt
-    const lastErrors = new Map();     // streamId → { status, signed, at }
+    const lastErrors = new Map();     // streamId|partition → { status, signed, at }
     const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
     function parse(url) {
@@ -271,9 +271,9 @@ const storageFetch = (function () {
                 if (metadata) await metadata;
                 continue;
             }
-            if (resp.ok) lastErrors.delete(p.streamId);
+            if (resp.ok) lastErrors.delete(p.streamId + '|' + p.partition);
             else {
-                lastErrors.set(p.streamId, { status: resp.status, signed: sign, at: Date.now() });
+                lastErrors.set(p.streamId + '|' + p.partition, { status: resp.status, signed: sign, at: Date.now() });
                 console.warn('storage read ' + p.resendType + ' ' + p.streamId.slice(-24) + ' P' + p.partition +
                     ': HTTP ' + resp.status + (sign ? ' (signed)' : ''));
             }
@@ -298,7 +298,7 @@ const storageFetch = (function () {
             if (at !== undefined) meta.storedAt = at;
             return meta;
         },
-        lastReadError(streamId) { return lastErrors.get(streamId) || null; }
+        lastReadError(streamId, partition) { return lastErrors.get(streamId + '|' + partition) || null; }
     };
 })();
 // ---- password-channel crypto for binary payloads ----
@@ -1217,7 +1217,7 @@ const api = {
         // PBKDF2 is the wall, not the storage node.
         return {
             messages: out, partial: partial, errors: api._lastDrainErrors,
-            readError: storageFetch.lastReadError(a.streamId),
+            readError: storageFetch.lastReadError(a.streamId, a.partition),
             drainMs: tDrain - t0, decryptMs: Date.now() - tDrain
         };
     },
@@ -1264,7 +1264,7 @@ const api = {
         // A cut-short drain cannot prove exhaustion — keep pagination alive.
         return {
             messages: all.slice(start), hasMore: fetched > count || partial, partial: partial,
-            readError: storageFetch.lastReadError(a.streamId)
+            readError: storageFetch.lastReadError(a.streamId, a.partition)
         };
     },
 
@@ -1302,7 +1302,7 @@ const api = {
         // Reaching epoch means there is nothing older left to scan.
         return {
             messages: out, hasMore: windowStart > 0 || partial, windowStart: windowStart, partial: partial,
-            readError: storageFetch.lastReadError(a.streamId)
+            readError: storageFetch.lastReadError(a.streamId, a.partition)
         };
     },
 
