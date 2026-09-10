@@ -106,7 +106,11 @@ data class UiMessage(
     /** Persistent File Sharing announce (wire type `storage_file_announce`). */
     val storageFile: com.pombo.android.core.StorageMedia.StorageFileMetadata? = null,
     /** Epoch the message was written under (gated channels), from its kid. */
-    val epoch: Int? = null
+    val epoch: Int? = null,
+    /** Envelope coordinates on the storage node: the signed envelope time and
+     *  its sequence number, what a purge addresses. Zero/null when unknown. */
+    val envelopeTs: Long = 0L,
+    val seq: Int? = null
 )
 
 /**
@@ -810,6 +814,14 @@ class ChannelManager(
             epochKeys.retryRequestIfWaiting(channel.messageStreamId, keysId)
         }
     }
+
+    /** How many of the open channel's storage providers announce `purge`: zero hides "Erase from storage". */
+    private val _purgeProviders = MutableStateFlow(0)
+    val purgeProviders: StateFlow<Int> = _purgeProviders.asStateFlow()
+
+    /** Messages this session erased from storage (still hidden; nothing left to unhide). */
+    private val _erasedIds = MutableStateFlow<Set<String>>(emptySet())
+    val erasedIds: StateFlow<Set<String>> = _erasedIds.asStateFlow()
 
     private val _hasMoreHistory = MutableStateFlow(false)
     val hasMoreHistory: StateFlow<Boolean> = _hasMoreHistory.asStateFlow()
@@ -2584,6 +2596,53 @@ class ChannelManager(
 
     suspend fun hideMessage(messageId: String, hide: Boolean) = admin.hideMessage(messageId, hide)
 
+    /**
+     * Erase a message from every storage provider that can. Hides it first
+     * when it is not hidden yet: the bytes leaving storage does nothing for a
+     * client that still holds the message. Web MessageContextMenuUI
+     * 'erase-message' + storagePurge.eraseMessage.
+     */
+    suspend fun eraseMessage(messageId: String): com.pombo.android.core.StoragePurge.Outcome {
+        val channel = _current.value ?: throw IllegalStateException("No channel open")
+        val msg = _messages.value.find { it.id == messageId } ?: throw IllegalStateException("Message not found")
+        val key = myPrivateKey() ?: throw IllegalStateException("No identity")
+        val target = resolvePurgeTarget(channel.messageStreamId, StreamConstants.P_MESSAGES, msg)
+        if (messageId !in _hiddenIds.value) admin.hideMessage(messageId, true)
+        val outcome = com.pombo.android.core.StoragePurge.purgeMessages(
+            storageEndpoints, channel.messageStreamId, StreamConstants.P_MESSAGES, listOf(target), key
+        )
+        if (outcome.erasedOn > 0) _erasedIds.value = _erasedIds.value + messageId
+        return outcome
+    }
+
+    /**
+     * The envelope coordinates a purge addresses. Messages read from storage
+     * or live carry them; anything else is looked up by its envelope time on a
+     * provider's metadata read (signed by the native reader when gated).
+     */
+    private suspend fun resolvePurgeTarget(streamId: String, partition: Int, msg: UiMessage): com.pombo.android.core.StoragePurge.Target {
+        val exact = msg.envelopeTs > 0L
+        val anchor = if (exact) msg.envelopeTs else msg.timestamp
+        if (anchor <= 0L) throw IllegalStateException("Message has no timestamp")
+        if (exact) msg.seq?.let { return com.pombo.android.core.StoragePurge.Target(anchor, it) }
+        // Without the envelope time (an own message added locally before its
+        // echo) the payload time is this clock a few ms before the envelope's,
+        // so the lookup takes a window and keeps the closest row.
+        val window = if (exact) 0L else com.pombo.android.core.StoragePurge.LOOKUP_WINDOW_MS
+        val urls = storageEndpoints.providersWith(streamId, "metadata").flatMap { it.urls }
+        if (urls.isEmpty()) throw IllegalStateException("No storage provider can identify this message")
+        var rows: List<com.pombo.android.core.StorageHttp.MetaRow>? = null
+        for (url in urls) {
+            rows = runCatching {
+                com.pombo.android.core.StorageHttp.directFetchRangeMeta(url, streamId, partition, anchor - window, anchor + window)
+            }.getOrNull()
+            if (rows != null) break
+        }
+        return com.pombo.android.core.StoragePurge.closestTarget(
+            rows ?: throw IllegalStateException("Could not look the message up on storage"), anchor
+        )
+    }
+
     suspend fun pinMessage(messageId: String, pin: Boolean) = admin.pinMessage(messageId, pin)
 
     suspend fun banMember(address: String, ban: Boolean = true) = admin.banMember(address, ban)
@@ -3771,7 +3830,9 @@ class ChannelManager(
             edited = data.optBoolean("_edited", false),
             // DMs are authenticated by the ECDH envelope itself: only the two
             // parties can produce one, so there is no per-message badge.
-            verified = true
+            verified = true,
+            envelopeTs = data.optLong("_timestamp", 0L),
+            seq = if (data.has("_seq")) data.optInt("_seq") else null
         )
     }
 
@@ -4414,6 +4475,18 @@ class ChannelManager(
             // Web preloadDeletePermission: fire-and-forget so the sheet and the
             // context menu have an answer before the user asks for one.
             refreshModerationPermission(channel, preview)
+            // Which providers can erase decides whether moderation offers it.
+            _purgeProviders.value = 0
+            _erasedIds.value = emptySet()
+            if (channel.type != "dm") scope.launch {
+                // The resolution is an SDK call through the bridge; right after
+                // a boot or an account switch the client is still connecting.
+                val n = runCatching {
+                    bridge.awaitConnected()
+                    storageEndpoints.providersWith(channel.messageStreamId, "purge").size
+                }.getOrDefault(0)
+                if (_current.value?.messageStreamId == channel.messageStreamId) _purgeProviders.value = n
+            }
             _messages.value = emptyList()
             _reactions.value = emptyMap()
             _pins.value = emptyList()
@@ -6097,6 +6170,7 @@ class ChannelManager(
             if (envTs > 0 && payloadTs > envTs + TIMESTAMP_TOLERANCE_MS) return
         }
         if (envTs > 0) data.put("_timestamp", envTs)
+        if (meta.has("sequenceNumber")) data.put("_seq", meta.optInt("sequenceNumber"))
         // Single gate for every write below — messages, images, reactions and
         // overrides all funnel through here, from both the resend and the live
         // subscription. Nothing reaches the open channel's state past this line
@@ -6326,6 +6400,8 @@ class ChannelManager(
             ensName = ensStore.cachedName(sender),
             ensAvatar = ensStore.cachedAvatar(sender),
             epoch = data.optInt("_epoch", -1).takeIf { it >= 0 },
+            envelopeTs = data.optLong("_timestamp", 0L),
+            seq = if (data.has("_seq")) data.optInt("_seq") else null,
             replyTo = data.optJSONObject("replyTo")?.let {
                 val rid = it.optString("id")
                 if (rid.isEmpty()) null else ReplyRef(

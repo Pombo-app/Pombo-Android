@@ -40,7 +40,7 @@ object StorageHttp {
     data class Row(val content: ByteArray?, val timestamp: Long, val publisherId: String?)
 
     /** Metadata-only row (no payload) from a `format=metadata` read. */
-    data class MetaRow(val timestamp: Long, val publisherId: String?)
+    data class MetaRow(val timestamp: Long, val publisherId: String?, val sequenceNumber: Int = 0)
 
     /** Raised on HTTP 4xx/5xx so callers can tell a 400 (no metadata format) apart. */
     class HttpStatusException(val code: Int) : Exception("HTTP $code")
@@ -109,7 +109,7 @@ object StorageHttp {
             val out = ArrayList<MetaRow>()
             conn.inputStream.bufferedReader(Charsets.UTF_8).use { reader ->
                 parseStorageArray(reader) { obj ->
-                    out.add(MetaRow(obj.optLong("timestamp"), obj.optStringOrNull("publisherId")))
+                    out.add(MetaRow(obj.optLong("timestamp"), obj.optStringOrNull("publisherId"), obj.optInt("sequenceNumber", 0)))
                 }
             }
             out
@@ -395,6 +395,30 @@ object StorageHttp {
             if (code == 404) return@withContext null
             if (code / 100 != 2) throw HttpStatusException(code)
             parseCapabilities(conn.inputStream.bufferedReader(Charsets.UTF_8).use { it.readText() })
+        } finally {
+            conn.disconnect()
+        }
+    }
+
+    /**
+     * JSON POST to a storage node (the purge endpoint). Returns the status and
+     * the response body, error bodies included; throws only when the host
+     * cannot be reached.
+     */
+    suspend fun postJson(url: String, body: String): Pair<Int, String> = withContext(Dispatchers.IO) {
+        val conn = (URL(url).openConnection() as HttpURLConnection).apply {
+            requestMethod = "POST"
+            connectTimeout = CONNECT_TIMEOUT_MS
+            readTimeout = 30_000
+            doOutput = true
+            setRequestProperty("Content-Type", "application/json")
+        }
+        try {
+            conn.outputStream.use { it.write(body.toByteArray(Charsets.UTF_8)) }
+            val code = conn.responseCode
+            val stream = if (code / 100 == 2) conn.inputStream else conn.errorStream
+            val text = stream?.bufferedReader(Charsets.UTF_8)?.use { it.readText() } ?: ""
+            code to text
         } finally {
             conn.disconnect()
         }

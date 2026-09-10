@@ -265,10 +265,15 @@ fun ChatScreen(vm: AppViewModel) {
         // grouping pass re-ran every frame, on the main thread, for the entire
         // conversation. That was a large part of why scrolling felt heavier
         // here than in the PWA.
-        val visible = remember(messages, hidden, banned, loadingInitial) {
+        // Whoever moderates keeps seeing what they hid, dimmed, so a hide can
+        // be undone and an erase decided on what is actually there.
+        val moderates = canModerate || moderatesGate
+        val purgeProviders by vm.purgeProviders.collectAsState()
+        val erasedIds by vm.erasedIds.collectAsState()
+        val visible = remember(messages, hidden, banned, loadingInitial, moderates) {
             if (loadingInitial) emptyList()
             else messages.filter { msg ->
-                if (msg.id in hidden) return@filter false
+                if (msg.id in hidden && !moderates) return@filter false
                 val lower = msg.sender.lowercase()
                 if (lower !in banned) return@filter true
                 !com.pombo.android.core.ModComposition.banHides(banned[lower], msg.epoch)
@@ -717,6 +722,9 @@ fun ChatScreen(vm: AppViewModel) {
                         // (group, then its separator above).
                         itemIndex = (groups.size - 1 - gi) * 2,
                         hidden = hidden,
+                        erased = erasedIds,
+                        canErase = purgeProviders > 0,
+                        onErase = { id -> vm.eraseMessage(id) },
                         pins = pins,
                         activeId = activeId,
                         onActivate = { id -> activeId = if (activeId == id) null else id },

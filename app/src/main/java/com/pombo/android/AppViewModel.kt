@@ -1302,6 +1302,28 @@ class AppViewModel(app: Application) : AndroidViewModel(app), PomboBridge.Listen
         if (hide) "Message hidden" else "Message shown"
     ) { manager.hideMessage(id, hide) }
 
+    val purgeProviders get() = manager.purgeProviders
+    val erasedIds get() = manager.erasedIds
+
+    /** Hide, then remove the bytes from every provider that can; the toast says on how many. */
+    fun eraseMessage(id: String) = viewModelScope.launch {
+        try {
+            val o = manager.eraseMessage(id)
+            val plural = if (o.providers == 1) "" else "s"
+            val extra = buildString {
+                if (o.forbiddenOn > 0) append(" (${o.forbiddenOn} refused)")
+                if (o.unreachable > 0) append(" (${o.unreachable} unreachable)")
+            }
+            toast(
+                "Erased from storage on ${o.erasedOn} of ${o.providers} provider$plural$extra",
+                if (o.erasedOn == o.providers) com.pombo.android.ui.ToastKind.SUCCESS else com.pombo.android.ui.ToastKind.ERROR,
+                5000L
+            )
+        } catch (e: Exception) {
+            toast(e.message ?: "Failed to erase message", com.pombo.android.ui.ToastKind.ERROR, 5000L)
+        }
+    }
+
     fun pinMessage(id: String, pin: Boolean) = moderationAction(
         if (pin) "Message pinned" else "Message unpinned"
     ) { manager.pinMessage(id, pin) }
