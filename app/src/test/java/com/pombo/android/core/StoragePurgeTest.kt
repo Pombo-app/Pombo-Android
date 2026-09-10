@@ -148,6 +148,112 @@ class StoragePurgeTest {
         assertTrue(StoragePurge.parseResults("{}").isEmpty())
     }
 
+    private fun chunkBytes(transferId: String): ByteArray {
+        val meta = """{"type":"binary_file_chunked","version":2,"transferId":"$transferId"}""".toByteArray(Charsets.UTF_8)
+        val n = meta.size
+        return byteArrayOf((n shr 24).toByte(), (n shr 16).toByte(), (n shr 8).toByte(), n.toByte()) + meta +
+            byteArrayOf(0, 0, 0, 3, 0, 0, 0, 0) + byteArrayOf(0xab.toByte(), 0xcd.toByte())
+    }
+
+    @Test
+    fun `chunkTransferId reads the transfer off a chunk header and rejects anything else`() {
+        assertEquals("t1", StoragePurge.chunkTransferId(chunkBytes("t1")))
+        assertNull(StoragePurge.chunkTransferId(null))
+        assertNull(StoragePurge.chunkTransferId(byteArrayOf(0, 0)))
+        assertNull(StoragePurge.chunkTransferId(chunkBytes("t1").copyOf(10)))
+        val plain = """{"x":1}""".toByteArray()
+        assertNull(StoragePurge.chunkTransferId(byteArrayOf(0, 0, 0, plain.size.toByte()) + plain + byteArrayOf(0, 0, 0, 0, 0, 0, 0, 0)))
+    }
+
+    @Test
+    fun `purgeGroups sends one request per partition and per batch of 100`() = runBlocking {
+        val endpoints = StorageEndpoints(
+            fetcher = { listOf(StorageEndpoints.Node("0xa", listOf("https://a.example"))) },
+            capabilityFetcher = { setOf("purge") }
+        )
+        val targets = (0 until 150).map { StoragePurge.Target(1000L + it, 0) }
+        val calls = ArrayList<Pair<String, Int>>()
+        val out = StoragePurge.purgeGroups(
+            endpoints, STREAM, listOf(StoragePurge.Group(0, targets), StoragePurge.Group(3, targets.take(2))), KEY
+        ) { url, body ->
+            val sent = JSONObject(body).getJSONArray("targets")
+            calls.add(url to sent.length())
+            val results = org.json.JSONArray()
+            for (i in 0 until sent.length()) results.put(sent.getJSONObject(i).put("result", "deleted"))
+            200 to JSONObject().put("results", results).toString()
+        }
+        assertEquals(listOf(
+            StoragePurge.purgeUrl("https://a.example", STREAM, 0) to 100,
+            StoragePurge.purgeUrl("https://a.example", STREAM, 0) to 50,
+            StoragePurge.purgeUrl("https://a.example", STREAM, 3) to 2
+        ), calls)
+        assertEquals(1, out.providers)
+        assertEquals(1, out.erasedOn)
+        assertEquals(152, out.targets)
+
+        var attempts = 0
+        val dead = StoragePurge.purgeGroups(
+            endpoints, STREAM, listOf(StoragePurge.Group(0, targets.take(1)), StoragePurge.Group(3, targets.take(1))), KEY
+        ) { _, _ -> attempts++; throw java.io.IOException("down") }
+        assertEquals(1, attempts)
+        assertEquals(0, dead.erasedOn)
+        assertEquals(1, dead.unreachable)
+    }
+
+    @Test
+    fun `fileChunkGroups keeps only the rows of the announced transfer on every chunk partition`() = runBlocking {
+        val endpoints = StorageEndpoints(
+            fetcher = { listOf(StorageEndpoints.Node("0xa", listOf("https://a.example"))) },
+            capabilityFetcher = { setOf("purge") }
+        )
+        val meta = StorageMedia.StorageFileMetadata(
+            transferId = "t1", fileName = "f", fileType = "application/octet-stream", originalSize = 10,
+            compressedSize = null, compression = "none", totalChunks = 3, chunkDataSize = 2,
+            chunkPartitions = 9, firstChunkPartition = 3, firstChunkTs = 1_000_000L, lastChunkTs = 1_010_000L,
+            storedChunks = 3, encSalt = null
+        )
+        val windows = ArrayList<Triple<Int, Long, Long>>()
+        val groups = StoragePurge.fileChunkGroups(endpoints, STREAM, meta) { _, partition, from, to, onRow ->
+            windows.add(Triple(partition, from, to))
+            when (partition) {
+                3 -> {
+                    onRow(StorageHttp.Row(chunkBytes("t1"), 1000L, "0x1", 0))
+                    onRow(StorageHttp.Row(chunkBytes("other"), 1001L, "0x1", 0))
+                    onRow(StorageHttp.Row(null, 1002L, "0x1", 1))
+                }
+                5 -> onRow(StorageHttp.Row(chunkBytes("t1"), 1005L, "0x1", 2))
+                else -> Unit
+            }
+        }
+        assertEquals(
+            listOf(
+                StoragePurge.Group(3, listOf(StoragePurge.Target(1000L, 0))),
+                StoragePurge.Group(5, listOf(StoragePurge.Target(1005L, 2)))
+            ),
+            groups
+        )
+        assertEquals((3..11).map { Triple(it, 940_000L, 1_070_000L) }, windows)
+
+        // Sealed rows open with the channel's opener; one that does not open is not this file's.
+        val sealed = StoragePurge.fileChunkGroups(
+            endpoints, STREAM, meta,
+            open = { bytes, _ -> check(bytes[0] == 0xff.toByte()) { "not sealed by us" }; bytes.copyOfRange(1, bytes.size) }
+        ) { _, partition, _, _, onRow ->
+            if (partition == 3) {
+                onRow(StorageHttp.Row(byteArrayOf(0xff.toByte()) + chunkBytes("t1"), 1000L, "0x1", 0))
+                onRow(StorageHttp.Row(byteArrayOf(0x00) + chunkBytes("t1"), 1001L, "0x1", 0))
+                onRow(StorageHttp.Row(byteArrayOf(0xff.toByte()) + chunkBytes("t2"), 1002L, "0x1", 0))
+            }
+        }
+        assertEquals(listOf(StoragePurge.Group(3, listOf(StoragePurge.Target(1000L, 0)))), sealed)
+
+        val blind = meta.copy(firstChunkTs = null)
+        assertThrows(IllegalStateException::class.java) {
+            runBlocking { StoragePurge.fileChunkGroups(endpoints, STREAM, blind) { _, _, _, _, _ -> } }
+        }
+        Unit
+    }
+
     @Test
     fun `closestTarget keeps the row nearest the anchor and refuses to guess between two`() {
         val row = { ts: Long, seq: Int -> StorageHttp.MetaRow(ts, null, seq) }

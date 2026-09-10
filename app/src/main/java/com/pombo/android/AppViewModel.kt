@@ -1352,14 +1352,17 @@ class AppViewModel(app: Application) : AndroidViewModel(app), PomboBridge.Listen
      * alone is free and publishes straight away.
      */
     fun banMemberLevels(
-        address: String, client: Boolean, protocol: Boolean, onDone: () -> Unit = {}
+        address: String, client: Boolean, protocol: Boolean, purge: Boolean = false, onDone: () -> Unit = {}
     ) = viewModelScope.launch {
         if (!client && !protocol) return@launch
         if (protocol) {
             chainAction("Ban member", "Cuts their access on the gate and rotates the channel key (1 transaction).") {
+                var banned = false
                 runWithToast("Banning…", "Member banned", "Failed to ban") {
                     manager.banMemberLevels(address, client, protocol = true)
+                    banned = true
                 }
+                if (banned && purge && client) eraseAuthorToast(address)
             }
         } else {
             try {
@@ -1367,9 +1370,33 @@ class AppViewModel(app: Application) : AndroidViewModel(app), PomboBridge.Listen
                 toast("User banned", com.pombo.android.ui.ToastKind.SUCCESS)
             } catch (e: Exception) {
                 toast(e.message ?: "Failed to ban", com.pombo.android.ui.ToastKind.ERROR, 5000L)
+                onDone()
+                return@launch
             }
+            if (purge) eraseAuthorToast(address)
         }
         onDone()
+    }
+
+    /** The storage side of a ban: erase what the author wrote, and say how much left where. */
+    private suspend fun eraseAuthorToast(address: String) {
+        try {
+            val r = manager.eraseAuthorMessages(address)
+            val o = r.outcome
+            val extra = buildString {
+                if (r.skipped > 0) append(" (${r.skipped} not found)")
+                if (o.forbiddenOn > 0) append(" (${o.forbiddenOn} refused)")
+                if (o.unreachable > 0) append(" (${o.unreachable} unreachable)")
+            }
+            toast(
+                "Erased ${r.messages} message${if (r.messages == 1) "" else "s"} from storage on " +
+                    "${o.erasedOn} of ${o.providers} provider${if (o.providers == 1) "" else "s"}$extra",
+                if (o.erasedOn == o.providers) com.pombo.android.ui.ToastKind.SUCCESS else com.pombo.android.ui.ToastKind.ERROR,
+                6000L
+            )
+        } catch (e: Exception) {
+            toast("Banned, but not erased from storage: ${e.message}", com.pombo.android.ui.ToastKind.ERROR, 6000L)
+        }
     }
 
     /**

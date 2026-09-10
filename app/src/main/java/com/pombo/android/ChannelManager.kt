@@ -2609,13 +2609,52 @@ class ChannelManager(
         val channel = _current.value ?: throw IllegalStateException("No channel open")
         val msg = _messages.value.find { it.id == messageId } ?: throw IllegalStateException("Message not found")
         val key = myPrivateKey() ?: throw IllegalStateException("No identity")
-        val target = resolvePurgeTarget(channel.messageStreamId, StreamConstants.P_MESSAGES, msg)
+        val groups = messageGroups(channel, msg)
         if (messageId !in _hiddenIds.value) admin.hideMessage(messageId, true)
-        val outcome = com.pombo.android.core.StoragePurge.purgeMessages(
-            storageEndpoints, channel.messageStreamId, StreamConstants.P_MESSAGES, listOf(target), key
-        )
+        val outcome = com.pombo.android.core.StoragePurge.purgeGroups(storageEndpoints, channel.messageStreamId, groups, key)
         if (outcome.erasedOn > 0) _erasedIds.value = _erasedIds.value + messageId
         return outcome
+    }
+
+    /** The storage rows a message occupies: its own, plus the chunks of a storage-shared file. */
+    private suspend fun messageGroups(channel: Channel, msg: UiMessage): List<com.pombo.android.core.StoragePurge.Group> {
+        val streamId = channel.messageStreamId
+        val own = com.pombo.android.core.StoragePurge.Group(
+            StreamConstants.P_MESSAGES, listOf(resolvePurgeTarget(streamId, StreamConstants.P_MESSAGES, msg))
+        )
+        val chunks = msg.storageFile?.let {
+            com.pombo.android.core.StoragePurge.fileChunkGroups(storageEndpoints, streamId, it, open = files.chunkOpener(channel, it))
+        }
+        return listOf(own) + (chunks ?: emptyList())
+    }
+
+    data class AuthorPurge(val outcome: com.pombo.android.core.StoragePurge.Outcome, val messages: Int, val skipped: Int)
+
+    /**
+     * Erase everything one author wrote that this client holds, the storage
+     * side of a ban: their messages and the chunks of their files. A message
+     * whose rows cannot be located is skipped and counted, never guessed at.
+     */
+    suspend fun eraseAuthorMessages(address: String): AuthorPurge {
+        val channel = _current.value ?: throw IllegalStateException("No channel open")
+        val key = myPrivateKey() ?: throw IllegalStateException("No identity")
+        val theirs = _messages.value.filter { it.sender.equals(address, ignoreCase = true) }
+        val byPartition = LinkedHashMap<Int, MutableList<com.pombo.android.core.StoragePurge.Target>>()
+        var skipped = 0
+        for (msg in theirs) {
+            try {
+                for (g in messageGroups(channel, msg)) {
+                    byPartition.getOrPut(g.partition) { ArrayList() }.addAll(g.targets)
+                }
+            } catch (e: Exception) {
+                skipped++
+                Log.w(TAG, "Erase of ${msg.id} skipped: ${e.message}")
+            }
+        }
+        val groups = byPartition.map { (p, t) -> com.pombo.android.core.StoragePurge.Group(p, t) }
+        val outcome = com.pombo.android.core.StoragePurge.purgeGroups(storageEndpoints, channel.messageStreamId, groups, key)
+        if (outcome.erasedOn > 0) _erasedIds.value = _erasedIds.value + theirs.map { it.id }
+        return AuthorPurge(outcome, theirs.size - skipped, skipped)
     }
 
     /**
@@ -5426,12 +5465,13 @@ class ChannelManager(
         if (providers == 0 || channel.type == "dm" || channel.wireIdentity == "sealed") return null
         val key = ownPurgeKey(channel, msg) ?: return null
         return try {
-            val target = resolvePurgeTarget(channel.messageStreamId, StreamConstants.P_MESSAGES, msg)
-            com.pombo.android.core.StoragePurge.purgeMessages(
-                storageEndpoints, channel.messageStreamId, StreamConstants.P_MESSAGES, listOf(target), key
-            )
+            val groups = messageGroups(channel, msg)
+            com.pombo.android.core.StoragePurge.purgeGroups(storageEndpoints, channel.messageStreamId, groups, key)
         } catch (e: Exception) {
-            com.pombo.android.core.StoragePurge.Outcome(providers, 0, 0, 0, emptyList(), e.message ?: e.javaClass.simpleName)
+            com.pombo.android.core.StoragePurge.Outcome(
+                providers = providers, erasedOn = 0, forbiddenOn = 0, unreachable = 0, outcomes = emptyList(),
+                error = e.message ?: e.javaClass.simpleName
+            )
         }
     }
 

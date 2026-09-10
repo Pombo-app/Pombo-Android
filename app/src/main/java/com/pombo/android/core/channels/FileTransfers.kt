@@ -522,6 +522,24 @@ internal class FileTransfers(private val manager: ChannelManager) {
         return job
     }
 
+    /** Opens this channel's stored chunk rows the way a download does. */
+    fun chunkOpener(channel: Channel, meta: com.pombo.android.core.StorageMedia.StorageFileMetadata): (ByteArray, Long) -> ByteArray {
+        val isDm = channel.type == "dm"
+        val epochOpener: ((ByteArray, Long) -> ByteArray?)? = if (!isDm && isEpochChannel(channel)) {
+            val gated = channel.type == "gated"
+            val opener: (ByteArray, Long) -> ByteArray? = { bytes, ts ->
+                kotlinx.coroutines.runBlocking {
+                    epochKeys.tryOpenBinary(
+                        channel.messageStreamId, channel.keysStreamId, bytes,
+                        gated = gated, live = false, timestamp = ts
+                    )
+                }
+            }
+            opener
+        } else null
+        return storageMedia.chunkOpener(meta, channel.password, isDm, epochOpener)
+    }
+
     /**
      * Starts downloading the storage-shared file announced by [messageId] in the
      * open channel. The engine handles resume and the completed-file handoff; the

@@ -756,7 +756,8 @@ fun ChatScreen(vm: AppViewModel) {
                         onDelete = { id -> vm.deleteMessage(id) },
                         onPin = { id, pin -> vm.pinMessage(id, pin) },
                         onHide = { id, hide -> vm.hideMessage(id, hide) },
-                        onBan = { addr, client, protocol -> vm.banMemberLevels(addr, client, protocol) },
+                        onBan = { addr, client, protocol, purge -> vm.banMemberLevels(addr, client, protocol, purge) },
+                        purgeProviders = purgeProviders,
                         banGated = ch.type == "gated",
                         canClientBan = myAddr?.lowercase() ==
                             (ch.createdBy ?: ch.messageStreamId.substringBefore('/')).lowercase() ||

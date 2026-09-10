@@ -25,8 +25,12 @@ object StoragePurge {
     const val MAX_TARGETS = 100
     const val LOOKUP_WINDOW_MS = 10_000L
     const val LOOKUP_TIE_MS = 1_000L
+    const val CHUNK_WINDOW_PAD_MS = 60_000L
 
     data class Target(val timestamp: Long, val sequenceNumber: Int)
+
+    /** Rows of one partition addressed together. */
+    data class Group(val partition: Int, val targets: List<Target>)
 
     data class ProviderOutcome(
         val provider: String,
@@ -45,6 +49,8 @@ object StoragePurge {
         val forbiddenOn: Int,
         val unreachable: Int,
         val outcomes: List<ProviderOutcome>,
+        /** Rows addressed, over every partition. */
+        val targets: Int = 0,
         /** Why no request went out at all (the target could not be resolved). */
         val error: String? = null
     )
@@ -128,24 +134,102 @@ object StoragePurge {
         return Target(candidates[0].timestamp, candidates[0].sequenceNumber)
     }
 
-    /** Fan the purge out to every provider of the stream that announces it. */
-    suspend fun purgeMessages(
-        endpoints: StorageEndpoints, streamId: String, partition: Int, targets: List<Target>,
+    /**
+     * Fan the purge out to every provider of the stream that announces it:
+     * one request per partition and per batch of [MAX_TARGETS] targets. A
+     * provider counts as erased when every target is gone (deleted or never
+     * held); one unreachable batch stops the rest for that provider.
+     */
+    suspend fun purgeGroups(
+        endpoints: StorageEndpoints, streamId: String, groups: List<Group>,
         privateKeyHex: String,
         post: suspend (url: String, body: String) -> Pair<Int, String> = StorageHttp::postJson
     ): Outcome {
         val providers = endpoints.providersWith(streamId, "purge")
-        val outcomes = providers.map { purgeOnProvider(it, streamId, partition, targets, privateKeyHex, post) }
-        val gone = { o: ProviderOutcome ->
-            o.status / 100 == 2 && targets.all { t -> o.results[t] == "deleted" || o.results[t] == "not_found" }
+        val batches = groups.flatMap { g -> g.targets.chunked(MAX_TARGETS).map { Group(g.partition, it) } }
+        val all = providers.map { p ->
+            val outs = ArrayList<Pair<Group, ProviderOutcome>>()
+            for (b in batches) {
+                val o = purgeOnProvider(p, streamId, b.partition, b.targets, privateKeyHex, post)
+                outs.add(b to o)
+                if (o.status == 0) break
+            }
+            outs
         }
-        val forbidden = { o: ProviderOutcome -> o.status / 100 == 2 && o.results.values.any { it == "forbidden" } }
+        val gone = { (b, o): Pair<Group, ProviderOutcome> ->
+            o.status / 100 == 2 && b.targets.all { t -> o.results[t] == "deleted" || o.results[t] == "not_found" }
+        }
         return Outcome(
             providers = providers.size,
-            erasedOn = outcomes.count(gone),
-            forbiddenOn = outcomes.count(forbidden),
-            unreachable = outcomes.count { it.status == 0 },
-            outcomes = outcomes
+            erasedOn = all.count { outs -> outs.size == batches.size && outs.all(gone) },
+            forbiddenOn = all.count { outs -> outs.any { (_, o) -> o.status / 100 == 2 && o.results.values.any { it == "forbidden" } } },
+            unreachable = all.count { outs -> outs.any { (_, o) -> o.status == 0 } },
+            outcomes = all.flatten().map { it.second },
+            targets = batches.sumOf { it.targets.size }
         )
+    }
+
+    /** One partition, one target list. */
+    suspend fun purgeMessages(
+        endpoints: StorageEndpoints, streamId: String, partition: Int, targets: List<Target>,
+        privateKeyHex: String,
+        post: suspend (url: String, body: String) -> Pair<Int, String> = StorageHttp::postJson
+    ): Outcome = purgeGroups(endpoints, streamId, listOf(Group(partition, targets)), privateKeyHex, post)
+
+    /**
+     * The transfer a stored chunk belongs to, read off its header
+     * (`[4B metaLen][meta JSON]…`, the StorageMedia chunk payload) without
+     * touching the data behind it. Null for anything that is not a v2 chunk.
+     */
+    fun chunkTransferId(bytes: ByteArray?): String? {
+        if (bytes == null || bytes.size < 8) return null
+        val metaLen = ((bytes[0].toInt() and 0xff) shl 24) or ((bytes[1].toInt() and 0xff) shl 16) or
+            ((bytes[2].toInt() and 0xff) shl 8) or (bytes[3].toInt() and 0xff)
+        if (metaLen <= 0 || bytes.size < 4 + metaLen) return null
+        return runCatching {
+            val meta = JSONObject(String(bytes, 4, metaLen, Charsets.UTF_8))
+            if (meta.optString("type") == "binary_file_chunked" && meta.optInt("version") == 2)
+                meta.optString("transferId").ifEmpty { null } else null
+        }.getOrNull()
+    }
+
+    /**
+     * The chunk rows of a storage-shared file: every row on the announce's
+     * chunk partitions, over the window it declares, whose header names its
+     * transfer. Exact by content, at the price of reading the file once more.
+     * Rows are sealed the way the channel seals media (epoch key, password
+     * key), so [open] is the same opener a download uses; a row that does not
+     * open is not this file's.
+     * @param read `(url, partition, from, to, onRow)`; throws when the read fails.
+     */
+    suspend fun fileChunkGroups(
+        endpoints: StorageEndpoints, streamId: String, meta: StorageMedia.StorageFileMetadata,
+        open: (ByteArray, Long) -> ByteArray = { bytes, _ -> bytes },
+        read: suspend (url: String, partition: Int, from: Long, to: Long, onRow: (StorageHttp.Row) -> Unit) -> Unit =
+            { url, partition, from, to, onRow -> StorageHttp.directFetchRange(url, streamId, partition, from, to, onRow) }
+    ): List<Group> {
+        val firstTs = meta.firstChunkTs
+        val lastTs = meta.lastChunkTs
+        check(meta.transferId.isNotEmpty() && firstTs != null && lastTs != null) { "The file announce does not say where its chunks are" }
+        val urls = endpoints.providersWith(streamId, "purge").flatMap { it.urls }
+        check(urls.isNotEmpty()) { "No storage provider can identify the chunks" }
+        val groups = ArrayList<Group>()
+        for (k in 0 until meta.chunkPartitions) {
+            val partition = meta.firstChunkPartition + k
+            var targets: List<Target>? = null
+            for (url in urls) {
+                val found = ArrayList<Target>()
+                val ok = runCatching {
+                    read(url, partition, firstTs - CHUNK_WINDOW_PAD_MS, lastTs + CHUNK_WINDOW_PAD_MS) { r ->
+                        val plain = r.content?.let { sealed -> runCatching { open(sealed, r.timestamp) }.getOrNull() }
+                        if (chunkTransferId(plain) == meta.transferId) found.add(Target(r.timestamp, r.sequenceNumber))
+                    }
+                }.isSuccess
+                if (ok) { targets = found; break }
+            }
+            val rows = targets ?: throw IllegalStateException("Could not read the chunks on partition $partition")
+            if (rows.isNotEmpty()) groups.add(Group(partition, rows))
+        }
+        return groups
     }
 }

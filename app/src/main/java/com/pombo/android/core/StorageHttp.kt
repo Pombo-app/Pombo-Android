@@ -37,7 +37,7 @@ object StorageHttp {
     private const val CONNECT_TIMEOUT_MS = 20_000
 
     /** A decoded storage row. [content] is the hex-decoded bytes for a binary row (contentType 1), else null. */
-    data class Row(val content: ByteArray?, val timestamp: Long, val publisherId: String?)
+    data class Row(val content: ByteArray?, val timestamp: Long, val publisherId: String?, val sequenceNumber: Int = 0)
 
     /** Metadata-only row (no payload) from a `format=metadata` read. */
     data class MetaRow(val timestamp: Long, val publisherId: String?, val sequenceNumber: Int = 0)
@@ -336,6 +336,7 @@ object StorageHttp {
             if (f.cur != '{'.code) throw IllegalStateException("unexpected endpoint response")
             f.advance(); f.skipWs() // past '{'
             var ts = 0L
+            var seq = 0
             var pub: String? = null
             var content: ByteArray? = null
             var contentType = 1
@@ -349,6 +350,7 @@ object StorageHttp {
                 when {
                     keyIs(key, kl, "content") -> if (f.cur == '"'.code) content = readHexValue(f) else skipValue(f)
                     keyIs(key, kl, "timestamp") -> ts = readLongValue(f)
+                    keyIs(key, kl, "sequenceNumber") -> seq = readLongValue(f).toInt()
                     keyIs(key, kl, "contentType") -> contentType = readLongValue(f).toInt()
                     keyIs(key, kl, "publisherId") -> if (f.cur == '"'.code) pub = readStringValue(f) else skipValue(f)
                     else -> skipValue(f)
@@ -357,7 +359,7 @@ object StorageHttp {
             }
             if (f.cur == '}'.code) f.advance()
             f.skipWs()
-            onRow(Row(if (contentType == 1) content else null, ts, pub))
+            onRow(Row(if (contentType == 1) content else null, ts, pub, seq))
             n++
         }
         return n

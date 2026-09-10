@@ -933,6 +933,26 @@ class StorageMedia(
     // ==================== download ====================
 
     /**
+     * How a stored chunk row opens on a channel: DM chunks arrive already
+     * ECDH-decrypted from the bridge (identity here); epoch channels use the
+     * caller's kid-resolving opener; password channels the per-file key (one
+     * PBKDF2); public channels read as is.
+     */
+    fun chunkOpener(
+        meta: StorageFileMetadata, password: String?, isDm: Boolean,
+        epochOpener: ((ByteArray, Long) -> ByteArray?)?
+    ): (ByteArray, Long) -> ByteArray = when {
+        !isDm && epochOpener != null ->
+            ({ c, ts -> epochOpener(c, ts) ?: throw IllegalStateException("epoch chunk did not open") })
+        !isDm && !password.isNullOrEmpty() && !meta.encSalt.isNullOrEmpty() -> {
+            val salt = Base64.decode(meta.encSalt, Base64.NO_WRAP)
+            val key = PomboCrypto.deriveKeyWithSalt(password, salt)
+            ({ c, _ -> PomboCrypto.decryptBinaryWithKey(c, key) })
+        }
+        else -> ({ c, _ -> c })
+    }
+
+    /**
      * Download a storage-shared file described by a [StorageFileMetadata] (from a
      * `storage_file_announce`). Reads the chunk partitions over direct HTTP,
      * decrypts (native, one key per file), stages into a sparse file, and inflates
@@ -983,19 +1003,7 @@ class StorageMedia(
             Log.i(TAG, "Storage download endpoints (${bases.size}): ${bases.joinToString()}")
         }
 
-        // Opener: DM chunks arrive already ECDH-decrypted from the bridge (identity
-        // here); epoch channels -> the caller's kid-resolving opener; password
-        // channels -> per-file key (one PBKDF2); public -> identity.
-        val opener: (ByteArray, Long) -> ByteArray = when {
-            !isDm && epochOpener != null ->
-                ({ c, ts -> epochOpener(c, ts) ?: throw IllegalStateException("epoch chunk did not open") })
-            !isDm && !password.isNullOrEmpty() && !meta.encSalt.isNullOrEmpty() -> {
-                val salt = Base64.decode(meta.encSalt, Base64.NO_WRAP)
-                val key = PomboCrypto.deriveKeyWithSalt(password, salt)
-                ({ c, _ -> PomboCrypto.decryptBinaryWithKey(c, key) })
-            }
-            else -> ({ c, _ -> c })
-        }
+        val opener = chunkOpener(meta, password, isDm, epochOpener)
 
         val isCompressed = meta.compression != "none" && meta.compression.isNotEmpty()
         val staging = withContext(Dispatchers.IO) {

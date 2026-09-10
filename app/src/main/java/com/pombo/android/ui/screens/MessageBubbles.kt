@@ -383,8 +383,10 @@ internal fun MessageGroup(
     onDelete: (String) -> Unit,
     onPin: (String, Boolean) -> Unit,
     onHide: (String, Boolean) -> Unit,
-    /** (address, client enforcement, protocol enforcement) */
-    onBan: (String, Boolean, Boolean) -> Unit,
+    /** (address, client enforcement, protocol enforcement, erase from storage) */
+    onBan: (String, Boolean, Boolean, Boolean) -> Unit,
+    /** Storage providers of the channel that announce `purge`, for the ban dialog. */
+    purgeProviders: Int = 0,
     /** Gated channel: the protocol level has a gate to ban on. */
     banGated: Boolean = false,
     /** Only the creator may publish the client-level ban. */
@@ -548,7 +550,8 @@ internal fun MessageGroup(
                     isErased = msg.id in erased,
                     canErase = canErase,
                     onErase = { onErase(msg.id) },
-                    onBan = { client, protocol -> onBan(msg.sender, client, protocol) },
+                    onBan = { client, protocol, purge -> onBan(msg.sender, client, protocol, purge) },
+                    purgeProviders = purgeProviders,
                     banGated = banGated,
                     canClientBan = canClientBan,
                     canProtocolBan = canProtocolBan,
@@ -603,7 +606,8 @@ private fun MessageBubble(
     /** Some storage provider of this channel announces `purge`. */
     canErase: Boolean = false,
     onErase: () -> Unit = {},
-    onBan: (Boolean, Boolean) -> Unit = { _, _ -> },
+    onBan: (Boolean, Boolean, Boolean) -> Unit = { _, _, _ -> },
+    purgeProviders: Int = 0,
     banGated: Boolean = false,
     canClientBan: Boolean = false,
     canProtocolBan: Boolean = banGated,
@@ -1082,8 +1086,9 @@ private fun MessageBubble(
             gated = banGated,
             canClientBan = canClientBan,
             canProtocolBan = canProtocolBan,
+            purgeProviders = purgeProviders,
             onDismiss = { confirmBan = false },
-            onConfirm = { client, protocol -> confirmBan = false; onBan(client, protocol) }
+            onConfirm = { client, protocol, purge -> confirmBan = false; onBan(client, protocol, purge) }
         )
     }
 
