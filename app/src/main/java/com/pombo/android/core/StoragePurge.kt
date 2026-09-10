@@ -44,7 +44,9 @@ object StoragePurge {
         /** Providers that refused at least one target. */
         val forbiddenOn: Int,
         val unreachable: Int,
-        val outcomes: List<ProviderOutcome>
+        val outcomes: List<ProviderOutcome>,
+        /** Why no request went out at all (the target could not be resolved). */
+        val error: String? = null
     )
 
     /** The exact string the client signs. */

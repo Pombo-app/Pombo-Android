@@ -1308,20 +1308,27 @@ class AppViewModel(app: Application) : AndroidViewModel(app), PomboBridge.Listen
     /** Hide, then remove the bytes from every provider that can; the toast says on how many. */
     fun eraseMessage(id: String) = viewModelScope.launch {
         try {
-            val o = manager.eraseMessage(id)
-            val plural = if (o.providers == 1) "" else "s"
-            val extra = buildString {
-                if (o.forbiddenOn > 0) append(" (${o.forbiddenOn} refused)")
-                if (o.unreachable > 0) append(" (${o.unreachable} unreachable)")
-            }
-            toast(
-                "Erased from storage on ${o.erasedOn} of ${o.providers} provider$plural$extra",
-                if (o.erasedOn == o.providers) com.pombo.android.ui.ToastKind.SUCCESS else com.pombo.android.ui.ToastKind.ERROR,
-                5000L
-            )
+            purgeToast(manager.eraseMessage(id))
         } catch (e: Exception) {
             toast(e.message ?: "Failed to erase message", com.pombo.android.ui.ToastKind.ERROR, 5000L)
         }
+    }
+
+    private fun purgeToast(o: com.pombo.android.core.StoragePurge.Outcome) {
+        if (o.error != null) {
+            toast("Not erased from storage: ${o.error}", com.pombo.android.ui.ToastKind.ERROR, 5000L)
+            return
+        }
+        val plural = if (o.providers == 1) "" else "s"
+        val extra = buildString {
+            if (o.forbiddenOn > 0) append(" (${o.forbiddenOn} refused)")
+            if (o.unreachable > 0) append(" (${o.unreachable} unreachable)")
+        }
+        toast(
+            "Erased from storage on ${o.erasedOn} of ${o.providers} provider$plural$extra",
+            if (o.erasedOn == o.providers) com.pombo.android.ui.ToastKind.SUCCESS else com.pombo.android.ui.ToastKind.ERROR,
+            5000L
+        )
     }
 
     fun pinMessage(id: String, pin: Boolean) = moderationAction(
@@ -3394,7 +3401,11 @@ class AppViewModel(app: Application) : AndroidViewModel(app), PomboBridge.Listen
     }
 
     fun deleteMessage(id: String) = viewModelScope.launch {
-        try { manager.deleteMessage(id) } catch (e: Exception) { _lastError.value = e.message }
+        try {
+            manager.deleteMessage(id)?.let { purgeToast(it) }
+        } catch (e: Exception) {
+            _lastError.value = e.message
+        }
     }
 
     fun notifyTyping() = manager.sendTyping()

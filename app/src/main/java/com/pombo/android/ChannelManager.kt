@@ -110,7 +110,10 @@ data class UiMessage(
     /** Envelope coordinates on the storage node: the signed envelope time and
      *  its sequence number, what a purge addresses. Zero/null when unknown. */
     val envelopeTs: Long = 0L,
-    val seq: Int? = null
+    val seq: Int? = null,
+    /** Who signed the envelope: the session pseudonym on public/password, the
+     *  account on gated. Null on a message added locally. */
+    val publisherId: String? = null
 )
 
 /**
@@ -3832,7 +3835,8 @@ class ChannelManager(
             // parties can produce one, so there is no per-message badge.
             verified = true,
             envelopeTs = data.optLong("_timestamp", 0L),
-            seq = if (data.has("_seq")) data.optInt("_seq") else null
+            seq = if (data.has("_seq")) data.optInt("_seq") else null,
+            publisherId = data.optStringOrNull("_publisherId")
         )
     }
 
@@ -5386,9 +5390,10 @@ class ChannelManager(
         }
     }
 
-    suspend fun deleteMessage(targetId: String) {
-        val channel = _current.value ?: return
-        val original = _messages.value.find { it.id == targetId } ?: return
+    /** The storage purge outcome when the delete also erased the message there, else null. */
+    suspend fun deleteMessage(targetId: String): com.pombo.android.core.StoragePurge.Outcome? {
+        val channel = _current.value ?: return null
+        val original = _messages.value.find { it.id == targetId } ?: return null
         require(original.mine) { "You can only delete your own messages" }
         val override = JSONObject()
             .put("type", "delete")
@@ -5404,6 +5409,38 @@ class ChannelManager(
             sentDmStore.remove(channel.messageStreamId, targetId)
             onLocalStateChanged()
         }
+        return purgeOwnMessage(channel, original)
+    }
+
+    /**
+     * The storage side of an own delete, signed by the key that signed the
+     * message, which is what the node checks: the account on a Visible gated
+     * (or read-only) channel, this session's pseudonym on public/password,
+     * where an older message is out of its author's reach. Sealed channels
+     * sign with the shared key, so nobody can claim authorship there. Null
+     * when the purge does not apply; a failure comes back on the outcome
+     * rather than failing a delete that already went out.
+     */
+    private suspend fun purgeOwnMessage(channel: Channel, msg: UiMessage): com.pombo.android.core.StoragePurge.Outcome? {
+        val providers = _purgeProviders.value
+        if (providers == 0 || channel.type == "dm" || channel.wireIdentity == "sealed") return null
+        val key = ownPurgeKey(channel, msg) ?: return null
+        return try {
+            val target = resolvePurgeTarget(channel.messageStreamId, StreamConstants.P_MESSAGES, msg)
+            com.pombo.android.core.StoragePurge.purgeMessages(
+                storageEndpoints, channel.messageStreamId, StreamConstants.P_MESSAGES, listOf(target), key
+            )
+        } catch (e: Exception) {
+            com.pombo.android.core.StoragePurge.Outcome(providers, 0, 0, 0, emptyList(), e.message ?: e.javaClass.simpleName)
+        }
+    }
+
+    private fun ownPurgeKey(channel: Channel, msg: UiMessage): String? {
+        if (channel.type == "gated" || channel.readOnly) return myPrivateKey()
+        val me = myAddress() ?: return null
+        val entry = com.pombo.android.core.ChannelIdentities.existing(channel.messageStreamId, me) ?: return null
+        if (msg.publisherId != null && !msg.publisherId.equals(entry.publisherId, ignoreCase = true)) return null
+        return entry.identityPk
     }
 
     fun sendTyping() = presence.sendTyping()
@@ -6223,6 +6260,7 @@ class ChannelManager(
             if (!historical && !liveGateAccessAllows(channel, signer)) return
             signer
         } else meta.optString("publisherId")
+        author.ifEmpty { null }?.let { data.put("_publisherId", it) }
         val account = attachAccount(data, author)
 
         // A moderator's delta: self-contained and verified by its own
@@ -6402,6 +6440,7 @@ class ChannelManager(
             epoch = data.optInt("_epoch", -1).takeIf { it >= 0 },
             envelopeTs = data.optLong("_timestamp", 0L),
             seq = if (data.has("_seq")) data.optInt("_seq") else null,
+            publisherId = data.optStringOrNull("_publisherId"),
             replyTo = data.optJSONObject("replyTo")?.let {
                 val rid = it.optString("id")
                 if (rid.isEmpty()) null else ReplyRef(
