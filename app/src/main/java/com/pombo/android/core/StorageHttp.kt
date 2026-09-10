@@ -53,12 +53,24 @@ object StorageHttp {
         return "$b/streams/${enc(sid)}/data/partitions/$partition/range?fromTimestamp=$fromT&toTimestamp=$toT$fmt"
     }
 
-    private fun open(url: String): HttpURLConnection =
-        (URL(url).openConnection() as HttpURLConnection).apply {
+    /**
+     * Extra request headers for a data read, decided by the app: the signed
+     * `x-pombo-*` headers on a gated channel's streams when the node announces
+     * `signedReads`. Null = send the read as is. Never consulted for
+     * `/capabilities`, which is not a data read.
+     */
+    @Volatile
+    var readHeaders: (suspend (url: String) -> Map<String, String>?)? = null
+
+    private suspend fun open(url: String): HttpURLConnection {
+        val extra = readHeaders?.invoke(url)
+        return (URL(url).openConnection() as HttpURLConnection).apply {
             requestMethod = "GET"
             connectTimeout = CONNECT_TIMEOUT_MS
             readTimeout = READ_TIMEOUT_MS
+            extra?.forEach { (k, v) -> setRequestProperty(k, v) }
         }
+    }
 
     /**
      * Streaming range read. Emits each row via [onRow] as it is parsed (return

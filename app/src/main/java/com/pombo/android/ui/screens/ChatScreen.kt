@@ -154,6 +154,7 @@ fun ChatScreen(vm: AppViewModel) {
 
     val isPreview by vm.isPreview.collectAsState()
     val hasMoreHistory by vm.hasMoreHistory.collectAsState()
+    val historyError by vm.historyError.collectAsState()
     val loadingHistory by vm.loadingHistory.collectAsState()
     val loadingInitial by vm.initialLoad.collectAsState()
     val waitingForKeys by vm.waitingForKeys.collectAsState()
@@ -578,7 +579,18 @@ fun ChatScreen(vm: AppViewModel) {
                     val subExpired = paidStatus?.let {
                         it.paidUntil * 1000L <= System.currentTimeMillis() && !it.accessNow
                     } == true
-                    if (terminalEmpty && waitingForKeys && subExpired) {
+                    val refusal = historyError
+                    if (terminalEmpty && refusal != null) {
+                        val (title, detail) = historyErrorText(refusal, isPreview)
+                        Text(title, color = Color.White.copy(alpha = 0.40f), fontSize = 14.sp)
+                        Spacer(Modifier.height(4.dp))
+                        Text(
+                            detail,
+                            color = Color.White.copy(alpha = 0.25f), fontSize = 12.sp,
+                            textAlign = androidx.compose.ui.text.style.TextAlign.Center,
+                            modifier = Modifier.padding(horizontal = 32.dp)
+                        )
+                    } else if (terminalEmpty && waitingForKeys && subExpired) {
                         Text(
                             "Your subscription has expired",
                             color = Color.White.copy(alpha = 0.40f), fontSize = 14.sp
@@ -1437,3 +1449,20 @@ private fun ChannelTypeIcon(type: String, readOnly: Boolean, tint: Color, size: 
         }
     }
 }
+
+/** Empty-state copy for a history read the storage node refused (web ChatAreaUI._historyErrorText). */
+private fun historyErrorText(error: com.pombo.android.ChannelManager.HistoryError, isPreview: Boolean): Pair<String, String> =
+    when (error.status) {
+        403 -> if (isPreview)
+            "History is available to members" to "Join the channel to read past messages"
+        else
+            "Your access to this channel has ended" to "The storage node no longer serves its history to you"
+        401 -> if (error.signed)
+            "The storage node did not accept this read" to "Check the device clock and try again"
+        else
+            "History is available to members" to "Sign in with an account that has access to read past messages"
+        503 -> "Channel history is temporarily unavailable" to
+            "The storage node cannot reach the chain right now. Reopen the channel to retry"
+        else -> "Channel history could not be loaded" to
+            "The storage node answered HTTP ${error.status}. Reopen the channel to retry"
+    }

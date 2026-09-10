@@ -231,7 +231,7 @@ class ChannelManager(
                     entries.add(com.pombo.android.core.EpochKeyManager.Entry(
                         content,
                         publisher,
-                        meta.optLong("timestamp", 0L)))
+                        com.pombo.android.core.StoredAt.judgeTime(meta)))
                 }
             } catch (e: kotlinx.coroutines.CancellationException) {
                 throw e   // channel switch — propagate, never swallow
@@ -342,7 +342,7 @@ class ChannelManager(
                     entries.add(com.pombo.android.core.EpochKeyManager.Entry(
                         content,
                         publisher,
-                        meta.optLong("timestamp", 0L)))
+                        com.pombo.android.core.StoredAt.judgeTime(meta)))
                 }
             } catch (e: kotlinx.coroutines.CancellationException) {
                 throw e
@@ -611,6 +611,22 @@ class ChannelManager(
             override fun username(): String? = this@ChannelManager.myUsername()
         }
     )
+
+    init {
+        // Storage reads of a gated channel's streams are signed on nodes that
+        // announce it: the bridge page asks which streams are gated before the
+        // SDK's own resends, and the native direct reads (file chunks) get
+        // their headers here. Public channels stay anonymous to the node.
+        bridge.isGatedStream = { streamId -> channelByStream(streamId)?.type == "gated" }
+        com.pombo.android.core.StorageHttp.readHeaders = headers@{ url ->
+            val parsed = com.pombo.android.core.StorageReadSigner.parse(url) ?: return@headers null
+            if (parsed.streamId.endsWith("-3")) return@headers null
+            if (channelByStream(parsed.streamId)?.type != "gated") return@headers null
+            val features = storageEndpoints.probeCapabilities(parsed.base) ?: return@headers null
+            if ("signedReads" !in features) return@headers null
+            com.pombo.android.core.StorageReadSigner.headers(parsed, myPrivateKey())
+        }
+    }
 
     // distinctBy: the stream id keys the channel-list LazyColumn, so ONE
     // duplicate row in the persisted store crashes the app at first paint
@@ -2141,7 +2157,12 @@ class ChannelManager(
         /** Password channels seal P0 payloads; without it every entry is skipped. */
         password: String? = null
     ): com.pombo.android.core.LatestMessageStore.Preview? {
-        val isDmStream = channelByStream(messageStreamId)?.type == "dm"
+        val known = channelByStream(messageStreamId)
+        val isDmStream = known?.type == "dm"
+        // Gated entries are epoch envelopes and never render as a preview,
+        // and a storage node with signed reads refuses the read to anyone
+        // without access: nothing to fetch.
+        if (known?.type == "gated") return null
         return try {
             // Resends need a live client; without this the call fails instantly
             // on a cold start and the preview silently never appears.
@@ -4405,6 +4426,7 @@ class ChannelManager(
             synchronized(this) { pendingOverrides.clear(); deletedIds.clear() }
             _hasMoreHistory.value = false
             _loadingHistory.value = false
+            _historyError.value = null
             // Both are per-channel verdicts — carrying them across a switch
             // shows the previous room's key/subscription state on this one.
             _waitingForKeys.value = false
@@ -4784,7 +4806,16 @@ class ChannelManager(
     }
 
     /** A resend page already decrypted: entry `i` of [entries] is [contents]`[i]`. */
-    private class HistoryPage(val entries: JSONArray, val contents: List<Any?>)
+    /** Why a storage node refused the read (HTTP status), when it did. */
+    data class HistoryError(val status: Int, val signed: Boolean)
+
+    private class HistoryPage(
+        val entries: JSONArray, val contents: List<Any?>, val readError: HistoryError? = null
+    )
+
+    private val _historyError = MutableStateFlow<HistoryError?>(null)
+    /** The refusal behind an empty history, for the empty state to explain. */
+    val historyError: StateFlow<HistoryError?> = _historyError.asStateFlow()
 
     /**
      * One partition's resend, decrypted but not yet applied.
@@ -4837,7 +4868,10 @@ class ChannelManager(
                     "drain=${res.optInt("drainMs")}ms tail=${res.optInt("decryptMs")}ms " +
                     "post=${System.currentTimeMillis() - tResend}ms n=${arr.length()}"
             )
-            HistoryPage(arr, contents)
+            val readError = res.optJSONObject("readError")?.let {
+                HistoryError(it.optInt("status", 0), it.optBoolean("signed", false))
+            }
+            HistoryPage(arr, contents, readError)
         }
     } catch (e: Exception) { null }
 
@@ -4907,8 +4941,11 @@ class ChannelManager(
                     )
                 }
             }
-            // Like the web, stay optimistic: only a range resend can prove exhaustion.
-            _hasMoreHistory.value = true
+            // Like the web, stay optimistic: only a range resend can prove
+            // exhaustion. A refusal by the storage node is not exhaustion
+            // either, but it is not something older pages will cure.
+            _historyError.value = content.readError
+            _hasMoreHistory.value = content.readError == null
         }
 
         if (overrides != null) {
@@ -6023,13 +6060,15 @@ class ChannelManager(
             val keysId = channel.keysStreamId.ifEmpty {
                 StreamConstants.deriveKeysId(channel.messageStreamId)
             }
+            if (historical && com.pombo.android.core.StoredAt.forwardDated(meta, TIMESTAMP_TOLERANCE_MS)) return
             data = epochKeys.tryDecrypt(
                 channel.messageStreamId, keysId, data,
                 // Kid freshness (N-C, gated only): live = current epoch (short
-                // tolerance), history = the kid in force at the timestamp
+                // tolerance), history = the kid in force at the node's receive
+                // time when the node told us, else at the declared timestamp
                 gated = channel.type == "gated",
                 live = !historical,
-                timestamp = meta.optLong("timestamp", 0L)) ?: return
+                timestamp = com.pombo.android.core.StoredAt.judgeTime(meta)) ?: return
 
             // Sealed: the seal held an authorship wrapper — the author
             // comes from it, never from the transport (the shared key says

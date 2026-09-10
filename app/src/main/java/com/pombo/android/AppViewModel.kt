@@ -1171,6 +1171,7 @@ class AppViewModel(app: Application) : AndroidViewModel(app), PomboBridge.Listen
     fun ensureEns(address: String?) = manager.ensureEns(address)
     val initialLoad get() = manager.initialLoad
     val hasMoreHistory get() = manager.hasMoreHistory
+    val historyError get() = manager.historyError
     val waitingForKeys get() = manager.waitingForKeys
     val loadingHistory get() = manager.loadingHistory
     val isPreview get() = manager.isPreview
@@ -2857,6 +2858,10 @@ class AppViewModel(app: Application) : AndroidViewModel(app), PomboBridge.Listen
                             com.pombo.android.core.StreamConstants.deriveAdminId(info.streamId),
                             label = info.displayName
                         )
+                        // Gated entries are epoch envelopes and never render as
+                        // a preview; a storage node with signed reads refuses
+                        // the read to a non-member anyway.
+                        if (info.type == "gated") return@launch
                         val preview = previewStore.dedup(info.streamId) {
                             manager.fetchLatestPreview(info.streamId)
                         } ?: return@launch

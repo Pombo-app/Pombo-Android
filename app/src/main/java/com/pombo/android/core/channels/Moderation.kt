@@ -833,7 +833,7 @@ internal class Moderation(private val manager: ChannelManager) {
                     }
                     content = epochKeys.tryDecrypt(
                         channel.messageStreamId, keysId, content,
-                        gated = true, live = false, timestamp = meta.optLong("timestamp", 0L)
+                        gated = true, live = false, timestamp = com.pombo.android.core.StoredAt.judgeTime(meta)
                     ) ?: continue
                 }
                 applyAdminMessage(channel, content, meta, generation)
