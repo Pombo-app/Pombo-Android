@@ -224,31 +224,38 @@ const storageFetch = (function () {
         const u = new URL(p.url);
         u.searchParams.set('format', 'metadata');
         const mp = parse(u.toString());
-        const ctrl = new AbortController();
-        const t = setTimeout(() => ctrl.abort(), 30000);
-        try {
-            const headers = new Headers();
-            if (sign) {
-                const h = signedHeaders(mp);
-                if (h) Object.keys(h).forEach((k) => headers.set(k, h[k]));
+        // A second try, because history judged without storedAt cannot tell
+        // a forged row from a genuine one; each attempt signs afresh.
+        for (let attempt = 1; attempt <= 2; attempt++) {
+            const ctrl = new AbortController();
+            const t = setTimeout(() => ctrl.abort(), 30000);
+            try {
+                const headers = new Headers();
+                if (sign) {
+                    const h = signedHeaders(mp);
+                    if (h) Object.keys(h).forEach((k) => headers.set(k, h[k]));
+                }
+                const resp = await original(mp.url, Object.assign({}, init, { headers, signal: ctrl.signal }));
+                if (!resp.ok) return;
+                const rows = await resp.json();
+                if (!Array.isArray(rows)) return;
+                rows.forEach((row) => {
+                    if (row && Number.isFinite(row.storedAt)) remember(p.streamId, p.partition, row.timestamp, row.sequenceNumber, row.storedAt);
+                });
+                return;
+            } catch (e) {
+                console.warn('storedAt read failed (attempt ' + attempt + '): ' + (e && e.message));
+            } finally {
+                clearTimeout(t);
             }
-            const resp = await original(mp.url, Object.assign({}, init, { headers, signal: ctrl.signal }));
-            if (!resp.ok) return;
-            const rows = await resp.json();
-            if (!Array.isArray(rows)) return;
-            rows.forEach((row) => {
-                if (row && Number.isFinite(row.storedAt)) remember(p.streamId, p.partition, row.timestamp, row.sequenceNumber, row.storedAt);
-            });
-        } catch (e) {
-            /* best effort: this page carries no storedAt */
-        } finally {
-            clearTimeout(t);
         }
+        console.warn('storedAt unavailable for ' + p.streamId.slice(-24) + ' P' + p.partition + ': this history is judged without it');
     }
     async function read(p, init) {
         const features = (await probeCapabilities(p.base)) || new Set();
         const gated = isGated(p.streamId);
-        const canSign = !!BRIDGE_ADDRESS && features.has('signedReads');
+        const hasIdentity = !!BRIDGE_ADDRESS;
+        const canSign = hasIdentity && features.has('signedReads');
         let sign = canSign && gated && !/-3$/.test(p.streamId);
         const wantStoredAt = gated && features.has('storedAt');
         let attempt = 0;
@@ -261,7 +268,9 @@ const storageFetch = (function () {
             }
             const metadata = wantStoredAt ? collectStoredAt(p, sign, init) : null;
             const resp = await original(p.url, Object.assign({}, init, { headers }));
-            if (resp.status === 401 && !sign && canSign && !retried401) {
+            // A 401 is the node asking for a signature, whatever the probe
+            // said (it may have timed out on a slow node).
+            if (resp.status === 401 && !sign && hasIdentity && !retried401) {
                 sign = true; retried401 = true;
                 if (metadata) await metadata;
                 continue;
