@@ -3181,6 +3181,7 @@ class ChannelManager(
 
             for (i in 0 until n) {
                 val entry = arr.optJSONObject(i) ?: continue
+                if (com.pombo.android.core.StoredAt.forwardDated(entry.optJSONObject("meta"), TIMESTAMP_TOLERANCE_MS)) continue
                 val res = opened?.takeIf { !it.isNull(i) }?.optJSONObject(i)
                 routeInboxMessage(
                     entry.opt("content"), publishers[i],
