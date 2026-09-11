@@ -220,15 +220,22 @@ const storageFetch = (function () {
         storedAt.set(key, at);
         if (storedAt.size > STORED_AT_MAX) storedAt.delete(storedAt.keys().next().value);
     }
+    // The paired metadata read; resolves to whether the node supplied the
+    // page's storedAt. It lives as long as the raw read it pairs with (same
+    // node, same rows); the cap only bounds a read whose caller set no signal.
     async function collectStoredAt(p, sign, init) {
         const u = new URL(p.url);
         u.searchParams.set('format', 'metadata');
         const mp = parse(u.toString());
+        const outer = init && init.signal;
         // A second try, because history judged without storedAt cannot tell
         // a forged row from a genuine one; each attempt signs afresh.
         for (let attempt = 1; attempt <= 2; attempt++) {
+            if (outer && outer.aborted) return false;
             const ctrl = new AbortController();
-            const t = setTimeout(() => ctrl.abort(), 30000);
+            const t = setTimeout(() => ctrl.abort(), 90000);
+            const onOuterAbort = () => ctrl.abort();
+            if (outer && outer.addEventListener) outer.addEventListener('abort', onOuterAbort, { once: true });
             try {
                 const headers = new Headers();
                 if (sign) {
@@ -236,20 +243,22 @@ const storageFetch = (function () {
                     if (h) Object.keys(h).forEach((k) => headers.set(k, h[k]));
                 }
                 const resp = await original(mp.url, Object.assign({}, init, { headers, signal: ctrl.signal }));
-                if (!resp.ok) return;
+                if (!resp.ok) return false;
                 const rows = await resp.json();
-                if (!Array.isArray(rows)) return;
+                if (!Array.isArray(rows)) return false;
                 rows.forEach((row) => {
                     if (row && Number.isFinite(row.storedAt)) remember(p.streamId, p.partition, row.timestamp, row.sequenceNumber, row.storedAt);
                 });
-                return;
+                return true;
             } catch (e) {
                 console.warn('storedAt read failed (attempt ' + attempt + '): ' + (e && e.message));
             } finally {
                 clearTimeout(t);
+                if (outer && outer.removeEventListener) outer.removeEventListener('abort', onOuterAbort);
             }
         }
-        console.warn('storedAt unavailable for ' + p.streamId.slice(-24) + ' P' + p.partition + ': this history is judged without it');
+        console.warn('storedAt unavailable for ' + p.streamId.slice(-24) + ' P' + p.partition);
+        return false;
     }
     async function read(p, init) {
         const features = (await probeCapabilities(p.base)) || new Set();
@@ -280,13 +289,21 @@ const storageFetch = (function () {
                 if (metadata) await metadata;
                 continue;
             }
+            const collected = metadata ? await metadata : true;
+            if (resp.ok && !collected) {
+                // History without storedAt cannot tell a forged row from a
+                // genuine one, and a node that announces storedAt owes it:
+                // the page is refused the way a node outage is.
+                lastErrors.set(p.streamId + '|' + p.partition, { status: 503, signed: sign, at: Date.now(), reason: 'storedAt' });
+                console.warn('storage read ' + p.resendType + ' ' + p.streamId.slice(-24) + ' P' + p.partition + ': no storedAt, page refused');
+                return new Response('', { status: 503, statusText: 'storedAt unavailable' });
+            }
             if (resp.ok) lastErrors.delete(p.streamId + '|' + p.partition);
             else {
                 lastErrors.set(p.streamId + '|' + p.partition, { status: resp.status, signed: sign, at: Date.now() });
                 console.warn('storage read ' + p.resendType + ' ' + p.streamId.slice(-24) + ' P' + p.partition +
                     ': HTTP ' + resp.status + (sign ? ' (signed)' : ''));
             }
-            if (metadata) await metadata;
             return resp;
         }
     }

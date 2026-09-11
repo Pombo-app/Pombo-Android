@@ -1478,7 +1478,10 @@ private fun ChannelTypeIcon(type: String, readOnly: Boolean, tint: Color, size: 
 
 /** Empty-state copy for a history read the storage node refused (web ChatAreaUI._historyErrorText). */
 private fun historyErrorText(error: com.pombo.android.ChannelManager.HistoryError, isPreview: Boolean): Pair<String, String> =
-    when (error.status) {
+    if (error.reason == "storedAt")
+        "Channel history is temporarily unavailable" to
+            "The storage node did not say when these messages were stored. Reopen the channel to retry"
+    else when (error.status) {
         403 -> if (isPreview)
             "History is available to members" to "Join the channel to read past messages"
         else

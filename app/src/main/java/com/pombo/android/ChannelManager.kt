@@ -4926,7 +4926,8 @@ class ChannelManager(
 
     /** A resend page already decrypted: entry `i` of [entries] is [contents]`[i]`. */
     /** Why a storage node refused the read (HTTP status), when it did. */
-    data class HistoryError(val status: Int, val signed: Boolean)
+    /** [reason] names a refusal the client itself made, e.g. `storedAt` for a page the node stored without saying when. */
+    data class HistoryError(val status: Int, val signed: Boolean, val reason: String? = null)
 
     private class HistoryPage(
         val entries: JSONArray, val contents: List<Any?>, val readError: HistoryError? = null
@@ -4988,7 +4989,7 @@ class ChannelManager(
                     "post=${System.currentTimeMillis() - tResend}ms n=${arr.length()}"
             )
             val readError = res.optJSONObject("readError")?.let {
-                HistoryError(it.optInt("status", 0), it.optBoolean("signed", false))
+                HistoryError(it.optInt("status", 0), it.optBoolean("signed", false), it.optString("reason").ifEmpty { null })
             }
             HistoryPage(arr, contents, readError)
         }
@@ -5000,7 +5001,7 @@ class ChannelManager(
     /** What the storage node last answered for a stream partition, as the bridge's wrapper recorded it. */
     private suspend fun lastStorageReadError(streamId: String, partition: Int): HistoryError? = runCatching {
         val res = bridge.call("storageReadError", JSONObject().put("streamId", streamId).put("partition", partition), 5_000)
-        if (res.has("status")) HistoryError(res.optInt("status"), res.optBoolean("signed")) else null
+        if (res.has("status")) HistoryError(res.optInt("status"), res.optBoolean("signed"), res.optString("reason").ifEmpty { null }) else null
     }.getOrNull()
 
     /**
