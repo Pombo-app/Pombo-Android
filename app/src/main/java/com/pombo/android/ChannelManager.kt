@@ -6225,6 +6225,9 @@ class ChannelManager(
         // an error (§7.9) — skip; storage-backed messages come back via the
         // refresh fired when the key is adopted.
         var innerAuthor: String? = null
+        // A row the node received long before its own date is a forgery, on
+        // any channel read from a node that says when it stored the row.
+        if (historical && com.pombo.android.core.StoredAt.forwardDated(meta, TIMESTAMP_TOLERANCE_MS)) return
         if (com.pombo.android.core.EpochKeyCrypto.isEpochEnvelope(data)) {
             if (!isEpochChannel(channel)) return
             // The epoch this was written under, read off the kid that travels
@@ -6235,7 +6238,6 @@ class ChannelManager(
             val keysId = channel.keysStreamId.ifEmpty {
                 StreamConstants.deriveKeysId(channel.messageStreamId)
             }
-            if (historical && com.pombo.android.core.StoredAt.forwardDated(meta, TIMESTAMP_TOLERANCE_MS)) return
             data = epochKeys.tryDecrypt(
                 channel.messageStreamId, keysId, data,
                 // Kid freshness (N-C, gated only): live = current epoch (short

@@ -266,7 +266,9 @@ const storageFetch = (function () {
         const hasIdentity = !!BRIDGE_ADDRESS;
         const canSign = hasIdentity && features.has('signedReads');
         let sign = canSign && gated && !/-3$/.test(p.streamId);
-        const wantStoredAt = gated && features.has('storedAt');
+        // storedAt is read wherever a page gets judged: every channel stream
+        // of a node that supplies it. DM inboxes are not covered yet.
+        const wantStoredAt = features.has('storedAt') && !/\/Pombo-DM-/.test(p.streamId);
         let attempt = 0;
         let retried401 = false;
         for (;;) {
