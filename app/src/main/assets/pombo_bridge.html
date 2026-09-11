@@ -271,7 +271,7 @@ const storageFetch = (function () {
         let sign = canSign && (gated || ownInbox) && !/-3$/.test(p.streamId);
         // storedAt is read wherever a page gets judged: every stream of a
         // node that supplies it.
-        const wantStoredAt = features.has('storedAt');
+        let wantStoredAt = features.has('storedAt');
         let attempt = 0;
         let retried401 = false;
         for (;;) {
@@ -286,6 +286,10 @@ const storageFetch = (function () {
             // said (it may have timed out on a slow node).
             if (resp.status === 401 && !sign && hasIdentity && !retried401) {
                 sign = true; retried401 = true;
+                // Only a Pombo node asks for a signature, and every Pombo
+                // node supplies storedAt: the page is judged even when the
+                // probe never said so.
+                wantStoredAt = true;
                 if (metadata) await metadata;
                 continue;
             }
@@ -303,8 +307,11 @@ const storageFetch = (function () {
                 console.warn('storage read ' + p.resendType + ' ' + p.streamId.slice(-24) + ' P' + p.partition + ': no storedAt, page refused');
                 return new Response('', { status: 503, statusText: 'storedAt unavailable' });
             }
-            if (resp.ok) lastErrors.delete(p.streamId + '|' + p.partition);
-            else {
+            if (resp.ok) {
+                lastErrors.delete(p.streamId + '|' + p.partition);
+                console.info('storage read ' + p.resendType + ' ' + p.streamId.slice(-24) + ' P' + p.partition +
+                    ': ok' + (sign ? ' signed' : ' unsigned') + (metadata ? ' +storedAt' : ' -storedAt'));
+            } else {
                 lastErrors.set(p.streamId + '|' + p.partition, { status: resp.status, signed: sign, at: Date.now() });
                 console.warn('storage read ' + p.resendType + ' ' + p.streamId.slice(-24) + ' P' + p.partition +
                     ': HTTP ' + resp.status + (sign ? ' (signed)' : ''));

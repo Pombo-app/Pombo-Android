@@ -4585,15 +4585,21 @@ class ChannelManager(
             scope.launch {
                 // The resolution is an SDK call through the bridge; right after
                 // a boot or an account switch the client is still connecting.
+                val t0 = System.currentTimeMillis()
                 val n = runCatching {
                     bridge.awaitConnected()
                     storageEndpoints.providersWith(channel.messageStreamId, "purge").size
-                }.getOrDefault(0)
+                }.onFailure { android.util.Log.w(TAG, "purge providers ${channel.messageStreamId.takeLast(24)}: ${it.message}") }
+                    .getOrDefault(0)
+                android.util.Log.d(TAG, "purge providers ${channel.messageStreamId.takeLast(24)}: $n in ${System.currentTimeMillis() - t0}ms")
                 if (_current.value?.messageStreamId == channel.messageStreamId) _purgeProviders.value = n
                 if (channel.type == "dm") {
                     val inbox = myAddress()?.lowercase()?.let { "$it/Pombo-DM-1" }
                     val own = if (inbox == null) 0
-                        else runCatching { storageEndpoints.providersWith(inbox, "purge").size }.getOrDefault(0)
+                        else runCatching { storageEndpoints.providersWith(inbox, "purge").size }
+                            .onFailure { android.util.Log.w(TAG, "purge providers of own inbox: ${it.message}") }
+                            .getOrDefault(0)
+                    android.util.Log.d(TAG, "purge providers of own inbox: $own")
                     if (_current.value?.messageStreamId == channel.messageStreamId) _inboxPurgeProviders.value = own
                 }
             }
@@ -5610,8 +5616,12 @@ class ChannelManager(
     fun ownPurgeApplies(messageId: String): Boolean {
         val channel = _current.value ?: return false
         val msg = _messages.value.find { it.id == messageId } ?: return false
+        if (channel.type == "dm") {
+            val holds = dmSentRows.holds(channel.messageStreamId, messageId)
+            android.util.Log.d(TAG, "dm purge applies? providers=${_purgeProviders.value} holds=$holds id=$messageId")
+            return _purgeProviders.value > 0 && holds
+        }
         if (_purgeProviders.value == 0 || channel.wireIdentity == "sealed") return false
-        if (channel.type == "dm") return dmSentRows.holds(channel.messageStreamId, messageId)
         return ownPurgeKey(channel, msg) != null
     }
 
