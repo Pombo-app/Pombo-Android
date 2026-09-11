@@ -1,5 +1,0 @@
-> Task :app:lintVitalRelease
-> Task :app:assembleRelease
-
-BUILD SUCCESSFUL in 2m 53s
-55 actionable tasks: 22 executed, 33 up-to-date
