@@ -3234,9 +3234,13 @@ class ChannelManager(
             val opened = openSealedBatch(items)
             val tDecrypt = System.currentTimeMillis()
 
+            var withStoredAt = 0
+            var dropped = 0
             for (i in 0 until n) {
                 val entry = arr.optJSONObject(i) ?: continue
-                if (com.pombo.android.core.StoredAt.forwardDated(entry.optJSONObject("meta"), TIMESTAMP_TOLERANCE_MS)) continue
+                val meta = entry.optJSONObject("meta")
+                if (meta?.has("storedAt") == true) withStoredAt++
+                if (com.pombo.android.core.StoredAt.forwardDated(meta, TIMESTAMP_TOLERANCE_MS)) { dropped++; continue }
                 val res = opened?.takeIf { !it.isNull(i) }?.optJSONObject(i)
                 routeInboxMessage(
                     entry.opt("content"), publishers[i],
@@ -3248,6 +3252,7 @@ class ChannelManager(
             android.util.Log.d("PomboPerf",
                 "inbox replay: resend=${tResend - t0}ms decrypt=${tDecrypt - tResend}ms " +
                     "route=${System.currentTimeMillis() - tDecrypt}ms n=$n")
+            android.util.Log.d(TAG, "inbox history: n=$n withStoredAt=$withStoredAt forwardDated=$dropped")
         } catch (e: Exception) {
             // No storage on the inbox, or the node is down — live traffic still
             // works, the user just starts without back-history.
@@ -3822,6 +3827,7 @@ class ChannelManager(
             for (i in 0 until n) {
                 val entry = arr.optJSONObject(i) ?: continue
                 val meta = entry.optJSONObject("meta") ?: JSONObject()
+                if (com.pombo.android.core.StoredAt.forwardDated(meta, TIMESTAMP_TOLERANCE_MS)) continue
                 val opened = openedAll?.takeIf { !it.isNull(i) }?.optJSONObject(i)
                 val plain: JSONObject
                 val sender: String
@@ -3843,7 +3849,13 @@ class ChannelManager(
                 // My own messages live in local storage, never in my inbox;
                 // and this timeline shows one peer only.
                 if (sender == me || sender != peer) continue
-                meta.optLong("timestamp", 0L).takeIf { it > 0 }?.let { ts ->
+                val envTs = meta.optLong("timestamp", 0L)
+                val payloadTs = plain.optLong("timestamp", 0L)
+                if (payloadTs > 0) {
+                    if (payloadTs > System.currentTimeMillis() + TIMESTAMP_TOLERANCE_MS) continue
+                    if (envTs > 0 && payloadTs > envTs + TIMESTAMP_TOLERANCE_MS) continue
+                }
+                envTs.takeIf { it > 0 }?.let { ts ->
                     if (oldestTimestamp == 0L || ts < oldestTimestamp) oldestTimestamp = ts
                 }
                 plain.put("account", sender)
@@ -3852,7 +3864,11 @@ class ChannelManager(
                     "text", "image", "file_announce", "storage_file_announce" -> {
                         val id = plain.optString("id")
                         if (id.isNotEmpty() && id !in existing) {
-                            toUiMessage(plain, me)?.let { fresh.add(it) }
+                            toUiMessage(plain, me)?.copy(
+                                envelopeTs = envTs,
+                                seq = meta.optInt("sequenceNumber", -1).takeIf { it >= 0 },
+                                publisherId = meta.optString("publisherId").ifEmpty { null }
+                            )?.let { fresh.add(it) }
                         }
                     }
                     "edit", "delete" -> applyOverride(plain, peer)

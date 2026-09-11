@@ -309,7 +309,8 @@ const storageFetch = (function () {
             }
             if (resp.ok) {
                 lastErrors.delete(p.streamId + '|' + p.partition);
-                console.info('storage read ' + p.resendType + ' ' + p.streamId.slice(-24) + ' P' + p.partition +
+                // warn, not info: a release WebView forwards only warnings.
+                console.warn('storage read ' + p.resendType + ' ' + p.streamId.slice(-24) + ' P' + p.partition +
                     ': ok' + (sign ? ' signed' : ' unsigned') + (metadata ? ' +storedAt' : ' -storedAt'));
             } else {
                 lastErrors.set(p.streamId + '|' + p.partition, { status: resp.status, signed: sign, at: Date.now() });
