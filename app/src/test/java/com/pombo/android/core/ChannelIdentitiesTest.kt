@@ -2,6 +2,7 @@ package com.pombo.android.core
 
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNotEquals
+import org.junit.Assert.assertNull
 import org.junit.Test
 
 /**
@@ -48,5 +49,14 @@ class ChannelIdentitiesTest {
         ChannelIdentities.drop("0xabc/chan-3")
         val c = ChannelIdentities.entryFor("0xabc/chan-1", accountAddress, accountPk)
         assertNotEquals(b.identityPk, c.identityPk)
+    }
+
+    @Test
+    fun `existing never mints an identity and ignores another account's entry`() {
+        ChannelIdentities.drop("0xabc/ex-1")
+        assertNull(ChannelIdentities.existing("0xabc/ex-1", accountAddress))
+        val a = ChannelIdentities.entryFor("0xabc/ex-1", accountAddress, accountPk)
+        assertEquals(a, ChannelIdentities.existing("0xabc/ex-2", accountAddress))
+        assertNull(ChannelIdentities.existing("0xabc/ex-1", "0x0000000000000000000000000000000000000001"))
     }
 }

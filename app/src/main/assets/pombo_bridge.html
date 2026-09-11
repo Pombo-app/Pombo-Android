@@ -118,6 +118,228 @@ function u8ToB64(u8) {
     for (let i = 0; i < u8.length; i += CH) s += String.fromCharCode.apply(null, u8.subarray(i, i + CH));
     return btoa(s);
 }
+// ---- storage reads: signatures and storedAt on Pombo nodes ----
+//
+// Mirror of the web's storageFetch.js + storageReadSigner.js. Every history
+// read the SDK makes ends in a plain `fetch` of
+// `.../streams/{id}/data/partitions/{p}/{last|from|range}`; wrapping the
+// global fetch once gives those reads, and only those, what the Pombo storage
+// node fork offers and vanilla nodes ignore:
+//  - signed reads (the x-pombo-* headers, EIP-191 over one field per line:
+//    pombo-storage-node / read / streamId / partition / issuedAt / nonce /
+//    resendType / canonicalQuery) on a gated channel's streams, never the -3,
+//    when the node announces `signedReads` — the signature comes from the
+//    native oracle, the key never enters this page;
+//  - storedAt, from a paired `format=metadata` read of the same page, kept by
+//    (stream, partition, timestamp, sequenceNumber) and stamped onto the
+//    resend entries' meta for Kotlin to judge kid freshness by;
+//  - 503 (the node cannot consult the chain) retried with backoff.
+// Whether a stream is gated is Kotlin's knowledge (Native.isGatedStream).
+// Parity of the signed message with the web is locked by
+// docs/STORAGE-signed-read-vectors.json.
+const storageFetch = (function () {
+    const DATA_PATH = /^(.*)\/streams\/([^/]+)\/data\/partitions\/(\d+)\/(last|from|range)$/;
+    const TTL_MS = 10 * 60 * 1000;
+    const RETRY_503_MS = [1000, 3000, 7000];
+    const STORED_AT_MAX = 50000;
+    const original = window.fetch.bind(window);
+    const capabilities = new Map();   // base → { at, features: Set }
+    const probes = new Map();         // base → in-flight promise
+    const storedAt = new Map();       // stream|partition|ts|seq → storedAt
+    const lastErrors = new Map();     // streamId|partition → { status, signed, at }
+    const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+
+    function parse(url) {
+        let u;
+        try { u = new URL(String(url)); } catch (e) { return null; }
+        const m = DATA_PATH.exec(u.pathname);
+        if (!m) return null;
+        let streamId;
+        try { streamId = decodeURIComponent(m[2]); } catch (e) { return null; }
+        return {
+            base: u.origin + m[1], streamId, partition: Number(m[3]), resendType: m[4],
+            canonicalQuery: canonicalQuery(u.searchParams), url: u.toString()
+        };
+    }
+    function canonicalQuery(sp) {
+        return Array.from(sp.entries())
+            .map(([name, value], index) => ({ name, value, index }))
+            .sort((a, b) => (a.name < b.name ? -1 : a.name > b.name ? 1 : a.index - b.index))
+            .map((e) => e.name + '=' + e.value)
+            .join('&');
+    }
+    function nonce() {
+        const bytes = new Uint8Array(16);
+        crypto.getRandomValues(bytes);
+        return Array.from(bytes, (b) => b.toString(16).padStart(2, '0')).join('');
+    }
+    function signedHeaders(p) {
+        const issuedAt = Date.now();
+        const n = nonce();
+        const message = ['pombo-storage-node', 'read', p.streamId, String(p.partition), String(issuedAt),
+            n, p.resendType, p.canonicalQuery].join('\n');
+        const sig = Native.signMessagePayload(u8ToB64(new TextEncoder().encode(message)));
+        if (!sig) return null;
+        return {
+            'x-pombo-user': BRIDGE_ADDRESS, 'x-pombo-issued-at': String(issuedAt),
+            'x-pombo-nonce': n, 'x-pombo-signature': sig
+        };
+    }
+    async function probeCapabilities(base) {
+        const cached = capabilities.get(base);
+        if (cached && Date.now() - cached.at < TTL_MS) return cached.features;
+        if (probes.has(base)) return probes.get(base);
+        const p = (async function () {
+            const ctrl = new AbortController();
+            const t = setTimeout(() => ctrl.abort(), 8000);
+            try {
+                const resp = await original(base + '/capabilities', { signal: ctrl.signal });
+                if (resp.status === 404) return new Set();
+                if (!resp.ok) return undefined;
+                const body = await resp.json();
+                const list = Array.isArray(body && body.features) ? body.features : [];
+                return new Set(list.filter((f) => typeof f === 'string'));
+            } catch (e) {
+                return undefined;
+            } finally {
+                clearTimeout(t);
+            }
+        })().then((features) => {
+            if (features) capabilities.set(base, { at: Date.now(), features });
+            return features;
+        }).finally(() => probes.delete(base));
+        probes.set(base, p);
+        return p;
+    }
+    function isGated(streamId) {
+        try { return !!Native.isGatedStream(streamId); } catch (e) { return false; }
+    }
+    function remember(streamId, partition, ts, seq, at) {
+        const key = streamId + '|' + partition + '|' + ts + '|' + seq;
+        storedAt.delete(key);
+        storedAt.set(key, at);
+        if (storedAt.size > STORED_AT_MAX) storedAt.delete(storedAt.keys().next().value);
+    }
+    // The paired metadata read; resolves to whether the node supplied the
+    // page's storedAt. It lives as long as the raw read it pairs with (same
+    // node, same rows); the cap only bounds a read whose caller set no signal.
+    async function collectStoredAt(p, sign, init) {
+        const u = new URL(p.url);
+        u.searchParams.set('format', 'metadata');
+        const mp = parse(u.toString());
+        const outer = init && init.signal;
+        // A second try, because history judged without storedAt cannot tell
+        // a forged row from a genuine one; each attempt signs afresh.
+        for (let attempt = 1; attempt <= 2; attempt++) {
+            if (outer && outer.aborted) return false;
+            const ctrl = new AbortController();
+            const t = setTimeout(() => ctrl.abort(), 90000);
+            const onOuterAbort = () => ctrl.abort();
+            if (outer && outer.addEventListener) outer.addEventListener('abort', onOuterAbort, { once: true });
+            try {
+                const headers = new Headers();
+                if (sign) {
+                    const h = signedHeaders(mp);
+                    if (h) Object.keys(h).forEach((k) => headers.set(k, h[k]));
+                }
+                const resp = await original(mp.url, Object.assign({}, init, { headers, signal: ctrl.signal }));
+                if (!resp.ok) return false;
+                const rows = await resp.json();
+                if (!Array.isArray(rows)) return false;
+                rows.forEach((row) => {
+                    if (row && Number.isFinite(row.storedAt)) remember(p.streamId, p.partition, row.timestamp, row.sequenceNumber, row.storedAt);
+                });
+                return true;
+            } catch (e) {
+                console.warn('storedAt read failed (attempt ' + attempt + '): ' + (e && e.message));
+            } finally {
+                clearTimeout(t);
+                if (outer && outer.removeEventListener) outer.removeEventListener('abort', onOuterAbort);
+            }
+        }
+        console.warn('storedAt unavailable for ' + p.streamId.slice(-24) + ' P' + p.partition);
+        return false;
+    }
+    async function read(p, init) {
+        const features = (await probeCapabilities(p.base)) || new Set();
+        const gated = isGated(p.streamId);
+        const hasIdentity = !!BRIDGE_ADDRESS;
+        const canSign = hasIdentity && features.has('signedReads');
+        // The own DM inbox is private (its SUBSCRIBE is the owner's alone),
+        // so a node that checks signatures wants one there too.
+        const ownInbox = hasIdentity && p.streamId === BRIDGE_ADDRESS.toLowerCase() + '/Pombo-DM-1';
+        let sign = canSign && (gated || ownInbox) && !/-3$/.test(p.streamId);
+        // storedAt is read wherever a page gets judged: every stream of a
+        // node that supplies it.
+        let wantStoredAt = features.has('storedAt');
+        let attempt = 0;
+        let retried401 = false;
+        for (;;) {
+            const headers = new Headers(init.headers || undefined);
+            if (sign) {
+                const h = signedHeaders(p);
+                if (h) Object.keys(h).forEach((k) => headers.set(k, h[k]));
+            }
+            const metadata = wantStoredAt ? collectStoredAt(p, sign, init) : null;
+            const resp = await original(p.url, Object.assign({}, init, { headers }));
+            // A 401 is the node asking for a signature, whatever the probe
+            // said (it may have timed out on a slow node).
+            if (resp.status === 401 && !sign && hasIdentity && !retried401) {
+                sign = true; retried401 = true;
+                // Only a Pombo node asks for a signature, and every Pombo
+                // node supplies storedAt: the page is judged even when the
+                // probe never said so.
+                wantStoredAt = true;
+                if (metadata) await metadata;
+                continue;
+            }
+            if (resp.status === 503 && attempt < RETRY_503_MS.length) {
+                await sleep(RETRY_503_MS[attempt++]);
+                if (metadata) await metadata;
+                continue;
+            }
+            const collected = metadata ? await metadata : true;
+            if (resp.ok && !collected) {
+                // History without storedAt cannot tell a forged row from a
+                // genuine one, and a node that announces storedAt owes it:
+                // the page is refused the way a node outage is.
+                lastErrors.set(p.streamId + '|' + p.partition, { status: 503, signed: sign, at: Date.now(), reason: 'storedAt' });
+                console.warn('storage read ' + p.resendType + ' ' + p.streamId.slice(-24) + ' P' + p.partition + ': no storedAt, page refused');
+                return new Response('', { status: 503, statusText: 'storedAt unavailable' });
+            }
+            if (resp.ok) {
+                lastErrors.delete(p.streamId + '|' + p.partition);
+                // warn, not info: a release WebView forwards only warnings.
+                console.warn('storage read ' + p.resendType + ' ' + p.streamId.slice(-24) + ' P' + p.partition +
+                    ': ok' + (sign ? ' signed' : ' unsigned') + (metadata ? ' +storedAt' : ' -storedAt'));
+            } else {
+                lastErrors.set(p.streamId + '|' + p.partition, { status: resp.status, signed: sign, at: Date.now() });
+                console.warn('storage read ' + p.resendType + ' ' + p.streamId.slice(-24) + ' P' + p.partition +
+                    ': HTTP ' + resp.status + (sign ? ' (signed)' : ''));
+            }
+            return resp;
+        }
+    }
+    window.fetch = function (input, init) {
+        const url = typeof input === 'string' ? input : (input && input.url);
+        const p = url ? parse(url) : null;
+        if (!p) return original(input, init);
+        return read(p, init || {});
+    };
+    return {
+        // Stamp a resend entry's meta with the sequence number and, when a
+        // Pombo node served the page, the node's receive time.
+        stamp(meta, msg, streamId, partition) {
+            const sm = (msg && msg.streamMessage) ? msg.streamMessage : msg;
+            const seq = sm && sm.messageId ? sm.messageId.sequenceNumber : undefined;
+            if (seq !== undefined) meta.sequenceNumber = seq;
+            const at = storedAt.get(streamId + '|' + partition + '|' + msg.timestamp + '|' + seq);
+            if (at !== undefined) meta.storedAt = at;
+            return meta;
+        },
+        lastReadError(streamId, partition) { return lastErrors.get(streamId + '|' + partition) || null; }
+    };
+})();
 // ---- password-channel crypto for binary payloads ----
 //
 // Same wire format as web crypto.js encryptBinary/decryptBinary: the raw bytes
@@ -898,12 +1120,20 @@ const api = {
         // to tell a failed read from an empty one.
         api._lastDrainErrors = 0;
         while (!done) {
-            if (deadlineAt && Date.now() > deadlineAt) {
+            if (deadlineAt && Date.now() >= deadlineAt) {
                 try { if (iterator.return) iterator.return(); } catch (e) { /* best effort */ }
                 return true;
             }
             try {
-                const result = await iterator.next();
+                // A row that never comes must not hold the read past its
+                // budget: the caller's timeout would swallow the outcome.
+                const result = deadlineAt
+                    ? await Promise.race([
+                        iterator.next(),
+                        new Promise(function (r) { setTimeout(function () { r({ timedOut: true }); }, Math.max(0, deadlineAt - Date.now())); })
+                    ])
+                    : await iterator.next();
+                if (result.timedOut) continue;
                 done = result.done;
                 if (done) break;
                 push(result.value);
@@ -917,7 +1147,11 @@ const api = {
                 api._lastDrainErrors++;
                 console.warn('resend iteration error: ' +
                     (iterError && iterError.message ? iterError.message : String(iterError)));
-                continue;
+                // A transport error ends the read: reading on after it waits
+                // for a row that never comes, and what the node answered is
+                // already in storageFetch.lastReadError.
+                try { if (iterator.return) iterator.return(); } catch (e) { /* best effort */ }
+                return true;
             }
         }
         return false;
@@ -1002,6 +1236,11 @@ const api = {
     // for `recoverSigner` and establish authorship from meta.signer; every
     // other path gets the envelope-authenticity check here, without which a
     // raw read would accept an envelope carrying someone else's publisherId.
+    /** What the storage node last answered for a stream partition, or {} when the last read succeeded. */
+    storageReadError(a) {
+        return storageFetch.lastReadError(a.streamId, a.partition) || {};
+    },
+
     async resend(a) {
         if (!client) throw new Error('client not connected');
         const pwKey = a.password ? await api._pwKey(a.password) : null;
@@ -1022,6 +1261,7 @@ const api = {
                 }
             };
             if (a.recoverSigner) rec.meta.signer = api._recoverEnvelopeSigner(msg);
+            storageFetch.stamp(rec.meta, msg, a.streamId, a.partition);
             out.push(rec);
             opener.take(rec);
         }, Date.now() + (a.budgetMs || 40000), { streamId: a.streamId, partition: a.partition });
@@ -1033,6 +1273,7 @@ const api = {
         // PBKDF2 is the wall, not the storage node.
         return {
             messages: out, partial: partial, errors: api._lastDrainErrors,
+            readError: storageFetch.lastReadError(a.streamId, a.partition),
             drainMs: tDrain - t0, decryptMs: Date.now() - tDrain
         };
     },
@@ -1062,6 +1303,7 @@ const api = {
                 }
             };
             if (a.recoverSigner) rec.meta.signer = api._recoverEnvelopeSigner(msg);
+            storageFetch.stamp(rec.meta, msg, a.streamId, a.partition);
             all.push(rec);
             opener.take(rec);
         }, Date.now() + (a.budgetMs || 40000), { streamId: a.streamId, partition: a.partition });
@@ -1076,7 +1318,10 @@ const api = {
         const count = a.last || 50;
         const start = Math.max(0, all.length - count);
         // A cut-short drain cannot prove exhaustion — keep pagination alive.
-        return { messages: all.slice(start), hasMore: fetched > count || partial, partial: partial };
+        return {
+            messages: all.slice(start), hasMore: fetched > count || partial, partial: partial,
+            readError: storageFetch.lastReadError(a.streamId, a.partition)
+        };
     },
 
     // Bounded time-window resend, for DM pagination (streamr.js
@@ -1106,11 +1351,15 @@ const api = {
                 }
             };
             if (a.recoverSigner) rec.meta.signer = api._recoverEnvelopeSigner(msg);
+            storageFetch.stamp(rec.meta, msg, a.streamId, a.partition);
             out.push(rec);
         }, Date.now() + (a.budgetMs || 40000), { streamId: a.streamId, partition: a.partition });
         await api._keepOnlyWriters(a.streamId, out);
         // Reaching epoch means there is nothing older left to scan.
-        return { messages: out, hasMore: windowStart > 0 || partial, windowStart: windowStart, partial: partial };
+        return {
+            messages: out, hasMore: windowStart > 0 || partial, windowStart: windowStart, partial: partial,
+            readError: storageFetch.lastReadError(a.streamId, a.partition)
+        };
     },
 
     // Owner-only channel edit — one on-chain tx that rewrites the Pombo JSON

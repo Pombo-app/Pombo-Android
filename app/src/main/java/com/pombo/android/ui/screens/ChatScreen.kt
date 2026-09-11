@@ -154,6 +154,7 @@ fun ChatScreen(vm: AppViewModel) {
 
     val isPreview by vm.isPreview.collectAsState()
     val hasMoreHistory by vm.hasMoreHistory.collectAsState()
+    val historyError by vm.historyError.collectAsState()
     val loadingHistory by vm.loadingHistory.collectAsState()
     val loadingInitial by vm.initialLoad.collectAsState()
     val waitingForKeys by vm.waitingForKeys.collectAsState()
@@ -264,10 +265,16 @@ fun ChatScreen(vm: AppViewModel) {
         // grouping pass re-ran every frame, on the main thread, for the entire
         // conversation. That was a large part of why scrolling felt heavier
         // here than in the PWA.
-        val visible = remember(messages, hidden, banned, loadingInitial) {
+        // Whoever moderates keeps seeing what they hid, dimmed, so a hide can
+        // be undone and an erase decided on what is actually there.
+        val moderates = canModerate || moderatesGate
+        val purgeProviders by vm.purgeProviders.collectAsState()
+        val inboxPurgeProviders by vm.inboxPurgeProviders.collectAsState()
+        val erasedIds by vm.erasedIds.collectAsState()
+        val visible = remember(messages, hidden, banned, loadingInitial, moderates) {
             if (loadingInitial) emptyList()
             else messages.filter { msg ->
-                if (msg.id in hidden) return@filter false
+                if (msg.id in hidden && !moderates) return@filter false
                 val lower = msg.sender.lowercase()
                 if (lower !in banned) return@filter true
                 !com.pombo.android.core.ModComposition.banHides(banned[lower], msg.epoch)
@@ -561,6 +568,22 @@ fun ChatScreen(vm: AppViewModel) {
             }
         }
 
+        // What is on screen came from the local cache; the storage node
+        // refused to serve more, and the reader should know why.
+        historyError?.takeIf { visible.isNotEmpty() }?.let { refusal ->
+            val (title, detail) = historyErrorText(refusal, isPreview)
+            Column(
+                Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 8.dp),
+                horizontalAlignment = Alignment.CenterHorizontally
+            ) {
+                Text(title, color = Color.White.copy(alpha = 0.40f), fontSize = 13.sp)
+                Text(
+                    detail, color = Color.White.copy(alpha = 0.25f), fontSize = 11.sp,
+                    textAlign = androidx.compose.ui.text.style.TextAlign.Center
+                )
+            }
+        }
+
         Box(Modifier.weight(1f).fillMaxWidth()) {
             // Web renderMessages: while any loading signal is still live the
             // area shows a centred spinner; only once everything is quiescent
@@ -578,7 +601,18 @@ fun ChatScreen(vm: AppViewModel) {
                     val subExpired = paidStatus?.let {
                         it.paidUntil * 1000L <= System.currentTimeMillis() && !it.accessNow
                     } == true
-                    if (terminalEmpty && waitingForKeys && subExpired) {
+                    val refusal = historyError
+                    if (terminalEmpty && refusal != null) {
+                        val (title, detail) = historyErrorText(refusal, isPreview)
+                        Text(title, color = Color.White.copy(alpha = 0.40f), fontSize = 14.sp)
+                        Spacer(Modifier.height(4.dp))
+                        Text(
+                            detail,
+                            color = Color.White.copy(alpha = 0.25f), fontSize = 12.sp,
+                            textAlign = androidx.compose.ui.text.style.TextAlign.Center,
+                            modifier = Modifier.padding(horizontal = 32.dp)
+                        )
+                    } else if (terminalEmpty && waitingForKeys && subExpired) {
                         Text(
                             "Your subscription has expired",
                             color = Color.White.copy(alpha = 0.40f), fontSize = 14.sp
@@ -689,6 +723,11 @@ fun ChatScreen(vm: AppViewModel) {
                         // (group, then its separator above).
                         itemIndex = (groups.size - 1 - gi) * 2,
                         hidden = hidden,
+                        erased = erasedIds,
+                        canErase = if (ch.type == "dm") inboxPurgeProviders > 0 else purgeProviders > 0,
+                        onErase = { id -> vm.eraseMessage(id) },
+                        isDm = ch.type == "dm",
+                        isSealed = ch.wireIdentity == "sealed",
                         pins = pins,
                         activeId = activeId,
                         onActivate = { id -> activeId = if (activeId == id) null else id },
@@ -718,9 +757,11 @@ fun ChatScreen(vm: AppViewModel) {
                             composerInput.setTextAndPlaceCursorAtEnd(m.text)
                         },
                         onDelete = { id -> vm.deleteMessage(id) },
+                        ownPurgeApplies = { id -> vm.ownPurgeApplies(id) },
                         onPin = { id, pin -> vm.pinMessage(id, pin) },
                         onHide = { id, hide -> vm.hideMessage(id, hide) },
-                        onBan = { addr, client, protocol -> vm.banMemberLevels(addr, client, protocol) },
+                        onBan = { addr, client, protocol, purge -> vm.banMemberLevels(addr, client, protocol, purge) },
+                        purgeProviders = purgeProviders,
                         banGated = ch.type == "gated",
                         canClientBan = myAddr?.lowercase() ==
                             (ch.createdBy ?: ch.messageStreamId.substringBefore('/')).lowercase() ||
@@ -1437,3 +1478,23 @@ private fun ChannelTypeIcon(type: String, readOnly: Boolean, tint: Color, size: 
         }
     }
 }
+
+/** Empty-state copy for a history read the storage node refused (web ChatAreaUI._historyErrorText). */
+private fun historyErrorText(error: com.pombo.android.ChannelManager.HistoryError, isPreview: Boolean): Pair<String, String> =
+    if (error.reason == "storedAt")
+        "Channel history is temporarily unavailable" to
+            "The storage node did not say when these messages were stored. Reopen the channel to retry"
+    else when (error.status) {
+        403 -> if (isPreview)
+            "History is available to members" to "Join the channel to read past messages"
+        else
+            "Your access to this channel has ended" to "The storage node no longer serves its history to you"
+        401 -> if (error.signed)
+            "The storage node did not accept this read" to "Check the device clock and try again"
+        else
+            "History is available to members" to "Sign in with an account that has access to read past messages"
+        503 -> "Channel history is temporarily unavailable" to
+            "The storage node cannot reach the chain right now. Reopen the channel to retry"
+        else -> "Channel history could not be loaded" to
+            "The storage node answered HTTP ${error.status}. Reopen the channel to retry"
+    }

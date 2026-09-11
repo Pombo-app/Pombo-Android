@@ -67,6 +67,11 @@ class KeyResponderWorker(
                 privateKey
             )
         }
+        // Every stream this worker reads belongs to a gated channel it holds
+        // keys for, and a Pombo storage node only serves them to a signed read.
+        bridge.isGatedStream = { streamId ->
+            byMessageStream.containsKey(streamId.replace(Regex("-[2345]$"), "-1"))
+        }
         val sweepScope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
         // A read that failed is not "no requests pending". The sweep answers
         // whoever it SAW, so a storage node that times out turns this worker

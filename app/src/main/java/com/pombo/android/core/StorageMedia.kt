@@ -84,6 +84,13 @@ class StorageMedia(
          */
         suspend fun publishAnnounce(messageStreamId: String, announce: JSONObject, password: String?, isDm: Boolean): Long
 
+        /**
+         * Whether the announce is on storage, asked by the node's `stored`
+         * endpoint with the key that published it; null when nothing can be
+         * asked, so the confirm loop reads instead.
+         */
+        suspend fun announceStored(messageStreamId: String, messageId: String): Boolean? = null
+
         fun myAddress(): String?
         fun username(): String?
     }
@@ -118,7 +125,11 @@ class StorageMedia(
         val error: String? = null
     )
 
-    data class SendResult(val messageId: String, val announce: JSONObject, val storedChunks: Int?, val totalChunks: Int)
+    data class SendResult(
+        val messageId: String, val announce: JSONObject, val storedChunks: Int?, val totalChunks: Int,
+        /** Every chunk row a DM transfer wrote to the peer's inbox, under the transfer key. */
+        val chunkRows: List<DmSentRows.Row> = emptyList()
+    )
 
     /**
      * The `storage_file_announce` metadata, as a UI bubble and (later) a download
@@ -321,8 +332,16 @@ class StorageMedia(
          * (trap 1 of the migration, storage flavour).
          */
         expectedPublisher: String? = null,
+        /** The key that wrote the rows: lets the node's `stored` endpoint answer instead of a read. */
+        storedKey: String? = null,
         onProgress: ((Set<Int>) -> Unit)? = null
     ): Set<Int> {
+        if (storedKey != null) {
+            storedIndices(sid, windows, tsIndex, storedKey, label)?.let { present ->
+                onProgress?.invoke(present)
+                return present
+            }
+        }
         val found = Collections.synchronizedSet(HashSet<Int>())
         val expected = (expectedPublisher ?: transport.myAddress() ?: "").lowercase()
         val next = AtomicInteger(0)
@@ -372,6 +391,30 @@ class StorageMedia(
         }
         coroutineScope { repeat(min(4, max(1, windows.size))) { launch(Dispatchers.IO) { worker() } } }
         return found.toSet()
+    }
+
+    /**
+     * The verify by the node's `stored` endpoint: exact per row and signed by
+     * the key that wrote the chunks, for a stream the writer may not read (a
+     * peer's inbox). Null when no provider offers it, so the caller reads.
+     */
+    private suspend fun storedIndices(sid: String, windows: List<Win>, tsIndex: Map<String, Int>, privateKeyHex: String, label: String): Set<Int>? {
+        val providers = runCatching { endpoints.providersWith(sid, "stored") }.getOrDefault(emptyList())
+        if (providers.isEmpty()) return null
+        val byPartition = LinkedHashMap<Int, MutableList<Pair<StoragePurge.Target, Int>>>()
+        for ((key, i) in tsIndex) {
+            val p = key.substringBefore(':').toInt()
+            val ts = key.substringAfter(':').toLong()
+            if (windows.none { it.partition == p && ts >= it.from && ts <= it.to }) continue
+            byPartition.getOrPut(p) { ArrayList() }.add(StoragePurge.Target(ts, 0) to i)
+        }
+        val found = HashSet<Int>()
+        for ((partition, rows) in byPartition) {
+            val present = StoragePurge.storedOn(providers, sid, partition, rows.map { it.first }, privateKeyHex)
+                ?: run { Log.w(TAG, "$label: stored query unanswered on P$partition — reading instead"); return null }
+            for ((t, i) in rows) if (t in present) found.add(i)
+        }
+        return found
     }
 
     private fun windowedRate(hist: ArrayDeque<Pair<Long, Long>>, now: Long): Long? {
@@ -710,14 +753,14 @@ class StorageMedia(
                 val step = max(1, cand.size / 5)
                 var k = 0; while (k < cand.size && sample.size < 5) { sample.add(cand[k]); k += step }
                 val st = ReadStats()
-                val found = readStoredIndices(messageStreamId, windowsForIndices(sample), tsIndexForVerify(), bases, "auto-tune probe", st, expectedPublisher = verifyPublisher)
+                val found = readStoredIndices(messageStreamId, windowsForIndices(sample), tsIndexForVerify(), bases, "auto-tune probe", st, expectedPublisher = verifyPublisher, storedKey = chunkIdentityPk)
                 stored.addAll(found)
                 val missed = sample.filter { !found.contains(it) }
                 if (missed.isNotEmpty()) {
                     if (st.winsOk == 0) { Log.w(TAG, "auto-tune probe: every verify read failed — skipping judgement"); return }
                     if (atState != "drain") {
                         delay(2500)
-                        val found2 = readStoredIndices(messageStreamId, windowsForIndices(missed), tsIndexForVerify(), bases, "cut confirmation", expectedPublisher = verifyPublisher)
+                        val found2 = readStoredIndices(messageStreamId, windowsForIndices(missed), tsIndexForVerify(), bases, "cut confirmation", expectedPublisher = verifyPublisher, storedKey = chunkIdentityPk)
                         stored.addAll(found2)
                         val confirmed = missed.filter { !found2.contains(it) }
                         if (confirmed.isEmpty()) return
@@ -811,7 +854,7 @@ class StorageMedia(
                 var missing = missingIdx()
                 if (missing.isNotEmpty()) {
                     up.phase = "Verifying on storage…"; emit(up)
-                    val found = readStoredIndices(messageStreamId, allPartitionWindows(firstChunkTs - 15000, wall() + 1000), tsIndexForVerify(), bases, "full sweep", expectedPublisher = verifyPublisher) { fs ->
+                    val found = readStoredIndices(messageStreamId, allPartitionWindows(firstChunkTs - 15000, wall() + 1000), tsIndexForVerify(), bases, "full sweep", expectedPublisher = verifyPublisher, storedKey = chunkIdentityPk) { fs ->
                         stored.addAll(fs); updBar(); up.phase = "Verifying: ${stored.size}/$tc confirmed…"; emitThrottled(up)
                     }
                     stored.addAll(found); missing = missingIdx(); updBar()
@@ -823,7 +866,7 @@ class StorageMedia(
                     while (missing.isNotEmpty() && stalledReal < 2 && zeroProgress < 24 && perf() - scStart < 5 * 60000) {
                         delay(2500)
                         val before = missing.size
-                        stored.addAll(readStoredIndices(messageStreamId, windowsForIndices(missing), tsIndexForVerify(), bases, "drain", expectedPublisher = verifyPublisher))
+                        stored.addAll(readStoredIndices(messageStreamId, windowsForIndices(missing), tsIndexForVerify(), bases, "drain", expectedPublisher = verifyPublisher, storedKey = chunkIdentityPk))
                         missing = missingIdx(); updBar()
                         if (missing.size < before) { zeroProgress = 0; stalledReal = 0 } else {
                             zeroProgress++
@@ -848,7 +891,7 @@ class StorageMedia(
                     while (r < 30 && missing.isNotEmpty()) {
                         r++
                         delay(2000)
-                        stored.addAll(readStoredIndices(messageStreamId, windowsForIndices(missing), tsIndexForVerify(), bases, "post-repair pass $pass", expectedPublisher = verifyPublisher))
+                        stored.addAll(readStoredIndices(messageStreamId, windowsForIndices(missing), tsIndexForVerify(), bases, "post-repair pass $pass", expectedPublisher = verifyPublisher, storedKey = chunkIdentityPk))
                         val before = missing.size; missing = missingIdx(); updBar()
                         if (missing.size < before) { noProg = 0; continue }
                         noProg++; if (noProg >= 6) { Log.w(TAG, "$noProg reads with no progress — republishing the ${missing.size} missing again"); break }
@@ -884,14 +927,19 @@ class StorageMedia(
                 put("metadata", meta); put("replyTo", JSONObject.NULL)
             }
             val annTs = transport.publishAnnounce(messageStreamId, announce, password, isDm)
-            confirmAnnounce(messageStreamId, annTs, bases) { a, n -> up.phase = "Confirming announcement ($a/$n)…"; emit(up) }
+            confirmAnnounce(
+                messageStreamId, annTs, bases,
+                stored = if (isDm) ({ transport.announceStored(messageStreamId, msgId) }) else null
+            ) { a, n -> up.phase = "Confirming announcement ($a/$n)…"; emit(up) }
 
             val ok = failedChunks.isEmpty() && (storedCount == tc || storedCount == null)
             val secs = (perf() - uploadStart) / 1000.0
             up.phase = when { storedCount == null -> "Stored — UNVERIFIED (storage node issue)"; ok -> "Stored in %.1fs ✓".format(secs); else -> "Stored with gaps ($storedCount/$tc)" }
             up.stage = "done"; up.percent = 100; up.bytesSent = up.totalBytes ?: totalBytesSent
             emit(up); clearProgress(tid)
-            return SendResult(msgId, announce, storedCount, tc)
+            val rows = if (chunkIdentityPk == null) emptyList()
+                else chunkTsHist.flatMap { (i, hist) -> hist.map { DmSentRows.Row(messageStreamId, chunkPartition(i), it, 0, chunkIdentityPk) } }
+            return SendResult(msgId, announce, storedCount, tc, rows)
         } catch (e: Exception) {
             up.error = e.message; emit(up); clearProgress(tid); throw e
         } finally {
@@ -905,13 +953,17 @@ class StorageMedia(
     }
 
     /** Announce visibility check on P0, matching by publish timestamp. */
-    private suspend fun confirmAnnounce(messageStreamId: String, annTs: Long, bases: List<String>, onTry: (Int, Int) -> Unit) {
+    private suspend fun confirmAnnounce(
+        messageStreamId: String, annTs: Long, bases: List<String>,
+        stored: (suspend () -> Boolean?)? = null,
+        onTry: (Int, Int) -> Unit
+    ) {
         val waits = longArrayOf(1500, 3000, 6000, 10000, 15000, 25000)
         val from = annTs - 1500; val to = annTs + 1500; val p0 = StreamConstants.P_MESSAGES
         for (a in waits.indices) {
             onTry(a + 1, waits.size)
             delay(waits[a])
-            val seen = try {
+            val seen = stored?.invoke() ?: try {
                 var found = false
                 if (bases.isNotEmpty()) {
                     for (base in bases) {
@@ -931,6 +983,29 @@ class StorageMedia(
     }
 
     // ==================== download ====================
+
+    /**
+     * How a stored chunk row opens on a channel: DM chunks arrive already
+     * ECDH-decrypted from the bridge (identity here); epoch channels use the
+     * caller's kid-resolving opener; password channels the per-file key (one
+     * PBKDF2); public channels read as is.
+     */
+    fun chunkOpener(
+        meta: StorageFileMetadata, password: String?, isDm: Boolean,
+        epochOpener: ((ByteArray, Long) -> ByteArray?)?,
+        dmPairKey: ByteArray? = null
+    ): (ByteArray, Long) -> ByteArray = when {
+        isDm && dmPairKey != null ->
+            ({ c, _ -> SealedSenderCrypto.pairOpen(c, dmPairKey) ?: throw IllegalStateException("DM chunk did not open") })
+        !isDm && epochOpener != null ->
+            ({ c, ts -> epochOpener(c, ts) ?: throw IllegalStateException("epoch chunk did not open") })
+        !isDm && !password.isNullOrEmpty() && !meta.encSalt.isNullOrEmpty() -> {
+            val salt = Base64.decode(meta.encSalt, Base64.NO_WRAP)
+            val key = PomboCrypto.deriveKeyWithSalt(password, salt)
+            ({ c, _ -> PomboCrypto.decryptBinaryWithKey(c, key) })
+        }
+        else -> ({ c, _ -> c })
+    }
 
     /**
      * Download a storage-shared file described by a [StorageFileMetadata] (from a
@@ -983,19 +1058,7 @@ class StorageMedia(
             Log.i(TAG, "Storage download endpoints (${bases.size}): ${bases.joinToString()}")
         }
 
-        // Opener: DM chunks arrive already ECDH-decrypted from the bridge (identity
-        // here); epoch channels -> the caller's kid-resolving opener; password
-        // channels -> per-file key (one PBKDF2); public -> identity.
-        val opener: (ByteArray, Long) -> ByteArray = when {
-            !isDm && epochOpener != null ->
-                ({ c, ts -> epochOpener(c, ts) ?: throw IllegalStateException("epoch chunk did not open") })
-            !isDm && !password.isNullOrEmpty() && !meta.encSalt.isNullOrEmpty() -> {
-                val salt = Base64.decode(meta.encSalt, Base64.NO_WRAP)
-                val key = PomboCrypto.deriveKeyWithSalt(password, salt)
-                ({ c, _ -> PomboCrypto.decryptBinaryWithKey(c, key) })
-            }
-            else -> ({ c, _ -> c })
-        }
+        val opener = chunkOpener(meta, password, isDm, epochOpener)
 
         val isCompressed = meta.compression != "none" && meta.compression.isNotEmpty()
         val staging = withContext(Dispatchers.IO) {

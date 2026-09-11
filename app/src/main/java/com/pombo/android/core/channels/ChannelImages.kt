@@ -167,7 +167,7 @@ internal class ChannelImages(private val manager: ChannelManager) {
             epochKeys.loadPersistedState(messageStreamId)
             data = epochKeys.tryDecrypt(
                 messageStreamId, keysId, data,
-                gated = true, live = false, timestamp = meta.optLong("timestamp", 0L)
+                gated = true, live = false, timestamp = com.pombo.android.core.StoredAt.judgeTime(meta)
             )
                 ?: run { Log.w(TAG, "channelImage $label ($adminStreamId): epoch envelope present but key unavailable/decrypt failed"); return null }
         }

@@ -37,10 +37,10 @@ object StorageHttp {
     private const val CONNECT_TIMEOUT_MS = 20_000
 
     /** A decoded storage row. [content] is the hex-decoded bytes for a binary row (contentType 1), else null. */
-    data class Row(val content: ByteArray?, val timestamp: Long, val publisherId: String?)
+    data class Row(val content: ByteArray?, val timestamp: Long, val publisherId: String?, val sequenceNumber: Int = 0)
 
     /** Metadata-only row (no payload) from a `format=metadata` read. */
-    data class MetaRow(val timestamp: Long, val publisherId: String?)
+    data class MetaRow(val timestamp: Long, val publisherId: String?, val sequenceNumber: Int = 0)
 
     /** Raised on HTTP 4xx/5xx so callers can tell a 400 (no metadata format) apart. */
     class HttpStatusException(val code: Int) : Exception("HTTP $code")
@@ -53,12 +53,24 @@ object StorageHttp {
         return "$b/streams/${enc(sid)}/data/partitions/$partition/range?fromTimestamp=$fromT&toTimestamp=$toT$fmt"
     }
 
-    private fun open(url: String): HttpURLConnection =
-        (URL(url).openConnection() as HttpURLConnection).apply {
+    /**
+     * Extra request headers for a data read, decided by the app: the signed
+     * `x-pombo-*` headers on a gated channel's streams when the node announces
+     * `signedReads`. Null = send the read as is. Never consulted for
+     * `/capabilities`, which is not a data read.
+     */
+    @Volatile
+    var readHeaders: (suspend (url: String) -> Map<String, String>?)? = null
+
+    private suspend fun open(url: String): HttpURLConnection {
+        val extra = readHeaders?.invoke(url)
+        return (URL(url).openConnection() as HttpURLConnection).apply {
             requestMethod = "GET"
             connectTimeout = CONNECT_TIMEOUT_MS
             readTimeout = READ_TIMEOUT_MS
+            extra?.forEach { (k, v) -> setRequestProperty(k, v) }
         }
+    }
 
     /**
      * Streaming range read. Emits each row via [onRow] as it is parsed (return
@@ -97,7 +109,7 @@ object StorageHttp {
             val out = ArrayList<MetaRow>()
             conn.inputStream.bufferedReader(Charsets.UTF_8).use { reader ->
                 parseStorageArray(reader) { obj ->
-                    out.add(MetaRow(obj.optLong("timestamp"), obj.optStringOrNull("publisherId")))
+                    out.add(MetaRow(obj.optLong("timestamp"), obj.optStringOrNull("publisherId"), obj.optInt("sequenceNumber", 0)))
                 }
             }
             out
@@ -324,6 +336,7 @@ object StorageHttp {
             if (f.cur != '{'.code) throw IllegalStateException("unexpected endpoint response")
             f.advance(); f.skipWs() // past '{'
             var ts = 0L
+            var seq = 0
             var pub: String? = null
             var content: ByteArray? = null
             var contentType = 1
@@ -337,6 +350,7 @@ object StorageHttp {
                 when {
                     keyIs(key, kl, "content") -> if (f.cur == '"'.code) content = readHexValue(f) else skipValue(f)
                     keyIs(key, kl, "timestamp") -> ts = readLongValue(f)
+                    keyIs(key, kl, "sequenceNumber") -> seq = readLongValue(f).toInt()
                     keyIs(key, kl, "contentType") -> contentType = readLongValue(f).toInt()
                     keyIs(key, kl, "publisherId") -> if (f.cur == '"'.code) pub = readStringValue(f) else skipValue(f)
                     else -> skipValue(f)
@@ -345,7 +359,7 @@ object StorageHttp {
             }
             if (f.cur == '}'.code) f.advance()
             f.skipWs()
-            onRow(Row(if (contentType == 1) content else null, ts, pub))
+            onRow(Row(if (contentType == 1) content else null, ts, pub, seq))
             n++
         }
         return n
@@ -367,6 +381,58 @@ object StorageHttp {
             val b = (((hi and 0xf) + ((hi shr 6) * 9)) shl 4) or ((lo and 0xf) + ((lo shr 6) * 9))
             out[i] = b.toByte()
             j += 2
+        }
+        return out
+    }
+
+    /**
+     * Features a node announces on `GET /capabilities` (Pombo storage node
+     * fork). Null on 404, which is a vanilla node.
+     * @throws HttpStatusException on any other non-2xx response.
+     */
+    suspend fun fetchCapabilities(base: String): Set<String>? = withContext(Dispatchers.IO) {
+        val conn = open("${base.trimEnd('/')}/capabilities")
+        try {
+            val code = conn.responseCode
+            if (code == 404) return@withContext null
+            if (code / 100 != 2) throw HttpStatusException(code)
+            parseCapabilities(conn.inputStream.bufferedReader(Charsets.UTF_8).use { it.readText() })
+        } finally {
+            conn.disconnect()
+        }
+    }
+
+    /**
+     * JSON POST to a storage node (the purge endpoint). Returns the status and
+     * the response body, error bodies included; throws only when the host
+     * cannot be reached.
+     */
+    suspend fun postJson(url: String, body: String): Pair<Int, String> = withContext(Dispatchers.IO) {
+        val conn = (URL(url).openConnection() as HttpURLConnection).apply {
+            requestMethod = "POST"
+            connectTimeout = CONNECT_TIMEOUT_MS
+            readTimeout = 30_000
+            doOutput = true
+            setRequestProperty("Content-Type", "application/json")
+        }
+        try {
+            conn.outputStream.use { it.write(body.toByteArray(Charsets.UTF_8)) }
+            val code = conn.responseCode
+            val stream = if (code / 100 == 2) conn.inputStream else conn.errorStream
+            val text = stream?.bufferedReader(Charsets.UTF_8)?.use { it.readText() } ?: ""
+            code to text
+        } finally {
+            conn.disconnect()
+        }
+    }
+
+    /** `{"features":[...]}` → the string entries; anything malformed is an empty set. */
+    fun parseCapabilities(body: String): Set<String> {
+        val arr = runCatching { JSONObject(body).optJSONArray("features") }.getOrNull() ?: return emptySet()
+        val out = LinkedHashSet<String>()
+        for (i in 0 until arr.length()) {
+            val f = arr.opt(i)
+            if (f is String) out.add(f)
         }
         return out
     }

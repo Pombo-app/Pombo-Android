@@ -26,6 +26,27 @@ class StorageHttpTest {
         return out
     }
 
+    // ================= parseCapabilities =================
+
+    @Test
+    fun `parseCapabilities keeps the string features in order`() {
+        assertEquals(
+            listOf("metadata", "storedAt", "purge", "signedReads"),
+            StorageHttp.parseCapabilities(
+                """{"name":"pombo-storage-node","features":["metadata","storedAt","purge","signedReads"]}"""
+            ).toList()
+        )
+    }
+
+    @Test
+    fun `parseCapabilities drops non-string entries and tolerates malformed bodies`() {
+        assertEquals(setOf("purge"), StorageHttp.parseCapabilities("""{"features":["purge",7,null]}"""))
+        assertTrue(StorageHttp.parseCapabilities("""{"features":"purge"}""").isEmpty())
+        assertTrue(StorageHttp.parseCapabilities("""{}""").isEmpty())
+        assertTrue(StorageHttp.parseCapabilities("not json").isEmpty())
+        assertTrue(StorageHttp.parseCapabilities("").isEmpty())
+    }
+
     // ================= hexToBytes =================
 
     @Test
@@ -126,11 +147,13 @@ class StorageHttpTest {
 
     @Test
     fun `streamStorageRows decodes hex content and fields`() {
-        val r = rows("""[{"timestamp":10,"publisherId":"0xAbC","content":"00ff10a0","contentType":1}]""")
+        val r = rows("""[{"timestamp":10,"sequenceNumber":3,"publisherId":"0xAbC","content":"00ff10a0","contentType":1}]""")
         assertEquals(1, r.size)
         assertEquals(10L, r[0].timestamp)
+        assertEquals(3, r[0].sequenceNumber)
         assertEquals("0xAbC", r[0].publisherId)
         assertArrayEquals(byteArrayOf(0x00, 0xff.toByte(), 0x10, 0xA0.toByte()), r[0].content)
+        assertEquals(0, rows("""[{"timestamp":1,"content":"aa","contentType":1}]""")[0].sequenceNumber)
     }
 
     @Test

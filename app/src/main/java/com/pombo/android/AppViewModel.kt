@@ -1171,6 +1171,7 @@ class AppViewModel(app: Application) : AndroidViewModel(app), PomboBridge.Listen
     fun ensureEns(address: String?) = manager.ensureEns(address)
     val initialLoad get() = manager.initialLoad
     val hasMoreHistory get() = manager.hasMoreHistory
+    val historyError get() = manager.historyError
     val waitingForKeys get() = manager.waitingForKeys
     val loadingHistory get() = manager.loadingHistory
     val isPreview get() = manager.isPreview
@@ -1301,6 +1302,36 @@ class AppViewModel(app: Application) : AndroidViewModel(app), PomboBridge.Listen
         if (hide) "Message hidden" else "Message shown"
     ) { manager.hideMessage(id, hide) }
 
+    val purgeProviders get() = manager.purgeProviders
+    val inboxPurgeProviders get() = manager.inboxPurgeProviders
+    val erasedIds get() = manager.erasedIds
+
+    /** Hide, then remove the bytes from every provider that can; the toast says on how many. */
+    fun eraseMessage(id: String) = viewModelScope.launch {
+        try {
+            purgeToast(manager.eraseMessage(id))
+        } catch (e: Exception) {
+            toast(e.message ?: "Failed to erase message", com.pombo.android.ui.ToastKind.ERROR, 5000L)
+        }
+    }
+
+    private fun purgeToast(o: com.pombo.android.core.StoragePurge.Outcome) {
+        if (o.error != null) {
+            toast("Not erased from storage: ${o.error}", com.pombo.android.ui.ToastKind.ERROR, 5000L)
+            return
+        }
+        val plural = if (o.providers == 1) "" else "s"
+        val extra = buildString {
+            if (o.forbiddenOn > 0) append(" (${o.forbiddenOn} refused)")
+            if (o.unreachable > 0) append(" (${o.unreachable} unreachable)")
+        }
+        toast(
+            "Erased from storage on ${o.erasedOn} of ${o.providers} provider$plural$extra",
+            if (o.erasedOn == o.providers) com.pombo.android.ui.ToastKind.SUCCESS else com.pombo.android.ui.ToastKind.ERROR,
+            5000L
+        )
+    }
+
     fun pinMessage(id: String, pin: Boolean) = moderationAction(
         if (pin) "Message pinned" else "Message unpinned"
     ) { manager.pinMessage(id, pin) }
@@ -1322,14 +1353,17 @@ class AppViewModel(app: Application) : AndroidViewModel(app), PomboBridge.Listen
      * alone is free and publishes straight away.
      */
     fun banMemberLevels(
-        address: String, client: Boolean, protocol: Boolean, onDone: () -> Unit = {}
+        address: String, client: Boolean, protocol: Boolean, purge: Boolean = false, onDone: () -> Unit = {}
     ) = viewModelScope.launch {
         if (!client && !protocol) return@launch
         if (protocol) {
             chainAction("Ban member", "Cuts their access on the gate and rotates the channel key (1 transaction).") {
+                var banned = false
                 runWithToast("Banning…", "Member banned", "Failed to ban") {
                     manager.banMemberLevels(address, client, protocol = true)
+                    banned = true
                 }
+                if (banned && purge && client) eraseAuthorToast(address)
             }
         } else {
             try {
@@ -1337,9 +1371,33 @@ class AppViewModel(app: Application) : AndroidViewModel(app), PomboBridge.Listen
                 toast("User banned", com.pombo.android.ui.ToastKind.SUCCESS)
             } catch (e: Exception) {
                 toast(e.message ?: "Failed to ban", com.pombo.android.ui.ToastKind.ERROR, 5000L)
+                onDone()
+                return@launch
             }
+            if (purge) eraseAuthorToast(address)
         }
         onDone()
+    }
+
+    /** The storage side of a ban: erase what the author wrote, and say how much left where. */
+    private suspend fun eraseAuthorToast(address: String) {
+        try {
+            val r = manager.eraseAuthorMessages(address)
+            val o = r.outcome
+            val extra = buildString {
+                if (r.skipped > 0) append(" (${r.skipped} not found)")
+                if (o.forbiddenOn > 0) append(" (${o.forbiddenOn} refused)")
+                if (o.unreachable > 0) append(" (${o.unreachable} unreachable)")
+            }
+            toast(
+                "Erased ${r.messages} message${if (r.messages == 1) "" else "s"} from storage on " +
+                    "${o.erasedOn} of ${o.providers} provider${if (o.providers == 1) "" else "s"}$extra",
+                if (o.erasedOn == o.providers) com.pombo.android.ui.ToastKind.SUCCESS else com.pombo.android.ui.ToastKind.ERROR,
+                6000L
+            )
+        } catch (e: Exception) {
+            toast("Banned, but not erased from storage: ${e.message}", com.pombo.android.ui.ToastKind.ERROR, 6000L)
+        }
     }
 
     /**
@@ -2857,6 +2915,10 @@ class AppViewModel(app: Application) : AndroidViewModel(app), PomboBridge.Listen
                             com.pombo.android.core.StreamConstants.deriveAdminId(info.streamId),
                             label = info.displayName
                         )
+                        // Gated entries are epoch envelopes and never render as
+                        // a preview; a storage node with signed reads refuses
+                        // the read to a non-member anyway.
+                        if (info.type == "gated") return@launch
                         val preview = previewStore.dedup(info.streamId) {
                             manager.fetchLatestPreview(info.streamId)
                         } ?: return@launch
@@ -3366,8 +3428,14 @@ class AppViewModel(app: Application) : AndroidViewModel(app), PomboBridge.Listen
         try { manager.editMessage(id, text) } catch (e: Exception) { _lastError.value = e.message }
     }
 
+    fun ownPurgeApplies(id: String): Boolean = manager.ownPurgeApplies(id)
+
     fun deleteMessage(id: String) = viewModelScope.launch {
-        try { manager.deleteMessage(id) } catch (e: Exception) { _lastError.value = e.message }
+        try {
+            manager.deleteMessage(id)?.let { purgeToast(it) }
+        } catch (e: Exception) {
+            _lastError.value = e.message
+        }
     }
 
     fun notifyTyping() = manager.sendTyping()

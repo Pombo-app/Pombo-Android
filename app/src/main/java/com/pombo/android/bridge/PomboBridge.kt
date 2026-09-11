@@ -42,6 +42,13 @@ class PomboBridge(
      *  preference applies from boot rather than the first reconnect. */
     initialRpcUrls: List<String> = emptyList()
 ) {
+    /**
+     * Whether a stream belongs to a gated channel — the page asks before a
+     * storage read, because only those reads are signed (a public channel's
+     * reader stays anonymous to the node). Answered synchronously on the
+     * WebView binder thread, so keep it a map lookup.
+     */
+    @Volatile var isGatedStream: (streamId: String) -> Boolean = { false }
 
     interface Listener {
         fun onBridgeStatus(status: String)
@@ -396,6 +403,11 @@ class PomboBridge(
          * ~1–2 ms of ECDSA on the JavaBridge thread beats a correlation
          * round-trip per publish. Empty string = no identity / bad input.
          */
+        @JavascriptInterface
+        fun isGatedStream(streamId: String): Boolean = try {
+            this@PomboBridge.isGatedStream(streamId)
+        } catch (e: Exception) { false }
+
         @JavascriptInterface
         fun signMessagePayload(payloadB64: String): String = try {
             com.pombo.android.core.SigningOracle.signMessage(

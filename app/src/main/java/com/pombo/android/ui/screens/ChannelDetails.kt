@@ -803,6 +803,7 @@ private fun ChannelMembersPanel(vm: AppViewModel, channel: Channel, canModerate:
     var batchText by remember { mutableStateOf("") }
     var confirmRemove by remember { mutableStateOf<String?>(null) }
     var confirmBan by remember { mutableStateOf<String?>(null) }
+    val purgeProviders by vm.purgeProviders.collectAsState()
     var kebabFor by remember { mutableStateOf<String?>(null) }
     // N-D: TOKEN/NFT/PAID gates have no owner-minted members — allow() is
     // NONE-only on-chain, so manual add would be a guaranteed revert there.
@@ -1072,9 +1073,10 @@ private fun ChannelMembersPanel(vm: AppViewModel, channel: Channel, canModerate:
             // Receivers reject an ADMIN_STATE from anyone but the creator, so
             // a moderator can only reach for the protocol level.
             canClientBan = myAddress?.lowercase() == creatorAddr,
+            purgeProviders = purgeProviders,
             onDismiss = { confirmBan = null },
-            onConfirm = { client, protocol ->
-                vm.banMemberLevels(addr, client, protocol) { reloadKey++ }
+            onConfirm = { client, protocol, purge ->
+                vm.banMemberLevels(addr, client, protocol, purge) { reloadKey++ }
                 confirmBan = null
             }
         )
@@ -1154,11 +1156,17 @@ internal fun BanMemberDialog(
     canClientBan: Boolean,
     /** The gate's ban is the owner's alone — a moderator only hides. */
     canProtocolBan: Boolean = gated,
+    /** Storage providers of the channel that announce `purge`. */
+    purgeProviders: Int = 0,
     onDismiss: () -> Unit,
-    onConfirm: (client: Boolean, protocol: Boolean) -> Unit
+    onConfirm: (client: Boolean, protocol: Boolean, purge: Boolean) -> Unit
 ) {
     var client by remember { mutableStateOf(canClientBan) }
     var protocol by remember { mutableStateOf(gated && canProtocolBan) }
+    var purge by remember { mutableStateOf(false) }
+    // The storage side needs the hide: bytes leaving storage do nothing for
+    // a client that still holds the message.
+    val canPurge = purgeProviders > 0 && canClientBan
     val red = PomboColors.Danger
 
     androidx.compose.ui.window.Dialog(onDismissRequest = onDismiss) {
@@ -1194,6 +1202,20 @@ internal fun BanMemberDialog(
                 enabled = gated && canProtocolBan
             ) { protocol = it }
 
+            Spacer(Modifier.height(10.dp))
+
+            BanLevelRow(
+                title = "Erase their messages from storage",
+                detail = when {
+                    purgeProviders == 0 -> "No storage provider of this channel can erase messages."
+                    !canClientBan -> "Only the channel creator can erase, together with the hide."
+                    else -> "Removes their messages and files from the $purgeProviders storage " +
+                        "provider${if (purgeProviders == 1) "" else "s"} that can. Cannot be undone."
+                },
+                checked = purge && canPurge && client,
+                enabled = canPurge && client
+            ) { purge = it }
+
             Spacer(Modifier.height(18.dp))
             Row {
                 Box(
@@ -1217,7 +1239,7 @@ internal fun BanMemberDialog(
                             RoundedCornerShape(12.dp)
                         )
                         .clickableNoRipple {
-                            if (armed) onConfirm(client && canClientBan, protocol && gated)
+                            if (armed) onConfirm(client && canClientBan, protocol && gated, purge && canPurge && client)
                         }
                         .padding(vertical = 10.dp),
                     contentAlignment = Alignment.Center

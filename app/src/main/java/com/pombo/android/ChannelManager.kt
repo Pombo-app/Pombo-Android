@@ -106,7 +106,14 @@ data class UiMessage(
     /** Persistent File Sharing announce (wire type `storage_file_announce`). */
     val storageFile: com.pombo.android.core.StorageMedia.StorageFileMetadata? = null,
     /** Epoch the message was written under (gated channels), from its kid. */
-    val epoch: Int? = null
+    val epoch: Int? = null,
+    /** Envelope coordinates on the storage node: the signed envelope time and
+     *  its sequence number, what a purge addresses. Zero/null when unknown. */
+    val envelopeTs: Long = 0L,
+    val seq: Int? = null,
+    /** Who signed the envelope: the session pseudonym on public/password, the
+     *  account on gated. Null on a message added locally. */
+    val publisherId: String? = null
 )
 
 /**
@@ -231,7 +238,7 @@ class ChannelManager(
                     entries.add(com.pombo.android.core.EpochKeyManager.Entry(
                         content,
                         publisher,
-                        meta.optLong("timestamp", 0L)))
+                        com.pombo.android.core.StoredAt.judgeTime(meta)))
                 }
             } catch (e: kotlinx.coroutines.CancellationException) {
                 throw e   // channel switch — propagate, never swallow
@@ -342,7 +349,7 @@ class ChannelManager(
                     entries.add(com.pombo.android.core.EpochKeyManager.Entry(
                         content,
                         publisher,
-                        meta.optLong("timestamp", 0L)))
+                        com.pombo.android.core.StoredAt.judgeTime(meta)))
                 }
             } catch (e: kotlinx.coroutines.CancellationException) {
                 throw e
@@ -607,10 +614,43 @@ class ChannelManager(
                 return publishChannel(channelByStream(messageStreamId), messageStreamId, StreamConstants.P_MESSAGES, announce, password)
             }
 
+            override suspend fun announceStored(messageStreamId: String, messageId: String): Boolean? {
+                val rows = dmSentRows.rowsOf(messageId)
+                    .filter { it.streamId == messageStreamId && it.partition == StreamConstants.P_MESSAGES }
+                if (rows.isEmpty()) return null
+                val providers = runCatching { storageEndpoints.providersWith(messageStreamId, "stored") }.getOrDefault(emptyList())
+                if (providers.isEmpty()) return null
+                for (r in rows) {
+                    val present = com.pombo.android.core.StoragePurge.storedOn(
+                        providers, messageStreamId, r.partition,
+                        listOf(com.pombo.android.core.StoragePurge.Target(r.timestamp, r.sequenceNumber)), r.privateKeyHex
+                    ) ?: return null
+                    if (present.isNotEmpty()) return true
+                }
+                return false
+            }
+
             override fun myAddress(): String? = this@ChannelManager.myAddress()
             override fun username(): String? = this@ChannelManager.myUsername()
         }
     )
+
+    init {
+        // Storage reads of a gated channel's streams are signed on nodes that
+        // announce it: the bridge page asks which streams are gated before the
+        // SDK's own resends, and the native direct reads (file chunks) get
+        // their headers here. Public channels stay anonymous to the node.
+        bridge.isGatedStream = { streamId -> channelByStream(streamId)?.type == "gated" }
+        com.pombo.android.core.StorageHttp.readHeaders = headers@{ url ->
+            val parsed = com.pombo.android.core.StorageReadSigner.parse(url) ?: return@headers null
+            if (parsed.streamId.endsWith("-3")) return@headers null
+            val ownInbox = myAddress()?.lowercase()?.let { parsed.streamId == "$it/Pombo-DM-1" } == true
+            if (!ownInbox && channelByStream(parsed.streamId)?.type != "gated") return@headers null
+            val features = storageEndpoints.probeCapabilities(parsed.base) ?: return@headers null
+            if ("signedReads" !in features) return@headers null
+            com.pombo.android.core.StorageReadSigner.headers(parsed, myPrivateKey())
+        }
+    }
 
     // distinctBy: the stream id keys the channel-list LazyColumn, so ONE
     // duplicate row in the persisted store crashes the app at first paint
@@ -794,6 +834,14 @@ class ChannelManager(
             epochKeys.retryRequestIfWaiting(channel.messageStreamId, keysId)
         }
     }
+
+    /** How many of the open channel's storage providers announce `purge`: zero hides "Erase from storage". */
+    private val _purgeProviders = MutableStateFlow(0)
+    val purgeProviders: StateFlow<Int> = _purgeProviders.asStateFlow()
+
+    /** Messages this session erased from storage (still hidden; nothing left to unhide). */
+    private val _erasedIds = MutableStateFlow<Set<String>>(emptySet())
+    val erasedIds: StateFlow<Set<String>> = _erasedIds.asStateFlow()
 
     private val _hasMoreHistory = MutableStateFlow(false)
     val hasMoreHistory: StateFlow<Boolean> = _hasMoreHistory.asStateFlow()
@@ -2141,7 +2189,12 @@ class ChannelManager(
         /** Password channels seal P0 payloads; without it every entry is skipped. */
         password: String? = null
     ): com.pombo.android.core.LatestMessageStore.Preview? {
-        val isDmStream = channelByStream(messageStreamId)?.type == "dm"
+        val known = channelByStream(messageStreamId)
+        val isDmStream = known?.type == "dm"
+        // Gated entries are epoch envelopes and never render as a preview,
+        // and a storage node with signed reads refuses the read to anyone
+        // without access: nothing to fetch.
+        if (known?.type == "gated") return null
         return try {
             // Resends need a live client; without this the call fails instantly
             // on a cold start and the preview silently never appears.
@@ -2563,6 +2616,96 @@ class ChannelManager(
 
     suspend fun hideMessage(messageId: String, hide: Boolean) = admin.hideMessage(messageId, hide)
 
+    /**
+     * Erase a message from every storage provider that can. Hides it first
+     * when it is not hidden yet: the bytes leaving storage does nothing for a
+     * client that still holds the message. Web MessageContextMenuUI
+     * 'erase-message' + storagePurge.eraseMessage.
+     */
+    suspend fun eraseMessage(messageId: String): com.pombo.android.core.StoragePurge.Outcome {
+        val channel = _current.value ?: throw IllegalStateException("No channel open")
+        val msg = _messages.value.find { it.id == messageId } ?: throw IllegalStateException("Message not found")
+        val key = myPrivateKey() ?: throw IllegalStateException("No identity")
+        if (channel.type == "dm") return eraseReceivedDm(channel, msg, key)
+        val groups = messageGroups(channel, msg)
+        if (messageId !in _hiddenIds.value) admin.hideMessage(messageId, true)
+        val outcome = com.pombo.android.core.StoragePurge.purgeGroups(storageEndpoints, channel.messageStreamId, groups, key)
+        if (outcome.erasedOn > 0) _erasedIds.value = _erasedIds.value + messageId
+        return outcome
+    }
+
+    /** The storage rows a message occupies: its own, plus the chunks of a storage-shared file. */
+    private suspend fun messageGroups(channel: Channel, msg: UiMessage): List<com.pombo.android.core.StoragePurge.Group> {
+        val streamId = channel.messageStreamId
+        val own = com.pombo.android.core.StoragePurge.Group(
+            StreamConstants.P_MESSAGES, listOf(resolvePurgeTarget(streamId, StreamConstants.P_MESSAGES, msg))
+        )
+        val chunks = msg.storageFile?.let {
+            com.pombo.android.core.StoragePurge.fileChunkGroups(storageEndpoints, streamId, it, open = files.chunkOpener(channel, it))
+        }
+        // Chunks before the announce: a pass that fails on the chunks leaves
+        // the announce in place, never chunks nobody can address any more.
+        return (chunks ?: emptyList()) + own
+    }
+
+    data class AuthorPurge(val outcome: com.pombo.android.core.StoragePurge.Outcome, val messages: Int, val skipped: Int)
+
+    /**
+     * Erase everything one author wrote that this client holds, the storage
+     * side of a ban: their messages and the chunks of their files. A message
+     * whose rows cannot be located is skipped and counted, never guessed at.
+     */
+    suspend fun eraseAuthorMessages(address: String): AuthorPurge {
+        val channel = _current.value ?: throw IllegalStateException("No channel open")
+        val key = myPrivateKey() ?: throw IllegalStateException("No identity")
+        val theirs = _messages.value.filter { it.sender.equals(address, ignoreCase = true) }
+        val byPartition = LinkedHashMap<Int, MutableList<com.pombo.android.core.StoragePurge.Target>>()
+        var skipped = 0
+        for (msg in theirs) {
+            try {
+                for (g in messageGroups(channel, msg)) {
+                    byPartition.getOrPut(g.partition) { ArrayList() }.addAll(g.targets)
+                }
+            } catch (e: Exception) {
+                skipped++
+                Log.w(TAG, "Erase of ${msg.id} skipped: ${e.message}")
+            }
+        }
+        val groups = byPartition.map { (p, t) -> com.pombo.android.core.StoragePurge.Group(p, t) }
+            .sortedBy { if (it.partition == StreamConstants.P_MESSAGES) 1 else 0 }
+        val outcome = com.pombo.android.core.StoragePurge.purgeGroups(storageEndpoints, channel.messageStreamId, groups, key)
+        if (outcome.erasedOn > 0) _erasedIds.value = _erasedIds.value + theirs.map { it.id }
+        return AuthorPurge(outcome, theirs.size - skipped, skipped)
+    }
+
+    /**
+     * The envelope coordinates a purge addresses. Messages read from storage
+     * or live carry them; anything else is looked up by its envelope time on a
+     * provider's metadata read (signed by the native reader when gated).
+     */
+    private suspend fun resolvePurgeTarget(streamId: String, partition: Int, msg: UiMessage): com.pombo.android.core.StoragePurge.Target {
+        val exact = msg.envelopeTs > 0L
+        val anchor = if (exact) msg.envelopeTs else msg.timestamp
+        if (anchor <= 0L) throw IllegalStateException("Message has no timestamp")
+        if (exact) msg.seq?.let { return com.pombo.android.core.StoragePurge.Target(anchor, it) }
+        // Without the envelope time (an own message added locally before its
+        // echo) the payload time is this clock a few ms before the envelope's,
+        // so the lookup takes a window and keeps the closest row.
+        val window = if (exact) 0L else com.pombo.android.core.StoragePurge.LOOKUP_WINDOW_MS
+        val urls = storageEndpoints.providersWith(streamId, "metadata").flatMap { it.urls }
+        if (urls.isEmpty()) throw IllegalStateException("No storage provider can identify this message")
+        var rows: List<com.pombo.android.core.StorageHttp.MetaRow>? = null
+        for (url in urls) {
+            rows = runCatching {
+                com.pombo.android.core.StorageHttp.directFetchRangeMeta(url, streamId, partition, anchor - window, anchor + window)
+            }.getOrNull()
+            if (rows != null) break
+        }
+        return com.pombo.android.core.StoragePurge.closestTarget(
+            rows ?: throw IllegalStateException("Could not look the message up on storage"), anchor
+        )
+    }
+
     suspend fun pinMessage(messageId: String, pin: Boolean) = admin.pinMessage(messageId, pin)
 
     suspend fun banMember(address: String, ban: Boolean = true) = admin.banMember(address, ban)
@@ -2607,6 +2750,7 @@ class ChannelManager(
                     channel, StreamConstants.P_MESSAGES, MEMBER_CATCHUP_COUNT, 20_000, 30_000)
                     ?: continue
                 if (!stillCurrent(generation)) return@launch
+                page.readError?.let { _historyError.value = it }
                 for (i in 0 until page.entries.length()) {
                     val entry = page.entries.optJSONObject(i) ?: continue
                     val meta = entry.optJSONObject("meta") ?: JSONObject()
@@ -2823,6 +2967,22 @@ class ChannelManager(
      */
     private val dmReceived = HashMap<String, MutableList<UiMessage>>()
 
+    /** Storage rows this session wrote to peers' inboxes, with the throwaway keys that signed them. */
+    private val dmSentRows = com.pombo.android.core.DmSentRows()
+    private val _inboxPurgeProviders = MutableStateFlow(0)
+    /** Providers of the own inbox that announce `purge`: what a received DM can be erased from. */
+    val inboxPurgeProviders: StateFlow<Int> = _inboxPurgeProviders.asStateFlow()
+
+    internal fun rememberDmFileRows(messageId: String, rows: List<com.pombo.android.core.DmSentRows.Row>) =
+        rows.forEach { dmSentRows.remember(messageId, it) }
+
+    /** The pair key that seals stored DM media with this peer, for opening chunk rows outside a download. */
+    internal suspend fun dmPairKeyFor(peer: String): ByteArray? {
+        val myPk = myPrivateKey() ?: return null
+        val pk = peerPubKey(peer) ?: return null
+        return com.pombo.android.core.SealedSenderCrypto.pairKey(myPk, pk)
+    }
+
     /**
      * Native sealed-sender open (SealedSenderCrypto, vector-locked) — the key
      * stays in Kotlin. One result per item: {sender, message} or NULL for
@@ -2874,9 +3034,15 @@ class ChannelManager(
         val (envelope, ephemeralPk) = withContext(Dispatchers.Default) {
             com.pombo.android.core.SealedSenderCrypto.seal(message, myPk, recipientAddress, recipientPublicKey)
         }
-        return bridge.call("publishAs", JSONObject()
+        val res = bridge.call("publishAs", JSONObject()
             .put("streamId", streamId).put("partition", partition)
             .put("content", envelope).put("privateKey", ephemeralPk), timeoutMs)
+        val id = message.optString("id")
+        val ts = res.optLong("timestamp", 0L)
+        if (id.isNotEmpty() && ts > 0L) {
+            dmSentRows.remember(id, com.pombo.android.core.DmSentRows.Row(streamId, partition, ts, 0, ephemeralPk))
+        }
+        return res
     }
 
     /**
@@ -2895,7 +3061,9 @@ class ChannelManager(
         publisherIdRaw: String?,
         /** Already opened by the page-wide batch in [loadInboxHistory]. */
         preSender: String? = null,
-        preData: JSONObject? = null
+        preData: JSONObject? = null,
+        /** The row's storage coordinates, what erasing it from the inbox addresses. */
+        meta: JSONObject? = null
     ) {
         val me = myAddress()?.lowercase() ?: return
         if (envelope !is JSONObject) return
@@ -2937,6 +3105,12 @@ class ChannelManager(
         // simply not knowable before. The ~1ms ECDH spent on a blocked peer's
         // message is the documented cost of sealed sender (brief §5.3).
         if (isBlockedPeer(sender)) return
+        val payloadTs = data.optLong("timestamp", 0L)
+        val envTs = meta?.optLong("timestamp", 0L) ?: 0L
+        if (payloadTs > 0) {
+            if (payloadTs > System.currentTimeMillis() + TIMESTAMP_TOLERANCE_MS) return
+            if (envTs > 0 && payloadTs > envTs + TIMESTAMP_TOLERANCE_MS) return
+        }
         // Same stamp as the channel ingest (applyAccount): identity for every
         // downstream reader comes from the proof, never from the wire.
         data.put("account", sender)
@@ -2991,7 +3165,14 @@ class ChannelManager(
             handleImageManifest(channel, data, showBubble = onScreen)
         }
 
-        val msg = toUiMessage(data, myAddress() ?: return) ?: return
+        val msg = toUiMessage(data, myAddress() ?: return)?.let { m ->
+            if (meta == null) m
+            else m.copy(
+                envelopeTs = meta.optLong("timestamp", 0L),
+                seq = meta.optInt("sequenceNumber", -1).takeIf { it >= 0 },
+                publisherId = publisherIdRaw
+            )
+        } ?: return
 
         val list = synchronized(dmReceived) { dmReceived.getOrPut(sender) { mutableListOf() } }
         synchronized(list) {
@@ -3054,18 +3235,25 @@ class ChannelManager(
             val opened = openSealedBatch(items)
             val tDecrypt = System.currentTimeMillis()
 
+            var withStoredAt = 0
+            var dropped = 0
             for (i in 0 until n) {
                 val entry = arr.optJSONObject(i) ?: continue
+                val meta = entry.optJSONObject("meta")
+                if (meta?.has("storedAt") == true) withStoredAt++
+                if (com.pombo.android.core.StoredAt.forwardDated(meta, TIMESTAMP_TOLERANCE_MS)) { dropped++; continue }
                 val res = opened?.takeIf { !it.isNull(i) }?.optJSONObject(i)
                 routeInboxMessage(
                     entry.opt("content"), publishers[i],
                     preSender = res?.optString("sender")?.lowercase()?.ifEmpty { null },
-                    preData = res?.optJSONObject("message")
+                    preData = res?.optJSONObject("message"),
+                    meta = entry.optJSONObject("meta")
                 )
             }
             android.util.Log.d("PomboPerf",
                 "inbox replay: resend=${tResend - t0}ms decrypt=${tDecrypt - tResend}ms " +
                     "route=${System.currentTimeMillis() - tDecrypt}ms n=$n")
+            android.util.Log.d(TAG, "inbox history: n=$n withStoredAt=$withStoredAt forwardDated=$dropped")
         } catch (e: Exception) {
             // No storage on the inbox, or the node is down — live traffic still
             // works, the user just starts without back-history.
@@ -3615,7 +3803,9 @@ class ChannelManager(
             if (!stillCurrent(generationAtStart)) return DmPage(0, false, false)
 
             val arr = res.optJSONArray("messages") ?: JSONArray()
-            val hasMore = res.optBoolean("hasMore", false)
+            val refusal = readErrorOf(res)
+            if (refusal != null) _historyError.value = refusal
+            val hasMore = refusal == null && res.optBoolean("hasMore", false)
             val existing = _messages.value.map { it.id }.toSet()
             val fresh = mutableListOf<UiMessage>()
 
@@ -3640,6 +3830,7 @@ class ChannelManager(
             for (i in 0 until n) {
                 val entry = arr.optJSONObject(i) ?: continue
                 val meta = entry.optJSONObject("meta") ?: JSONObject()
+                if (com.pombo.android.core.StoredAt.forwardDated(meta, TIMESTAMP_TOLERANCE_MS)) continue
                 val opened = openedAll?.takeIf { !it.isNull(i) }?.optJSONObject(i)
                 val plain: JSONObject
                 val sender: String
@@ -3661,7 +3852,13 @@ class ChannelManager(
                 // My own messages live in local storage, never in my inbox;
                 // and this timeline shows one peer only.
                 if (sender == me || sender != peer) continue
-                meta.optLong("timestamp", 0L).takeIf { it > 0 }?.let { ts ->
+                val envTs = meta.optLong("timestamp", 0L)
+                val payloadTs = plain.optLong("timestamp", 0L)
+                if (payloadTs > 0) {
+                    if (payloadTs > System.currentTimeMillis() + TIMESTAMP_TOLERANCE_MS) continue
+                    if (envTs > 0 && payloadTs > envTs + TIMESTAMP_TOLERANCE_MS) continue
+                }
+                envTs.takeIf { it > 0 }?.let { ts ->
                     if (oldestTimestamp == 0L || ts < oldestTimestamp) oldestTimestamp = ts
                 }
                 plain.put("account", sender)
@@ -3670,7 +3867,11 @@ class ChannelManager(
                     "text", "image", "file_announce", "storage_file_announce" -> {
                         val id = plain.optString("id")
                         if (id.isNotEmpty() && id !in existing) {
-                            toUiMessage(plain, me)?.let { fresh.add(it) }
+                            toUiMessage(plain, me)?.copy(
+                                envelopeTs = envTs,
+                                seq = meta.optInt("sequenceNumber", -1).takeIf { it >= 0 },
+                                publisherId = meta.optString("publisherId").ifEmpty { null }
+                            )?.let { fresh.add(it) }
                         }
                     }
                     "edit", "delete" -> applyOverride(plain, peer)
@@ -3750,7 +3951,10 @@ class ChannelManager(
             edited = data.optBoolean("_edited", false),
             // DMs are authenticated by the ECDH envelope itself: only the two
             // parties can produce one, so there is no per-message badge.
-            verified = true
+            verified = true,
+            envelopeTs = data.optLong("_timestamp", 0L),
+            seq = if (data.has("_seq")) data.optInt("_seq") else null,
+            publisherId = data.optStringOrNull("_publisherId")
         )
     }
 
@@ -3856,7 +4060,7 @@ class ChannelManager(
         // announces) both route; everything else is noise. The router owns
         // the open-first inversion.
         if (envelope.optString("e") != "aes-256-gcm" && envelope.optString("type").isEmpty()) return
-        scope.launch { routeInboxMessage(envelope, publisherId) }
+        scope.launch { routeInboxMessage(envelope, publisherId, meta = meta) }
     }
 
     private suspend fun verifyPasswordChallenge(adminStreamId: String, password: String) {
@@ -4393,6 +4597,31 @@ class ChannelManager(
             // Web preloadDeletePermission: fire-and-forget so the sheet and the
             // context menu have an answer before the user asks for one.
             refreshModerationPermission(channel, preview)
+            // Which providers can erase decides whether moderation offers it.
+            _purgeProviders.value = 0
+            _erasedIds.value = emptySet()
+            _inboxPurgeProviders.value = 0
+            scope.launch {
+                // The resolution is an SDK call through the bridge; right after
+                // a boot or an account switch the client is still connecting.
+                val t0 = System.currentTimeMillis()
+                val n = runCatching {
+                    bridge.awaitConnected()
+                    storageEndpoints.providersWith(channel.messageStreamId, "purge").size
+                }.onFailure { android.util.Log.w(TAG, "purge providers ${channel.messageStreamId.takeLast(24)}: ${it.message}") }
+                    .getOrDefault(0)
+                android.util.Log.d(TAG, "purge providers ${channel.messageStreamId.takeLast(24)}: $n in ${System.currentTimeMillis() - t0}ms")
+                if (_current.value?.messageStreamId == channel.messageStreamId) _purgeProviders.value = n
+                if (channel.type == "dm") {
+                    val inbox = myAddress()?.lowercase()?.let { "$it/Pombo-DM-1" }
+                    val own = if (inbox == null) 0
+                        else runCatching { storageEndpoints.providersWith(inbox, "purge").size }
+                            .onFailure { android.util.Log.w(TAG, "purge providers of own inbox: ${it.message}") }
+                            .getOrDefault(0)
+                    android.util.Log.d(TAG, "purge providers of own inbox: $own")
+                    if (_current.value?.messageStreamId == channel.messageStreamId) _inboxPurgeProviders.value = own
+                }
+            }
             _messages.value = emptyList()
             _reactions.value = emptyMap()
             _pins.value = emptyList()
@@ -4405,6 +4634,7 @@ class ChannelManager(
             synchronized(this) { pendingOverrides.clear(); deletedIds.clear() }
             _hasMoreHistory.value = false
             _loadingHistory.value = false
+            _historyError.value = null
             // Both are per-channel verdicts — carrying them across a switch
             // shows the previous room's key/subscription state on this one.
             _waitingForKeys.value = false
@@ -4784,7 +5014,17 @@ class ChannelManager(
     }
 
     /** A resend page already decrypted: entry `i` of [entries] is [contents]`[i]`. */
-    private class HistoryPage(val entries: JSONArray, val contents: List<Any?>)
+    /** Why a storage node refused the read (HTTP status), when it did. */
+    /** [reason] names a refusal the client itself made, e.g. `storedAt` for a page the node stored without saying when. */
+    data class HistoryError(val status: Int, val signed: Boolean, val reason: String? = null)
+
+    private class HistoryPage(
+        val entries: JSONArray, val contents: List<Any?>, val readError: HistoryError? = null
+    )
+
+    private val _historyError = MutableStateFlow<HistoryError?>(null)
+    /** The refusal behind an empty history, for the empty state to explain. */
+    val historyError: StateFlow<HistoryError?> = _historyError.asStateFlow()
 
     /**
      * One partition's resend, decrypted but not yet applied.
@@ -4837,9 +5077,26 @@ class ChannelManager(
                     "drain=${res.optInt("drainMs")}ms tail=${res.optInt("decryptMs")}ms " +
                     "post=${System.currentTimeMillis() - tResend}ms n=${arr.length()}"
             )
-            HistoryPage(arr, contents)
+            val readError = res.optJSONObject("readError")?.let {
+                HistoryError(it.optInt("status", 0), it.optBoolean("signed", false), it.optString("reason").ifEmpty { null })
+            }
+            HistoryPage(arr, contents, readError)
         }
-    } catch (e: Exception) { null }
+    } catch (e: Exception) {
+        Log.w(TAG, "history ${channel.name} P$partition: read failed: ${e.message}")
+        null
+    }
+
+    /** The refusal a bridge page carries: the storage node refused it, or served it without storedAt. */
+    private fun readErrorOf(page: JSONObject?): HistoryError? = page?.optJSONObject("readError")?.let {
+        HistoryError(it.optInt("status", 0), it.optBoolean("signed", false), it.optString("reason").ifEmpty { null })
+    }
+
+    /** What the storage node last answered for a stream partition, as the bridge's wrapper recorded it. */
+    private suspend fun lastStorageReadError(streamId: String, partition: Int): HistoryError? = runCatching {
+        val res = bridge.call("storageReadError", JSONObject().put("streamId", streamId).put("partition", partition), 5_000)
+        if (res.has("status")) HistoryError(res.optInt("status"), res.optBoolean("signed"), res.optString("reason").ifEmpty { null }) else null
+    }.getOrNull()
 
     /**
      * Initial history: content (P0) and overrides (P1).
@@ -4907,8 +5164,15 @@ class ChannelManager(
                     )
                 }
             }
-            // Like the web, stay optimistic: only a range resend can prove exhaustion.
-            _hasMoreHistory.value = true
+            // Like the web, stay optimistic: only a range resend can prove
+            // exhaustion. A refusal by the storage node is not exhaustion
+            // either, but it is not something older pages will cure.
+            _historyError.value = content.readError
+            _hasMoreHistory.value = content.readError == null
+        } else {
+            // The read itself timed out or threw; the wrapper still holds
+            // what the node answered, which is what the empty state shows.
+            lastStorageReadError(channel.messageStreamId, StreamConstants.P_MESSAGES)?.let { _historyError.value = it }
         }
 
         if (overrides != null) {
@@ -5043,6 +5307,7 @@ class ChannelManager(
             // Keep the flag untouched when the fetch itself failed, so a
             // transient network error doesn't permanently kill pagination.
             if (content != null) _hasMoreHistory.value = content.optBoolean("hasMore", false)
+            readErrorOf(content)?.let { _historyError.value = it; _hasMoreHistory.value = false }
             val added = (_messages.value.size - countBefore).coerceAtLeast(0)
             android.util.Log.d("PomboPerf",
                 "loadMore ${channel.name}: +$added hasMore=${_hasMoreHistory.value}")
@@ -5276,9 +5541,10 @@ class ChannelManager(
         }
     }
 
-    suspend fun deleteMessage(targetId: String) {
-        val channel = _current.value ?: return
-        val original = _messages.value.find { it.id == targetId } ?: return
+    /** The storage purge outcome when the delete also erased the message there, else null. */
+    suspend fun deleteMessage(targetId: String): com.pombo.android.core.StoragePurge.Outcome? {
+        val channel = _current.value ?: return null
+        val original = _messages.value.find { it.id == targetId } ?: return null
         require(original.mine) { "You can only delete your own messages" }
         val override = JSONObject()
             .put("type", "delete")
@@ -5294,6 +5560,94 @@ class ChannelManager(
             sentDmStore.remove(channel.messageStreamId, targetId)
             onLocalStateChanged()
         }
+        return purgeOwnMessage(channel, original)
+    }
+
+    /**
+     * The storage side of an own delete, signed by the key that signed the
+     * message, which is what the node checks: the account on a Visible gated
+     * (or read-only) channel, this session's pseudonym on public/password,
+     * where an older message is out of its author's reach. Sealed channels
+     * sign with the shared key, so nobody can claim authorship there. Null
+     * when the purge does not apply; a failure comes back on the outcome
+     * rather than failing a delete that already went out.
+     */
+    private suspend fun purgeOwnMessage(channel: Channel, msg: UiMessage): com.pombo.android.core.StoragePurge.Outcome? {
+        val providers = _purgeProviders.value
+        if (providers == 0 || channel.wireIdentity == "sealed") return null
+        if (channel.type == "dm") return purgeSentDm(channel, msg.id)
+        val key = ownPurgeKey(channel, msg) ?: return null
+        return try {
+            val groups = messageGroups(channel, msg)
+            com.pombo.android.core.StoragePurge.purgeGroups(storageEndpoints, channel.messageStreamId, groups, key)
+        } catch (e: Exception) {
+            com.pombo.android.core.StoragePurge.Outcome(
+                providers = providers, erasedOn = 0, forbiddenOn = 0, unreachable = 0, outcomes = emptyList(),
+                error = e.message ?: e.javaClass.simpleName
+            )
+        }
+    }
+
+    private fun ownPurgeKey(channel: Channel, msg: UiMessage): String? {
+        if (channel.type == "gated" || channel.readOnly) return myPrivateKey()
+        val me = myAddress() ?: return null
+        val entry = com.pombo.android.core.ChannelIdentities.existing(channel.messageStreamId, me) ?: return null
+        if (msg.publisherId != null && !msg.publisherId.equals(entry.publisherId, ignoreCase = true)) return null
+        return entry.identityPk
+    }
+
+    /** Erase a sent DM from the peer's storage with the keys that wrote it; null when this session holds none. */
+    private suspend fun purgeSentDm(channel: Channel, messageId: String): com.pombo.android.core.StoragePurge.Outcome? {
+        val groups = dmSentRows.purgeGroups(channel.messageStreamId, messageId)
+        if (groups.isEmpty()) return null
+        return try {
+            val outcome = com.pombo.android.core.StoragePurge.purgeGroups(
+                storageEndpoints, channel.messageStreamId, groups, groups.last().privateKeyHex!!
+            )
+            if (outcome.erasedOn > 0) dmSentRows.forget(messageId)
+            outcome
+        } catch (e: Exception) {
+            com.pombo.android.core.StoragePurge.Outcome(
+                providers = _purgeProviders.value, erasedOn = 0, forbiddenOn = 0, unreachable = 0, outcomes = emptyList(),
+                error = e.message ?: e.javaClass.simpleName
+            )
+        }
+    }
+
+    /**
+     * Erase a received DM from the own inbox's storage, as its owner, and
+     * drop it from this device once some provider let it go.
+     */
+    private suspend fun eraseReceivedDm(channel: Channel, msg: UiMessage, key: String): com.pombo.android.core.StoragePurge.Outcome {
+        val me = myAddress()?.lowercase() ?: throw IllegalStateException("No identity")
+        val inbox = "$me/Pombo-DM-1"
+        val own = com.pombo.android.core.StoragePurge.Group(
+            StreamConstants.P_MESSAGES, listOf(resolvePurgeTarget(inbox, StreamConstants.P_MESSAGES, msg))
+        )
+        val chunks = msg.storageFile?.let {
+            com.pombo.android.core.StoragePurge.fileChunkGroups(storageEndpoints, inbox, it, open = files.chunkOpener(channel, it))
+        } ?: emptyList()
+        val outcome = com.pombo.android.core.StoragePurge.purgeGroups(storageEndpoints, inbox, chunks + own, key)
+        if (outcome.erasedOn > 0) {
+            deletedIds.add(msg.id)
+            _messages.value = _messages.value.filterNot { it.id == msg.id }
+            val list = synchronized(dmReceived) { dmReceived[msg.sender.lowercase()] }
+            if (list != null) synchronized(list) { list.removeAll { it.id == msg.id } }
+        }
+        return outcome
+    }
+
+    /** Whether deleting this own message also erases it from storage. */
+    fun ownPurgeApplies(messageId: String): Boolean {
+        val channel = _current.value ?: return false
+        val msg = _messages.value.find { it.id == messageId } ?: return false
+        if (channel.type == "dm") {
+            val holds = dmSentRows.holds(channel.messageStreamId, messageId)
+            android.util.Log.d(TAG, "dm purge applies? providers=${_purgeProviders.value} holds=$holds id=$messageId")
+            return _purgeProviders.value > 0 && holds
+        }
+        if (_purgeProviders.value == 0 || channel.wireIdentity == "sealed") return false
+        return ownPurgeKey(channel, msg) != null
     }
 
     fun sendTyping() = presence.sendTyping()
@@ -6013,6 +6367,9 @@ class ChannelManager(
         // an error (§7.9) — skip; storage-backed messages come back via the
         // refresh fired when the key is adopted.
         var innerAuthor: String? = null
+        // A row the node received long before its own date is a forgery, on
+        // any channel read from a node that says when it stored the row.
+        if (historical && com.pombo.android.core.StoredAt.forwardDated(meta, TIMESTAMP_TOLERANCE_MS)) return
         if (com.pombo.android.core.EpochKeyCrypto.isEpochEnvelope(data)) {
             if (!isEpochChannel(channel)) return
             // The epoch this was written under, read off the kid that travels
@@ -6026,10 +6383,11 @@ class ChannelManager(
             data = epochKeys.tryDecrypt(
                 channel.messageStreamId, keysId, data,
                 // Kid freshness (N-C, gated only): live = current epoch (short
-                // tolerance), history = the kid in force at the timestamp
+                // tolerance), history = the kid in force at the node's receive
+                // time when the node told us, else at the declared timestamp
                 gated = channel.type == "gated",
                 live = !historical,
-                timestamp = meta.optLong("timestamp", 0L)) ?: return
+                timestamp = com.pombo.android.core.StoredAt.judgeTime(meta)) ?: return
 
             // Sealed: the seal held an authorship wrapper — the author
             // comes from it, never from the transport (the shared key says
@@ -6058,6 +6416,7 @@ class ChannelManager(
             if (envTs > 0 && payloadTs > envTs + TIMESTAMP_TOLERANCE_MS) return
         }
         if (envTs > 0) data.put("_timestamp", envTs)
+        if (meta.has("sequenceNumber")) data.put("_seq", meta.optInt("sequenceNumber"))
         // Single gate for every write below — messages, images, reactions and
         // overrides all funnel through here, from both the resend and the live
         // subscription. Nothing reaches the open channel's state past this line
@@ -6110,6 +6469,7 @@ class ChannelManager(
             if (!historical && !liveGateAccessAllows(channel, signer)) return
             signer
         } else meta.optString("publisherId")
+        author.ifEmpty { null }?.let { data.put("_publisherId", it) }
         val account = attachAccount(data, author)
 
         // A moderator's delta: self-contained and verified by its own
@@ -6287,6 +6647,9 @@ class ChannelManager(
             ensName = ensStore.cachedName(sender),
             ensAvatar = ensStore.cachedAvatar(sender),
             epoch = data.optInt("_epoch", -1).takeIf { it >= 0 },
+            envelopeTs = data.optLong("_timestamp", 0L),
+            seq = if (data.has("_seq")) data.optInt("_seq") else null,
+            publisherId = data.optStringOrNull("_publisherId"),
             replyTo = data.optJSONObject("replyTo")?.let {
                 val rid = it.optString("id")
                 if (rid.isEmpty()) null else ReplyRef(

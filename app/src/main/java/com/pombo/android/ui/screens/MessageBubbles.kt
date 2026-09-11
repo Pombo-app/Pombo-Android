@@ -58,6 +58,7 @@ import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.material.icons.filled.VisibilityOff
@@ -366,6 +367,15 @@ internal fun MessageGroup(
     listState: androidx.compose.foundation.lazy.LazyListState,
     itemIndex: Int,
     hidden: Set<String>,
+    /** Erased from storage this session (a subset of `hidden`). */
+    erased: Set<String> = emptySet(),
+    /** Some storage provider of this channel announces `purge`. */
+    canErase: Boolean = false,
+    onErase: (String) -> Unit = {},
+    /** In a DM, erase addresses the own inbox and is offered on the peer's messages. */
+    isDm: Boolean = false,
+    /** Sealed channels never purge: the storage copy outlives a delete until retention. */
+    isSealed: Boolean = false,
     pins: List<com.pombo.android.ChannelManager.Pin>,
     activeId: String?,
     onActivate: (String) -> Unit,
@@ -375,10 +385,14 @@ internal fun MessageGroup(
     /** Starts editing this message in the composer (web parity) — no commit here. */
     onEdit: (UiMessage) -> Unit,
     onDelete: (String) -> Unit,
+    /** Whether deleting this own message also erases it from storage, for the confirm text. */
+    ownPurgeApplies: (String) -> Boolean = { false },
     onPin: (String, Boolean) -> Unit,
     onHide: (String, Boolean) -> Unit,
-    /** (address, client enforcement, protocol enforcement) */
-    onBan: (String, Boolean, Boolean) -> Unit,
+    /** (address, client enforcement, protocol enforcement, erase from storage) */
+    onBan: (String, Boolean, Boolean, Boolean) -> Unit,
+    /** Storage providers of the channel that announce `purge`, for the ban dialog. */
+    purgeProviders: Int = 0,
     /** Gated channel: the protocol level has a gate to ban on. */
     banGated: Boolean = false,
     /** Only the creator may publish the client-level ban. */
@@ -537,9 +551,16 @@ internal fun MessageGroup(
                     onReply = { onReply(msg) },
                     onEdit = { onEdit(msg) },
                     onDelete = { onDelete(msg.id) },
+                    purgesOnDelete = { ownPurgeApplies(msg.id) },
                     onPin = { pin -> onPin(msg.id, pin) },
                     onHide = { hide -> onHide(msg.id, hide) },
-                    onBan = { client, protocol -> onBan(msg.sender, client, protocol) },
+                    isErased = msg.id in erased,
+                    canErase = canErase,
+                    onErase = { onErase(msg.id) },
+                    isDm = isDm,
+                    isSealed = isSealed,
+                    onBan = { client, protocol, purge -> onBan(msg.sender, client, protocol, purge) },
+                    purgeProviders = purgeProviders,
                     banGated = banGated,
                     canClientBan = canClientBan,
                     canProtocolBan = canProtocolBan,
@@ -587,9 +608,19 @@ private fun MessageBubble(
     /** Starts editing this message in the composer (web parity) — no commit here. */
     onEdit: () -> Unit,
     onDelete: () -> Unit,
+    /** Evaluated when the delete is confirmed, so the text can say what happens on storage. */
+    purgesOnDelete: () -> Boolean = { false },
     onPin: (Boolean) -> Unit = {},
     onHide: (Boolean) -> Unit = {},
-    onBan: (Boolean, Boolean) -> Unit = { _, _ -> },
+    /** Erased from storage this session: stays hidden, nothing left to unhide. */
+    isErased: Boolean = false,
+    /** Some storage provider of this channel announces `purge`. */
+    canErase: Boolean = false,
+    onErase: () -> Unit = {},
+    isDm: Boolean = false,
+    isSealed: Boolean = false,
+    onBan: (Boolean, Boolean, Boolean) -> Unit = { _, _, _ -> },
+    purgeProviders: Int = 0,
     banGated: Boolean = false,
     canClientBan: Boolean = false,
     canProtocolBan: Boolean = banGated,
@@ -629,6 +660,8 @@ private fun MessageBubble(
     var bubbleOrigin by remember { mutableStateOf(androidx.compose.ui.geometry.Offset.Zero) }
     var picker by remember { mutableStateOf(false) }
     var confirmBan by remember { mutableStateOf(false) }
+    var confirmErase by remember { mutableStateOf(false) }
+    var confirmDelete by remember { mutableStateOf(false) }
     var confirmBlock by remember { mutableStateOf(false) }
     var lightbox by remember { mutableStateOf(false) }
     // The CSS keyframe peaks at 30% of the way through; animating to the peak
@@ -704,6 +737,9 @@ private fun MessageBubble(
                                 Modifier.background(Color.White.copy(alpha = highlightPulse), shape)
                             else Modifier
                         )
+                        // A moderator's view of a hidden message: dimmed, still
+                        // reachable by the menu for Unhide and Erase.
+                        .then(if (isHidden) Modifier.alpha(0.45f) else Modifier)
                         // Track where this bubble sits so a local touch offset
                         // can be turned into a window coordinate for the popup.
                         .onGloballyPositioned { bubbleOrigin = it.localToWindow(androidx.compose.ui.geometry.Offset.Zero) }
@@ -738,6 +774,10 @@ private fun MessageBubble(
                             }
                         )
                 ) {
+                    if (isHidden) Text(
+                        if (isErased) "Hidden · erased from storage" else "Hidden by moderation",
+                        color = Color(0xFFFBBF24).copy(alpha = 0.80f), fontSize = 11.sp
+                    )
                     if (showSender) {
                         // Web getVerificationBadge: ENS → circled green check,
                         // trusted contact → amber star, plain valid → ✓.
@@ -973,7 +1013,15 @@ private fun MessageBubble(
                             if (showOwnerDelete) com.pombo.android.ui.ContextMenuItem(
                                 "Delete Message", Icons.Outlined.Delete,
                                 iconTint = red, labelColor = red
-                            ) { menu = false; onDelete() }
+                            ) { menu = false; confirmDelete = true }
+                        }
+
+                        if (isDm && canErase && !msg.mine) {
+                            com.pombo.android.ui.ContextMenuDivider()
+                            com.pombo.android.ui.ContextMenuItem(
+                                "Erase from storage", Icons.Outlined.Delete,
+                                iconTint = red, labelColor = red
+                            ) { menu = false; confirmErase = true }
                         }
 
                         // Moderation block. Every entry needs on-chain DELETE
@@ -993,11 +1041,18 @@ private fun MessageBubble(
                                 Icons.Filled.PushPin,
                                 iconTint = Color(0xFFFBBF24)   // text-amber-400
                             ) { menu = false; onPin(!isPinned) }
-                            com.pombo.android.ui.ContextMenuItem(
+                            // Hide keeps the bytes and is reversible; Erase
+                            // removes them from every provider that can, and
+                            // only exists where one can (web _toggleAdminItems).
+                            if (!isErased) com.pombo.android.ui.ContextMenuItem(
                                 if (isHidden) "Unhide Message" else "Hide Message",
                                 Icons.Outlined.VisibilityOff,
                                 iconTint = red, labelColor = red
                             ) { menu = false; onHide(!isHidden) }
+                            if (canErase && !isErased) com.pombo.android.ui.ContextMenuItem(
+                                "Erase from storage", Icons.Outlined.Delete,
+                                iconTint = red, labelColor = red
+                            ) { menu = false; confirmErase = true }
                             if (showBan) com.pombo.android.ui.ContextMenuItem(
                                 "Ban User", Icons.Outlined.Block,
                                 iconTint = red, labelColor = red
@@ -1053,9 +1108,94 @@ private fun MessageBubble(
             gated = banGated,
             canClientBan = canClientBan,
             canProtocolBan = canProtocolBan,
+            purgeProviders = purgeProviders,
             onDismiss = { confirmBan = false },
-            onConfirm = { client, protocol -> confirmBan = false; onBan(client, protocol) }
+            onConfirm = { client, protocol, purge -> confirmBan = false; onBan(client, protocol, purge) }
         )
+    }
+
+    if (confirmDelete) {
+        val purges = purgesOnDelete()
+        androidx.compose.ui.window.Dialog(onDismissRequest = { confirmDelete = false }) {
+            Column(
+                Modifier.fillMaxWidth()
+                    .background(Color(0xFF16161B), RoundedCornerShape(20.dp))
+                    .border(1.dp, Color.White.copy(alpha = 0.08f), RoundedCornerShape(20.dp))
+                    .padding(20.dp)
+            ) {
+                Text("Delete message", color = Color.White, fontSize = 17.sp, fontWeight = FontWeight.SemiBold)
+                Spacer(Modifier.height(10.dp))
+                Text(
+                    when {
+                        purges -> "Removed for everyone. It is also erased from storage on $purgeProviders " +
+                            "provider${if (purgeProviders == 1) "" else "s"}."
+                        purgeProviders > 0 && isSealed -> "Removed for everyone. Its copy on storage stays until the channel's retention ends."
+                        purgeProviders > 0 -> "Removed for everyone. Its copy on storage cannot be erased from this session."
+                        else -> "Removed for everyone."
+                    },
+                    color = Color.White.copy(alpha = 0.60f), fontSize = 14.sp, lineHeight = 20.sp
+                )
+                Spacer(Modifier.height(18.dp))
+                Row {
+                    Box(
+                        Modifier.weight(1f)
+                            .background(Color.White.copy(alpha = 0.05f), RoundedCornerShape(12.dp))
+                            .clickableNoRipple { confirmDelete = false }
+                            .padding(vertical = 10.dp),
+                        contentAlignment = Alignment.Center
+                    ) { Text("Cancel", color = Color.White.copy(alpha = 0.60f), fontSize = 14.sp) }
+                    Spacer(Modifier.width(10.dp))
+                    Box(
+                        Modifier.weight(1f)
+                            .background(PomboColors.Danger.copy(alpha = 0.15f), RoundedCornerShape(12.dp))
+                            .border(1.dp, PomboColors.Danger.copy(alpha = 0.30f), RoundedCornerShape(12.dp))
+                            .clickableNoRipple { confirmDelete = false; onDelete() }
+                            .padding(vertical = 10.dp),
+                        contentAlignment = Alignment.Center
+                    ) { Text("Delete", color = PomboColors.Danger, fontSize = 14.sp, fontWeight = FontWeight.Medium) }
+                }
+            }
+        }
+    }
+
+    if (confirmErase) {
+        androidx.compose.ui.window.Dialog(onDismissRequest = { confirmErase = false }) {
+            Column(
+                Modifier.fillMaxWidth()
+                    .background(Color(0xFF16161B), RoundedCornerShape(20.dp))
+                    .border(1.dp, Color.White.copy(alpha = 0.08f), RoundedCornerShape(20.dp))
+                    .padding(20.dp)
+            ) {
+                Text("Erase from storage", color = Color.White, fontSize = 17.sp, fontWeight = FontWeight.SemiBold)
+                Spacer(Modifier.height(10.dp))
+                Text(
+                    if (isDm) "Remove this message from your inbox on every storage provider that can erase it. " +
+                        "It disappears from this device and cannot be recovered."
+                    else "Remove this message from every storage provider that can erase it. " +
+                        "It stays hidden for everyone and cannot be recovered.",
+                    color = Color.White.copy(alpha = 0.60f), fontSize = 14.sp, lineHeight = 20.sp
+                )
+                Spacer(Modifier.height(18.dp))
+                Row {
+                    Box(
+                        Modifier.weight(1f)
+                            .background(Color.White.copy(alpha = 0.05f), RoundedCornerShape(12.dp))
+                            .clickableNoRipple { confirmErase = false }
+                            .padding(vertical = 10.dp),
+                        contentAlignment = Alignment.Center
+                    ) { Text("Cancel", color = Color.White.copy(alpha = 0.60f), fontSize = 14.sp) }
+                    Spacer(Modifier.width(10.dp))
+                    Box(
+                        Modifier.weight(1f)
+                            .background(PomboColors.Danger.copy(alpha = 0.15f), RoundedCornerShape(12.dp))
+                            .border(1.dp, PomboColors.Danger.copy(alpha = 0.30f), RoundedCornerShape(12.dp))
+                            .clickableNoRipple { confirmErase = false; onErase() }
+                            .padding(vertical = 10.dp),
+                        contentAlignment = Alignment.Center
+                    ) { Text("Erase", color = PomboColors.Danger, fontSize = 14.sp, fontWeight = FontWeight.Medium) }
+                }
+            }
+        }
     }
 
     if (confirmBlock && onBlock != null) {

@@ -442,6 +442,7 @@ internal class FileTransfers(private val manager: ChannelManager) {
                 // (small) announce so this device keeps rendering the bubble across
                 // restarts. No bulky fields here (unlike mesh pieceHashes).
                 sentDmStore.add(channel.messageStreamId, result.announce)
+                manager.rememberDmFileRows(id, result.chunkRows)
                 onLocalStateChanged()
             }
         } catch (e: Exception) {
@@ -520,6 +521,25 @@ internal class FileTransfers(private val manager: ChannelManager) {
             }
         }
         return job
+    }
+
+    /** Opens this channel's stored chunk rows the way a download does. */
+    suspend fun chunkOpener(channel: Channel, meta: com.pombo.android.core.StorageMedia.StorageFileMetadata): (ByteArray, Long) -> ByteArray {
+        val isDm = channel.type == "dm"
+        val dmPairKey = if (isDm) channel.peerAddress?.let { manager.dmPairKeyFor(it) } else null
+        val epochOpener: ((ByteArray, Long) -> ByteArray?)? = if (!isDm && isEpochChannel(channel)) {
+            val gated = channel.type == "gated"
+            val opener: (ByteArray, Long) -> ByteArray? = { bytes, ts ->
+                kotlinx.coroutines.runBlocking {
+                    epochKeys.tryOpenBinary(
+                        channel.messageStreamId, channel.keysStreamId, bytes,
+                        gated = gated, live = false, timestamp = ts
+                    )
+                }
+            }
+            opener
+        } else null
+        return storageMedia.chunkOpener(meta, channel.password, isDm, epochOpener, dmPairKey)
     }
 
     /**

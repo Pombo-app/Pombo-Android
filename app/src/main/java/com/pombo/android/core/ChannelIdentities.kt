@@ -48,6 +48,11 @@ object ChannelIdentities {
         return entry
     }
 
+    /** The identity this session already publishes with, if any; never mints one. */
+    @Synchronized
+    fun existing(streamId: String, accountAddress: String): Entry? =
+        entries[baseChannelId(streamId)]?.takeIf { it.account.equals(accountAddress, ignoreCase = true) }
+
     /** Rotation on genuine leave — never on a view switch (peers mid-transfer know the publisher). */
     @Synchronized
     fun drop(streamId: String) {
