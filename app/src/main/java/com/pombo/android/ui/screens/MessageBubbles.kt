@@ -374,6 +374,8 @@ internal fun MessageGroup(
     onErase: (String) -> Unit = {},
     /** In a DM, erase addresses the own inbox and is offered on the peer's messages. */
     isDm: Boolean = false,
+    /** Sealed channels never purge: the storage copy outlives a delete until retention. */
+    isSealed: Boolean = false,
     pins: List<com.pombo.android.ChannelManager.Pin>,
     activeId: String?,
     onActivate: (String) -> Unit,
@@ -556,6 +558,7 @@ internal fun MessageGroup(
                     canErase = canErase,
                     onErase = { onErase(msg.id) },
                     isDm = isDm,
+                    isSealed = isSealed,
                     onBan = { client, protocol, purge -> onBan(msg.sender, client, protocol, purge) },
                     purgeProviders = purgeProviders,
                     banGated = banGated,
@@ -615,6 +618,7 @@ private fun MessageBubble(
     canErase: Boolean = false,
     onErase: () -> Unit = {},
     isDm: Boolean = false,
+    isSealed: Boolean = false,
     onBan: (Boolean, Boolean, Boolean) -> Unit = { _, _, _ -> },
     purgeProviders: Int = 0,
     banGated: Boolean = false,
@@ -1125,6 +1129,7 @@ private fun MessageBubble(
                     when {
                         purges -> "Removed for everyone. It is also erased from storage on $purgeProviders " +
                             "provider${if (purgeProviders == 1) "" else "s"}."
+                        purgeProviders > 0 && isSealed -> "Removed for everyone. Its copy on storage stays until the channel's retention ends."
                         purgeProviders > 0 -> "Removed for everyone. Its copy on storage cannot be erased from this session."
                         else -> "Removed for everyone."
                     },

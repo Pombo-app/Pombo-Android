@@ -727,6 +727,7 @@ fun ChatScreen(vm: AppViewModel) {
                         canErase = if (ch.type == "dm") inboxPurgeProviders > 0 else purgeProviders > 0,
                         onErase = { id -> vm.eraseMessage(id) },
                         isDm = ch.type == "dm",
+                        isSealed = ch.wireIdentity == "sealed",
                         pins = pins,
                         activeId = activeId,
                         onActivate = { id -> activeId = if (activeId == id) null else id },
