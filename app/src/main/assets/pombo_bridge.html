@@ -1090,12 +1090,20 @@ const api = {
         // to tell a failed read from an empty one.
         api._lastDrainErrors = 0;
         while (!done) {
-            if (deadlineAt && Date.now() > deadlineAt) {
+            if (deadlineAt && Date.now() >= deadlineAt) {
                 try { if (iterator.return) iterator.return(); } catch (e) { /* best effort */ }
                 return true;
             }
             try {
-                const result = await iterator.next();
+                // A row that never comes must not hold the read past its
+                // budget: the caller's timeout would swallow the outcome.
+                const result = deadlineAt
+                    ? await Promise.race([
+                        iterator.next(),
+                        new Promise(function (r) { setTimeout(function () { r({ timedOut: true }); }, Math.max(0, deadlineAt - Date.now())); })
+                    ])
+                    : await iterator.next();
+                if (result.timedOut) continue;
                 done = result.done;
                 if (done) break;
                 push(result.value);
@@ -1109,7 +1117,11 @@ const api = {
                 api._lastDrainErrors++;
                 console.warn('resend iteration error: ' +
                     (iterError && iterError.message ? iterError.message : String(iterError)));
-                continue;
+                // A transport error ends the read: reading on after it waits
+                // for a row that never comes, and what the node answered is
+                // already in storageFetch.lastReadError.
+                try { if (iterator.return) iterator.return(); } catch (e) { /* best effort */ }
+                return true;
             }
         }
         return false;
@@ -1194,6 +1206,11 @@ const api = {
     // for `recoverSigner` and establish authorship from meta.signer; every
     // other path gets the envelope-authenticity check here, without which a
     // raw read would accept an envelope carrying someone else's publisherId.
+    /** What the storage node last answered for a stream partition, or {} when the last read succeeded. */
+    storageReadError(a) {
+        return storageFetch.lastReadError(a.streamId, a.partition) || {};
+    },
+
     async resend(a) {
         if (!client) throw new Error('client not connected');
         const pwKey = a.password ? await api._pwKey(a.password) : null;

@@ -4992,7 +4992,16 @@ class ChannelManager(
             }
             HistoryPage(arr, contents, readError)
         }
-    } catch (e: Exception) { null }
+    } catch (e: Exception) {
+        Log.w(TAG, "history ${channel.name} P$partition: read failed: ${e.message}")
+        null
+    }
+
+    /** What the storage node last answered for a stream partition, as the bridge's wrapper recorded it. */
+    private suspend fun lastStorageReadError(streamId: String, partition: Int): HistoryError? = runCatching {
+        val res = bridge.call("storageReadError", JSONObject().put("streamId", streamId).put("partition", partition), 5_000)
+        if (res.has("status")) HistoryError(res.optInt("status"), res.optBoolean("signed")) else null
+    }.getOrNull()
 
     /**
      * Initial history: content (P0) and overrides (P1).
@@ -5065,6 +5074,10 @@ class ChannelManager(
             // either, but it is not something older pages will cure.
             _historyError.value = content.readError
             _hasMoreHistory.value = content.readError == null
+        } else {
+            // The read itself timed out or threw; the wrapper still holds
+            // what the node answered, which is what the empty state shows.
+            lastStorageReadError(channel.messageStreamId, StreamConstants.P_MESSAGES)?.let { _historyError.value = it }
         }
 
         if (overrides != null) {
