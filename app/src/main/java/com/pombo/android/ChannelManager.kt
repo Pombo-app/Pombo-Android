@@ -3104,6 +3104,12 @@ class ChannelManager(
         // simply not knowable before. The ~1ms ECDH spent on a blocked peer's
         // message is the documented cost of sealed sender (brief §5.3).
         if (isBlockedPeer(sender)) return
+        val payloadTs = data.optLong("timestamp", 0L)
+        val envTs = meta?.optLong("timestamp", 0L) ?: 0L
+        if (payloadTs > 0) {
+            if (payloadTs > System.currentTimeMillis() + TIMESTAMP_TOLERANCE_MS) return
+            if (envTs > 0 && payloadTs > envTs + TIMESTAMP_TOLERANCE_MS) return
+        }
         // Same stamp as the channel ingest (applyAccount): identity for every
         // downstream reader comes from the proof, never from the wire.
         data.put("account", sender)
