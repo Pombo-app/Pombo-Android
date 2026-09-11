@@ -2625,7 +2625,9 @@ class ChannelManager(
         val chunks = msg.storageFile?.let {
             com.pombo.android.core.StoragePurge.fileChunkGroups(storageEndpoints, streamId, it, open = files.chunkOpener(channel, it))
         }
-        return listOf(own) + (chunks ?: emptyList())
+        // Chunks before the announce: a pass that fails on the chunks leaves
+        // the announce in place, never chunks nobody can address any more.
+        return (chunks ?: emptyList()) + own
     }
 
     data class AuthorPurge(val outcome: com.pombo.android.core.StoragePurge.Outcome, val messages: Int, val skipped: Int)
@@ -2652,6 +2654,7 @@ class ChannelManager(
             }
         }
         val groups = byPartition.map { (p, t) -> com.pombo.android.core.StoragePurge.Group(p, t) }
+            .sortedBy { if (it.partition == StreamConstants.P_MESSAGES) 1 else 0 }
         val outcome = com.pombo.android.core.StoragePurge.purgeGroups(storageEndpoints, channel.messageStreamId, groups, key)
         if (outcome.erasedOn > 0) _erasedIds.value = _erasedIds.value + theirs.map { it.id }
         return AuthorPurge(outcome, theirs.size - skipped, skipped)
