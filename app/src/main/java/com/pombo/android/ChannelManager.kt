@@ -2750,6 +2750,7 @@ class ChannelManager(
                     channel, StreamConstants.P_MESSAGES, MEMBER_CATCHUP_COUNT, 20_000, 30_000)
                     ?: continue
                 if (!stillCurrent(generation)) return@launch
+                page.readError?.let { _historyError.value = it }
                 for (i in 0 until page.entries.length()) {
                     val entry = page.entries.optJSONObject(i) ?: continue
                     val meta = entry.optJSONObject("meta") ?: JSONObject()
@@ -3802,7 +3803,9 @@ class ChannelManager(
             if (!stillCurrent(generationAtStart)) return DmPage(0, false, false)
 
             val arr = res.optJSONArray("messages") ?: JSONArray()
-            val hasMore = res.optBoolean("hasMore", false)
+            val refusal = readErrorOf(res)
+            if (refusal != null) _historyError.value = refusal
+            val hasMore = refusal == null && res.optBoolean("hasMore", false)
             val existing = _messages.value.map { it.id }.toSet()
             val fresh = mutableListOf<UiMessage>()
 
@@ -5084,6 +5087,11 @@ class ChannelManager(
         null
     }
 
+    /** The refusal a bridge page carries: the storage node refused it, or served it without storedAt. */
+    private fun readErrorOf(page: JSONObject?): HistoryError? = page?.optJSONObject("readError")?.let {
+        HistoryError(it.optInt("status", 0), it.optBoolean("signed", false), it.optString("reason").ifEmpty { null })
+    }
+
     /** What the storage node last answered for a stream partition, as the bridge's wrapper recorded it. */
     private suspend fun lastStorageReadError(streamId: String, partition: Int): HistoryError? = runCatching {
         val res = bridge.call("storageReadError", JSONObject().put("streamId", streamId).put("partition", partition), 5_000)
@@ -5299,6 +5307,7 @@ class ChannelManager(
             // Keep the flag untouched when the fetch itself failed, so a
             // transient network error doesn't permanently kill pagination.
             if (content != null) _hasMoreHistory.value = content.optBoolean("hasMore", false)
+            readErrorOf(content)?.let { _historyError.value = it; _hasMoreHistory.value = false }
             val added = (_messages.value.size - countBefore).coerceAtLeast(0)
             android.util.Log.d("PomboPerf",
                 "loadMore ${channel.name}: +$added hasMore=${_hasMoreHistory.value}")

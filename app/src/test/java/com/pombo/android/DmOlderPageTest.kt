@@ -30,6 +30,21 @@ class DmOlderPageTest {
             .put("sequenceNumber", 0).put("storedAt", storedAt))
 
     @Test
+    fun `a refused older page raises the history error and ends paging`() = runBlocking {
+        coEvery { h.bridge.call(eq("resendWindow"), any(), any()) } returns JSONObject()
+            .put("messages", JSONArray())
+            .put("hasMore", true)
+            .put("readError", JSONObject().put("status", 503).put("signed", true).put("reason", "storedAt"))
+
+        manager.openChannel(conversation)
+        val page = manager.loadMoreDmHistory()
+
+        assertEquals(false, page.hasMore)
+        assertEquals("storedAt", manager.historyError.value?.reason)
+        assertEquals(503, manager.historyError.value?.status)
+    }
+
+    @Test
     fun `a forward-dated row of an older page is dropped, the genuine one kept with its coordinates`() = runBlocking {
         val now = System.currentTimeMillis()
         val forgedTs = now - 30 * 60_000L
