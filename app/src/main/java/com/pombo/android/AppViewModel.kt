@@ -3427,6 +3427,8 @@ class AppViewModel(app: Application) : AndroidViewModel(app), PomboBridge.Listen
         try { manager.editMessage(id, text) } catch (e: Exception) { _lastError.value = e.message }
     }
 
+    fun ownPurgeApplies(id: String): Boolean = manager.ownPurgeApplies(id)
+
     fun deleteMessage(id: String) = viewModelScope.launch {
         try {
             manager.deleteMessage(id)?.let { purgeToast(it) }

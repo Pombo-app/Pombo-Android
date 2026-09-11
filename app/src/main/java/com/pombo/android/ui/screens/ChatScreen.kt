@@ -754,6 +754,7 @@ fun ChatScreen(vm: AppViewModel) {
                             composerInput.setTextAndPlaceCursorAtEnd(m.text)
                         },
                         onDelete = { id -> vm.deleteMessage(id) },
+                        ownPurgeApplies = { id -> vm.ownPurgeApplies(id) },
                         onPin = { id, pin -> vm.pinMessage(id, pin) },
                         onHide = { id, hide -> vm.hideMessage(id, hide) },
                         onBan = { addr, client, protocol, purge -> vm.banMemberLevels(addr, client, protocol, purge) },

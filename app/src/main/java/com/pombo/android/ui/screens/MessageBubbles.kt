@@ -381,6 +381,8 @@ internal fun MessageGroup(
     /** Starts editing this message in the composer (web parity) — no commit here. */
     onEdit: (UiMessage) -> Unit,
     onDelete: (String) -> Unit,
+    /** Whether deleting this own message also erases it from storage, for the confirm text. */
+    ownPurgeApplies: (String) -> Boolean = { false },
     onPin: (String, Boolean) -> Unit,
     onHide: (String, Boolean) -> Unit,
     /** (address, client enforcement, protocol enforcement, erase from storage) */
@@ -545,6 +547,7 @@ internal fun MessageGroup(
                     onReply = { onReply(msg) },
                     onEdit = { onEdit(msg) },
                     onDelete = { onDelete(msg.id) },
+                    purgesOnDelete = { ownPurgeApplies(msg.id) },
                     onPin = { pin -> onPin(msg.id, pin) },
                     onHide = { hide -> onHide(msg.id, hide) },
                     isErased = msg.id in erased,
@@ -599,6 +602,8 @@ private fun MessageBubble(
     /** Starts editing this message in the composer (web parity) — no commit here. */
     onEdit: () -> Unit,
     onDelete: () -> Unit,
+    /** Evaluated when the delete is confirmed, so the text can say what happens on storage. */
+    purgesOnDelete: () -> Boolean = { false },
     onPin: (Boolean) -> Unit = {},
     onHide: (Boolean) -> Unit = {},
     /** Erased from storage this session: stays hidden, nothing left to unhide. */
@@ -648,6 +653,7 @@ private fun MessageBubble(
     var picker by remember { mutableStateOf(false) }
     var confirmBan by remember { mutableStateOf(false) }
     var confirmErase by remember { mutableStateOf(false) }
+    var confirmDelete by remember { mutableStateOf(false) }
     var confirmBlock by remember { mutableStateOf(false) }
     var lightbox by remember { mutableStateOf(false) }
     // The CSS keyframe peaks at 30% of the way through; animating to the peak
@@ -999,7 +1005,7 @@ private fun MessageBubble(
                             if (showOwnerDelete) com.pombo.android.ui.ContextMenuItem(
                                 "Delete Message", Icons.Outlined.Delete,
                                 iconTint = red, labelColor = red
-                            ) { menu = false; onDelete() }
+                            ) { menu = false; confirmDelete = true }
                         }
 
                         // Moderation block. Every entry needs on-chain DELETE
@@ -1090,6 +1096,49 @@ private fun MessageBubble(
             onDismiss = { confirmBan = false },
             onConfirm = { client, protocol, purge -> confirmBan = false; onBan(client, protocol, purge) }
         )
+    }
+
+    if (confirmDelete) {
+        val purges = purgesOnDelete()
+        androidx.compose.ui.window.Dialog(onDismissRequest = { confirmDelete = false }) {
+            Column(
+                Modifier.fillMaxWidth()
+                    .background(Color(0xFF16161B), RoundedCornerShape(20.dp))
+                    .border(1.dp, Color.White.copy(alpha = 0.08f), RoundedCornerShape(20.dp))
+                    .padding(20.dp)
+            ) {
+                Text("Delete message", color = Color.White, fontSize = 17.sp, fontWeight = FontWeight.SemiBold)
+                Spacer(Modifier.height(10.dp))
+                Text(
+                    when {
+                        purges -> "Removed for everyone. It is also erased from storage on $purgeProviders " +
+                            "provider${if (purgeProviders == 1) "" else "s"}."
+                        purgeProviders > 0 -> "Removed for everyone. Its copy on storage cannot be erased from this session."
+                        else -> "Removed for everyone."
+                    },
+                    color = Color.White.copy(alpha = 0.60f), fontSize = 14.sp, lineHeight = 20.sp
+                )
+                Spacer(Modifier.height(18.dp))
+                Row {
+                    Box(
+                        Modifier.weight(1f)
+                            .background(Color.White.copy(alpha = 0.05f), RoundedCornerShape(12.dp))
+                            .clickableNoRipple { confirmDelete = false }
+                            .padding(vertical = 10.dp),
+                        contentAlignment = Alignment.Center
+                    ) { Text("Cancel", color = Color.White.copy(alpha = 0.60f), fontSize = 14.sp) }
+                    Spacer(Modifier.width(10.dp))
+                    Box(
+                        Modifier.weight(1f)
+                            .background(PomboColors.Danger.copy(alpha = 0.15f), RoundedCornerShape(12.dp))
+                            .border(1.dp, PomboColors.Danger.copy(alpha = 0.30f), RoundedCornerShape(12.dp))
+                            .clickableNoRipple { confirmDelete = false; onDelete() }
+                            .padding(vertical = 10.dp),
+                        contentAlignment = Alignment.Center
+                    ) { Text("Delete", color = PomboColors.Danger, fontSize = 14.sp, fontWeight = FontWeight.Medium) }
+                }
+            }
+        }
     }
 
     if (confirmErase) {

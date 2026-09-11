@@ -5486,6 +5486,14 @@ class ChannelManager(
         return entry.identityPk
     }
 
+    /** Whether deleting this own message also erases it from storage. */
+    fun ownPurgeApplies(messageId: String): Boolean {
+        val channel = _current.value ?: return false
+        val msg = _messages.value.find { it.id == messageId } ?: return false
+        if (_purgeProviders.value == 0 || channel.type == "dm" || channel.wireIdentity == "sealed") return false
+        return ownPurgeKey(channel, msg) != null
+    }
+
     fun sendTyping() = presence.sendTyping()
 
     internal suspend fun publishContent(
