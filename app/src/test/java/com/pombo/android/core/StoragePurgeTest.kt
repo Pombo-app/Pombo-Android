@@ -1,5 +1,7 @@
 package com.pombo.android.core
 
+import io.mockk.coEvery
+import io.mockk.mockk
 import java.io.File
 import kotlinx.coroutines.runBlocking
 import org.json.JSONObject
@@ -71,6 +73,81 @@ class StoragePurgeTest {
             }
             assertEquals(name, expected.getJSONArray("targets").toString(), body.getJSONArray("targets").toString())
         }
+    }
+
+    @Test
+    fun `every web stored vector reproduces byte for byte`() {
+        val v = vectors("STORAGE-stored-vectors.json")
+        val priv = v.getString("userPriv")
+        val arr = v.getJSONArray("vectors")
+        assertTrue(arr.length() > 0)
+        for (i in 0 until arr.length()) {
+            val c = arr.getJSONObject(i)
+            val name = c.getString("name")
+            val expected = c.getJSONObject("body")
+            val targetsArr = expected.getJSONArray("targets")
+            val targets = (0 until targetsArr.length()).map {
+                val t = targetsArr.getJSONObject(it)
+                StoragePurge.Target(t.getLong("timestamp"), t.getInt("sequenceNumber"))
+            }
+            val message = StoragePurge.buildMessage(c.getString("streamId"), c.getInt("partition"), expected.getLong("issuedAt"), expected.getString("nonce"), targets, action = "stored")
+            assertEquals(name, c.getString("message"), message)
+            val body = StoragePurge.signedBody(c.getString("streamId"), c.getInt("partition"), targets, priv, expected.getLong("issuedAt"), expected.getString("nonce"), action = "stored")
+            for (key in listOf("user", "issuedAt", "nonce", "signature")) {
+                assertEquals("$name: $key", expected.get(key).toString(), body.get(key).toString())
+            }
+            assertEquals(name, expected.getJSONArray("targets").toString(), body.getJSONArray("targets").toString())
+        }
+    }
+
+    @Test
+    fun `storedOn collects the rows some provider reports present, null when none answers`() = runBlocking {
+        val providers = listOf(
+            StorageEndpoints.Node("0xa", listOf("https://a.example")),
+            StorageEndpoints.Node("0xb", listOf("https://b1.example", "https://b2.example"))
+        )
+        val t1 = StoragePurge.Target(1, 0); val t2 = StoragePurge.Target(2, 0)
+        val urls = ArrayList<String>()
+        val present = StoragePurge.storedOn(providers, STREAM, 4, listOf(t1, t2), KEY) { url, body ->
+            urls.add(url)
+            assertEquals("0x70997970C51812dc3A010C7d01b50e0d17dc79C8", JSONObject(body).getString("user"))
+            when {
+                url.startsWith("https://a.example") -> 200 to """{"results":[{"timestamp":1,"sequenceNumber":0,"result":"present"},{"timestamp":2,"sequenceNumber":0,"result":"absent"}]}"""
+                url.startsWith("https://b1.example") -> throw java.io.IOException("down")
+                else -> 200 to """{"results":[{"timestamp":2,"sequenceNumber":0,"result":"present"}]}"""
+            }
+        }
+        assertEquals(setOf(t1, t2), present)
+        assertEquals(
+            listOf("https://a.example", "https://b1.example", "https://b2.example").map { StoragePurge.targetsUrl(it, STREAM, 4, "stored") },
+            urls
+        )
+        assertNull(StoragePurge.storedOn(providers, STREAM, 4, listOf(t1), KEY) { _, _ -> throw java.io.IOException("down") })
+        assertNull(StoragePurge.storedOn(providers, STREAM, 4, listOf(t1), KEY) { _, _ -> 404 to "" })
+    }
+
+    @Test
+    fun `a group signs with its own key when it carries one`() = runBlocking {
+        val endpoints = mockk<StorageEndpoints>()
+        coEvery { endpoints.providersWith(STREAM, "purge") } returns listOf(StorageEndpoints.Node("0xa", listOf("https://a.example")))
+        val otherKey = "0x" + "11".repeat(32)
+        val users = ArrayList<String>()
+        val out = StoragePurge.purgeGroups(
+            endpoints, STREAM,
+            listOf(
+                StoragePurge.Group(4, listOf(StoragePurge.Target(1, 0)), otherKey),
+                StoragePurge.Group(0, listOf(StoragePurge.Target(2, 0)))
+            ),
+            KEY
+        ) { _, body ->
+            val b = JSONObject(body)
+            users.add(b.getString("user"))
+            val t = b.getJSONArray("targets").getJSONObject(0)
+            200 to """{"results":[{"timestamp":${t.getLong("timestamp")},"sequenceNumber":0,"result":"deleted"}]}"""
+        }
+        assertEquals(listOf(EthereumSigner.checksumAddress(EthereumSigner.address(otherKey)), "0x70997970C51812dc3A010C7d01b50e0d17dc79C8"), users)
+        assertEquals(1, out.erasedOn)
+        assertEquals(2, out.targets)
     }
 
     @Test

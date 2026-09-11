@@ -614,6 +614,22 @@ class ChannelManager(
                 return publishChannel(channelByStream(messageStreamId), messageStreamId, StreamConstants.P_MESSAGES, announce, password)
             }
 
+            override suspend fun announceStored(messageStreamId: String, messageId: String): Boolean? {
+                val rows = dmSentRows.rowsOf(messageId)
+                    .filter { it.streamId == messageStreamId && it.partition == StreamConstants.P_MESSAGES }
+                if (rows.isEmpty()) return null
+                val providers = runCatching { storageEndpoints.providersWith(messageStreamId, "stored") }.getOrDefault(emptyList())
+                if (providers.isEmpty()) return null
+                for (r in rows) {
+                    val present = com.pombo.android.core.StoragePurge.storedOn(
+                        providers, messageStreamId, r.partition,
+                        listOf(com.pombo.android.core.StoragePurge.Target(r.timestamp, r.sequenceNumber)), r.privateKeyHex
+                    ) ?: return null
+                    if (present.isNotEmpty()) return true
+                }
+                return false
+            }
+
             override fun myAddress(): String? = this@ChannelManager.myAddress()
             override fun username(): String? = this@ChannelManager.myUsername()
         }
@@ -628,7 +644,8 @@ class ChannelManager(
         com.pombo.android.core.StorageHttp.readHeaders = headers@{ url ->
             val parsed = com.pombo.android.core.StorageReadSigner.parse(url) ?: return@headers null
             if (parsed.streamId.endsWith("-3")) return@headers null
-            if (channelByStream(parsed.streamId)?.type != "gated") return@headers null
+            val ownInbox = myAddress()?.lowercase()?.let { parsed.streamId == "$it/Pombo-DM-1" } == true
+            if (!ownInbox && channelByStream(parsed.streamId)?.type != "gated") return@headers null
             val features = storageEndpoints.probeCapabilities(parsed.base) ?: return@headers null
             if ("signedReads" !in features) return@headers null
             com.pombo.android.core.StorageReadSigner.headers(parsed, myPrivateKey())
@@ -2609,6 +2626,7 @@ class ChannelManager(
         val channel = _current.value ?: throw IllegalStateException("No channel open")
         val msg = _messages.value.find { it.id == messageId } ?: throw IllegalStateException("Message not found")
         val key = myPrivateKey() ?: throw IllegalStateException("No identity")
+        if (channel.type == "dm") return eraseReceivedDm(channel, msg, key)
         val groups = messageGroups(channel, msg)
         if (messageId !in _hiddenIds.value) admin.hideMessage(messageId, true)
         val outcome = com.pombo.android.core.StoragePurge.purgeGroups(storageEndpoints, channel.messageStreamId, groups, key)
@@ -2948,6 +2966,22 @@ class ChannelManager(
      */
     private val dmReceived = HashMap<String, MutableList<UiMessage>>()
 
+    /** Storage rows this session wrote to peers' inboxes, with the throwaway keys that signed them. */
+    private val dmSentRows = com.pombo.android.core.DmSentRows()
+    private val _inboxPurgeProviders = MutableStateFlow(0)
+    /** Providers of the own inbox that announce `purge`: what a received DM can be erased from. */
+    val inboxPurgeProviders: StateFlow<Int> = _inboxPurgeProviders.asStateFlow()
+
+    internal fun rememberDmFileRows(messageId: String, rows: List<com.pombo.android.core.DmSentRows.Row>) =
+        rows.forEach { dmSentRows.remember(messageId, it) }
+
+    /** The pair key that seals stored DM media with this peer, for opening chunk rows outside a download. */
+    internal suspend fun dmPairKeyFor(peer: String): ByteArray? {
+        val myPk = myPrivateKey() ?: return null
+        val pk = peerPubKey(peer) ?: return null
+        return com.pombo.android.core.SealedSenderCrypto.pairKey(myPk, pk)
+    }
+
     /**
      * Native sealed-sender open (SealedSenderCrypto, vector-locked) — the key
      * stays in Kotlin. One result per item: {sender, message} or NULL for
@@ -2999,9 +3033,15 @@ class ChannelManager(
         val (envelope, ephemeralPk) = withContext(Dispatchers.Default) {
             com.pombo.android.core.SealedSenderCrypto.seal(message, myPk, recipientAddress, recipientPublicKey)
         }
-        return bridge.call("publishAs", JSONObject()
+        val res = bridge.call("publishAs", JSONObject()
             .put("streamId", streamId).put("partition", partition)
             .put("content", envelope).put("privateKey", ephemeralPk), timeoutMs)
+        val id = message.optString("id")
+        val ts = res.optLong("timestamp", 0L)
+        if (id.isNotEmpty() && ts > 0L) {
+            dmSentRows.remember(id, com.pombo.android.core.DmSentRows.Row(streamId, partition, ts, 0, ephemeralPk))
+        }
+        return res
     }
 
     /**
@@ -3020,7 +3060,9 @@ class ChannelManager(
         publisherIdRaw: String?,
         /** Already opened by the page-wide batch in [loadInboxHistory]. */
         preSender: String? = null,
-        preData: JSONObject? = null
+        preData: JSONObject? = null,
+        /** The row's storage coordinates, what erasing it from the inbox addresses. */
+        meta: JSONObject? = null
     ) {
         val me = myAddress()?.lowercase() ?: return
         if (envelope !is JSONObject) return
@@ -3116,7 +3158,14 @@ class ChannelManager(
             handleImageManifest(channel, data, showBubble = onScreen)
         }
 
-        val msg = toUiMessage(data, myAddress() ?: return) ?: return
+        val msg = toUiMessage(data, myAddress() ?: return)?.let { m ->
+            if (meta == null) m
+            else m.copy(
+                envelopeTs = meta.optLong("timestamp", 0L),
+                seq = meta.optInt("sequenceNumber", -1).takeIf { it >= 0 },
+                publisherId = publisherIdRaw
+            )
+        } ?: return
 
         val list = synchronized(dmReceived) { dmReceived.getOrPut(sender) { mutableListOf() } }
         synchronized(list) {
@@ -3186,7 +3235,8 @@ class ChannelManager(
                 routeInboxMessage(
                     entry.opt("content"), publishers[i],
                     preSender = res?.optString("sender")?.lowercase()?.ifEmpty { null },
-                    preData = res?.optJSONObject("message")
+                    preData = res?.optJSONObject("message"),
+                    meta = entry.optJSONObject("meta")
                 )
             }
             android.util.Log.d("PomboPerf",
@@ -3985,7 +4035,7 @@ class ChannelManager(
         // announces) both route; everything else is noise. The router owns
         // the open-first inversion.
         if (envelope.optString("e") != "aes-256-gcm" && envelope.optString("type").isEmpty()) return
-        scope.launch { routeInboxMessage(envelope, publisherId) }
+        scope.launch { routeInboxMessage(envelope, publisherId, meta = meta) }
     }
 
     private suspend fun verifyPasswordChallenge(adminStreamId: String, password: String) {
@@ -4525,7 +4575,8 @@ class ChannelManager(
             // Which providers can erase decides whether moderation offers it.
             _purgeProviders.value = 0
             _erasedIds.value = emptySet()
-            if (channel.type != "dm") scope.launch {
+            _inboxPurgeProviders.value = 0
+            scope.launch {
                 // The resolution is an SDK call through the bridge; right after
                 // a boot or an account switch the client is still connecting.
                 val n = runCatching {
@@ -4533,6 +4584,12 @@ class ChannelManager(
                     storageEndpoints.providersWith(channel.messageStreamId, "purge").size
                 }.getOrDefault(0)
                 if (_current.value?.messageStreamId == channel.messageStreamId) _purgeProviders.value = n
+                if (channel.type == "dm") {
+                    val inbox = myAddress()?.lowercase()?.let { "$it/Pombo-DM-1" }
+                    val own = if (inbox == null) 0
+                        else runCatching { storageEndpoints.providersWith(inbox, "purge").size }.getOrDefault(0)
+                    if (_current.value?.messageStreamId == channel.messageStreamId) _inboxPurgeProviders.value = own
+                }
             }
             _messages.value = emptyList()
             _reactions.value = emptyMap()
@@ -5480,7 +5537,8 @@ class ChannelManager(
      */
     private suspend fun purgeOwnMessage(channel: Channel, msg: UiMessage): com.pombo.android.core.StoragePurge.Outcome? {
         val providers = _purgeProviders.value
-        if (providers == 0 || channel.type == "dm" || channel.wireIdentity == "sealed") return null
+        if (providers == 0 || channel.wireIdentity == "sealed") return null
+        if (channel.type == "dm") return purgeSentDm(channel, msg.id)
         val key = ownPurgeKey(channel, msg) ?: return null
         return try {
             val groups = messageGroups(channel, msg)
@@ -5501,11 +5559,53 @@ class ChannelManager(
         return entry.identityPk
     }
 
+    /** Erase a sent DM from the peer's storage with the keys that wrote it; null when this session holds none. */
+    private suspend fun purgeSentDm(channel: Channel, messageId: String): com.pombo.android.core.StoragePurge.Outcome? {
+        val groups = dmSentRows.purgeGroups(channel.messageStreamId, messageId)
+        if (groups.isEmpty()) return null
+        return try {
+            val outcome = com.pombo.android.core.StoragePurge.purgeGroups(
+                storageEndpoints, channel.messageStreamId, groups, groups.last().privateKeyHex!!
+            )
+            if (outcome.erasedOn > 0) dmSentRows.forget(messageId)
+            outcome
+        } catch (e: Exception) {
+            com.pombo.android.core.StoragePurge.Outcome(
+                providers = _purgeProviders.value, erasedOn = 0, forbiddenOn = 0, unreachable = 0, outcomes = emptyList(),
+                error = e.message ?: e.javaClass.simpleName
+            )
+        }
+    }
+
+    /**
+     * Erase a received DM from the own inbox's storage, as its owner, and
+     * drop it from this device once some provider let it go.
+     */
+    private suspend fun eraseReceivedDm(channel: Channel, msg: UiMessage, key: String): com.pombo.android.core.StoragePurge.Outcome {
+        val me = myAddress()?.lowercase() ?: throw IllegalStateException("No identity")
+        val inbox = "$me/Pombo-DM-1"
+        val own = com.pombo.android.core.StoragePurge.Group(
+            StreamConstants.P_MESSAGES, listOf(resolvePurgeTarget(inbox, StreamConstants.P_MESSAGES, msg))
+        )
+        val chunks = msg.storageFile?.let {
+            com.pombo.android.core.StoragePurge.fileChunkGroups(storageEndpoints, inbox, it, open = files.chunkOpener(channel, it))
+        } ?: emptyList()
+        val outcome = com.pombo.android.core.StoragePurge.purgeGroups(storageEndpoints, inbox, chunks + own, key)
+        if (outcome.erasedOn > 0) {
+            deletedIds.add(msg.id)
+            _messages.value = _messages.value.filterNot { it.id == msg.id }
+            val list = synchronized(dmReceived) { dmReceived[msg.sender.lowercase()] }
+            if (list != null) synchronized(list) { list.removeAll { it.id == msg.id } }
+        }
+        return outcome
+    }
+
     /** Whether deleting this own message also erases it from storage. */
     fun ownPurgeApplies(messageId: String): Boolean {
         val channel = _current.value ?: return false
         val msg = _messages.value.find { it.id == messageId } ?: return false
-        if (_purgeProviders.value == 0 || channel.type == "dm" || channel.wireIdentity == "sealed") return false
+        if (_purgeProviders.value == 0 || channel.wireIdentity == "sealed") return false
+        if (channel.type == "dm") return dmSentRows.holds(channel.messageStreamId, messageId)
         return ownPurgeKey(channel, msg) != null
     }
 

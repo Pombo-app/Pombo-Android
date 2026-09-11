@@ -372,6 +372,8 @@ internal fun MessageGroup(
     /** Some storage provider of this channel announces `purge`. */
     canErase: Boolean = false,
     onErase: (String) -> Unit = {},
+    /** In a DM, erase addresses the own inbox and is offered on the peer's messages. */
+    isDm: Boolean = false,
     pins: List<com.pombo.android.ChannelManager.Pin>,
     activeId: String?,
     onActivate: (String) -> Unit,
@@ -553,6 +555,7 @@ internal fun MessageGroup(
                     isErased = msg.id in erased,
                     canErase = canErase,
                     onErase = { onErase(msg.id) },
+                    isDm = isDm,
                     onBan = { client, protocol, purge -> onBan(msg.sender, client, protocol, purge) },
                     purgeProviders = purgeProviders,
                     banGated = banGated,
@@ -611,6 +614,7 @@ private fun MessageBubble(
     /** Some storage provider of this channel announces `purge`. */
     canErase: Boolean = false,
     onErase: () -> Unit = {},
+    isDm: Boolean = false,
     onBan: (Boolean, Boolean, Boolean) -> Unit = { _, _, _ -> },
     purgeProviders: Int = 0,
     banGated: Boolean = false,
@@ -1008,6 +1012,14 @@ private fun MessageBubble(
                             ) { menu = false; confirmDelete = true }
                         }
 
+                        if (isDm && canErase && !msg.mine) {
+                            com.pombo.android.ui.ContextMenuDivider()
+                            com.pombo.android.ui.ContextMenuItem(
+                                "Erase from storage", Icons.Outlined.Delete,
+                                iconTint = red, labelColor = red
+                            ) { menu = false; confirmErase = true }
+                        }
+
                         // Moderation block. Every entry needs on-chain DELETE
                         // permission; Ban additionally excludes yourself and the
                         // channel creator, who cannot be banned
@@ -1152,7 +1164,9 @@ private fun MessageBubble(
                 Text("Erase from storage", color = Color.White, fontSize = 17.sp, fontWeight = FontWeight.SemiBold)
                 Spacer(Modifier.height(10.dp))
                 Text(
-                    "Remove this message from every storage provider that can erase it. " +
+                    if (isDm) "Remove this message from your inbox on every storage provider that can erase it. " +
+                        "It disappears from this device and cannot be recovered."
+                    else "Remove this message from every storage provider that can erase it. " +
                         "It stays hidden for everyone and cannot be recovered.",
                     color = Color.White.copy(alpha = 0.60f), fontSize = 14.sp, lineHeight = 20.sp
                 )

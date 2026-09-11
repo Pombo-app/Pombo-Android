@@ -269,6 +269,7 @@ fun ChatScreen(vm: AppViewModel) {
         // be undone and an erase decided on what is actually there.
         val moderates = canModerate || moderatesGate
         val purgeProviders by vm.purgeProviders.collectAsState()
+        val inboxPurgeProviders by vm.inboxPurgeProviders.collectAsState()
         val erasedIds by vm.erasedIds.collectAsState()
         val visible = remember(messages, hidden, banned, loadingInitial, moderates) {
             if (loadingInitial) emptyList()
@@ -723,8 +724,9 @@ fun ChatScreen(vm: AppViewModel) {
                         itemIndex = (groups.size - 1 - gi) * 2,
                         hidden = hidden,
                         erased = erasedIds,
-                        canErase = purgeProviders > 0,
+                        canErase = if (ch.type == "dm") inboxPurgeProviders > 0 else purgeProviders > 0,
                         onErase = { id -> vm.eraseMessage(id) },
+                        isDm = ch.type == "dm",
                         pins = pins,
                         activeId = activeId,
                         onActivate = { id -> activeId = if (activeId == id) null else id },

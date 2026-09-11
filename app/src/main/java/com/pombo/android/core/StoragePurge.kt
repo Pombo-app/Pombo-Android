@@ -29,8 +29,8 @@ object StoragePurge {
 
     data class Target(val timestamp: Long, val sequenceNumber: Int)
 
-    /** Rows of one partition addressed together. */
-    data class Group(val partition: Int, val targets: List<Target>)
+    /** Rows of one partition addressed together; rows written under another key carry it. */
+    data class Group(val partition: Int, val targets: List<Target>, val privateKeyHex: String? = null)
 
     data class ProviderOutcome(
         val provider: String,
@@ -55,20 +55,21 @@ object StoragePurge {
         val error: String? = null
     )
 
-    /** The exact string the client signs. */
-    fun buildMessage(streamId: String, partition: Int, issuedAt: Long, nonce: String, targets: List<Target>): String =
-        (listOf("pombo-storage-node", "purge", streamId, partition.toString(), issuedAt.toString(), nonce) +
+    /** The exact string the client signs; a `stored` query signs the same lines with `stored` as the action. */
+    fun buildMessage(streamId: String, partition: Int, issuedAt: Long, nonce: String, targets: List<Target>, action: String = "purge"): String =
+        (listOf("pombo-storage-node", action, streamId, partition.toString(), issuedAt.toString(), nonce) +
             targets.map { "${it.timestamp}:${it.sequenceNumber}" }).joinToString("\n")
 
     /** The signed request body. Throws on an empty or oversized target list, or without a key. */
     fun signedBody(
         streamId: String, partition: Int, targets: List<Target>, privateKeyHex: String,
-        issuedAt: Long = System.currentTimeMillis(), nonce: String = StorageReadSigner.randomNonce()
+        issuedAt: Long = System.currentTimeMillis(), nonce: String = StorageReadSigner.randomNonce(),
+        action: String = "purge"
     ): JSONObject {
-        require(targets.isNotEmpty()) { "No purge targets" }
-        require(targets.size <= MAX_TARGETS) { "At most $MAX_TARGETS targets per purge" }
-        require(privateKeyHex.isNotEmpty()) { "No key to sign the purge with" }
-        val message = buildMessage(streamId, partition, issuedAt, nonce, targets)
+        require(targets.isNotEmpty()) { "No $action targets" }
+        require(targets.size <= MAX_TARGETS) { "At most $MAX_TARGETS targets per $action" }
+        require(privateKeyHex.isNotEmpty()) { "No key to sign the $action with" }
+        val message = buildMessage(streamId, partition, issuedAt, nonce, targets, action)
         val signature = SigningOracle.signMessage(message.toByteArray(Charsets.UTF_8), privateKeyHex)
         require(signature.isNotEmpty()) { "Signing failed" }
         val arr = JSONArray()
@@ -81,8 +82,10 @@ object StoragePurge {
             .put("targets", arr)
     }
 
-    fun purgeUrl(base: String, streamId: String, partition: Int): String =
-        "${base.trimEnd('/')}/streams/${java.net.URLEncoder.encode(streamId, "UTF-8")}/data/partitions/$partition/purge"
+    fun purgeUrl(base: String, streamId: String, partition: Int): String = targetsUrl(base, streamId, partition, "purge")
+
+    fun targetsUrl(base: String, streamId: String, partition: Int, action: String): String =
+        "${base.trimEnd('/')}/streams/${java.net.URLEncoder.encode(streamId, "UTF-8")}/data/partitions/$partition/$action"
 
     /**
      * Purge on one provider: the first URL that answers decides; one that
@@ -94,12 +97,17 @@ object StoragePurge {
         provider: StorageEndpoints.Node, streamId: String, partition: Int, targets: List<Target>,
         privateKeyHex: String,
         post: suspend (url: String, body: String) -> Pair<Int, String> = StorageHttp::postJson
+    ): ProviderOutcome = postTargets("purge", provider, streamId, partition, targets, privateKeyHex, post)
+
+    private suspend fun postTargets(
+        action: String, provider: StorageEndpoints.Node, streamId: String, partition: Int, targets: List<Target>,
+        privateKeyHex: String, post: suspend (url: String, body: String) -> Pair<Int, String>
     ): ProviderOutcome {
         var lastError: String? = null
         for (url in provider.urls) {
             try {
-                val body = signedBody(streamId, partition, targets, privateKeyHex)
-                val (status, text) = post(purgeUrl(url, streamId, partition), body.toString())
+                val body = signedBody(streamId, partition, targets, privateKeyHex, action = action)
+                val (status, text) = post(targetsUrl(url, streamId, partition, action), body.toString())
                 if (status / 100 != 2) return ProviderOutcome(provider.nodeAddress, url, status, emptyMap())
                 return ProviderOutcome(provider.nodeAddress, url, status, parseResults(text))
             } catch (e: Exception) {
@@ -107,6 +115,31 @@ object StoragePurge {
             }
         }
         return ProviderOutcome(provider.nodeAddress, null, 0, emptyMap(), lastError ?: "unreachable")
+    }
+
+    /**
+     * Which of the targets the providers hold, asked of every provider that
+     * announces `stored` and signed by whoever may read the stream or wrote
+     * the rows. A row counts as present when any provider says so; null when
+     * no provider answered.
+     */
+    suspend fun storedOn(
+        providers: List<StorageEndpoints.Node>, streamId: String, partition: Int, targets: List<Target>,
+        privateKeyHex: String,
+        post: suspend (url: String, body: String) -> Pair<Int, String> = StorageHttp::postJson
+    ): Set<Target>? {
+        val present = HashSet<Target>()
+        var answered = false
+        for (p in providers) {
+            for (batch in targets.chunked(MAX_TARGETS)) {
+                val o = postTargets("stored", p, streamId, partition, batch, privateKeyHex, post)
+                if (o.status == 0) break
+                if (o.status / 100 != 2) continue
+                answered = true
+                o.results.forEach { (t, verdict) -> if (verdict == "present") present.add(t) }
+            }
+        }
+        return if (answered) present else null
     }
 
     /** `{results:[{timestamp,sequenceNumber,result}]}` → target → verdict. */
@@ -146,11 +179,11 @@ object StoragePurge {
         post: suspend (url: String, body: String) -> Pair<Int, String> = StorageHttp::postJson
     ): Outcome {
         val providers = endpoints.providersWith(streamId, "purge")
-        val batches = groups.flatMap { g -> g.targets.chunked(MAX_TARGETS).map { Group(g.partition, it) } }
+        val batches = groups.flatMap { g -> g.targets.chunked(MAX_TARGETS).map { Group(g.partition, it, g.privateKeyHex) } }
         val all = providers.map { p ->
             val outs = ArrayList<Pair<Group, ProviderOutcome>>()
             for (b in batches) {
-                val o = purgeOnProvider(p, streamId, b.partition, b.targets, privateKeyHex, post)
+                val o = purgeOnProvider(p, streamId, b.partition, b.targets, b.privateKeyHex ?: privateKeyHex, post)
                 outs.add(b to o)
                 if (o.status == 0) break
             }
