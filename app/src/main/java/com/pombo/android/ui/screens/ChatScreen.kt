@@ -97,6 +97,7 @@ import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import com.pombo.android.AppViewModel
 import com.pombo.android.NetStatus
@@ -946,30 +947,32 @@ fun ChatScreen(vm: AppViewModel) {
                     )
                 }
             }
-        }
-
-        // Typing indicator. Kept mounted so the wave can animate in and out
-        // instead of the row popping the composer up and down.
-        val typingEns by vm.ensNames.collectAsState()
-        // Rebuilt on every recomposition, not frozen when the signal arrived:
-        // the ENS name usually lands a moment after the first "typing".
-        val typingLabel = typingSentence(typing, typingEns)
-        // Held past the clear, or the line would blank out mid-fade-out.
-        var lastTypingLabel by remember { mutableStateOf("") }
-        LaunchedEffect(typingLabel) { typingLabel?.let { lastTypingLabel = it } }
-        // The row holds its height whether anyone is typing or not: the
-        // conversation above it must not move. Sized above the line it
-        // carries, since a flush box clips descenders.
-        Box(
-            Modifier.fillMaxWidth().height(32.dp),
-            contentAlignment = Alignment.CenterStart
-        ) {
+            val typingEns by vm.ensNames.collectAsState()
+            // Rebuilt on every recomposition, not frozen when the signal arrived:
+            // the ENS name usually lands a moment after the first "typing".
+            val typingLabel = typingSentence(typing, typingEns)
+            // Held past the clear, or the line would blank out mid-fade-out.
+            var lastTypingLabel by remember { mutableStateOf("") }
+            LaunchedEffect(typingLabel) { typingLabel?.let { lastTypingLabel = it } }
             androidx.compose.animation.AnimatedVisibility(
                 visible = typing.isNotEmpty(),
                 enter = fadeIn(tween(180)),
-                exit = fadeOut(tween(140))
+                exit = fadeOut(tween(140)),
+                modifier = Modifier.align(Alignment.BottomStart).fillMaxWidth()
             ) {
-                TypingIndicator(lastTypingLabel)
+                Box(
+                    Modifier
+                        .fillMaxWidth()
+                        .background(
+                            Brush.verticalGradient(
+                                listOf(Color.Transparent, PomboColors.Background)
+                            )
+                        )
+                        .padding(top = 16.dp, bottom = 4.dp),
+                    contentAlignment = Alignment.CenterStart
+                ) {
+                    TypingIndicator(lastTypingLabel)
+                }
             }
         }
 
@@ -1084,8 +1087,8 @@ private fun typingSentence(
 
 /**
  * The typing line: a three-dot wave and one dim sentence, nothing else — no
- * chip, no border. It sits directly above the composer, where any surface of
- * its own would read as a second input bar.
+ * chip, no border. It floats over the foot of the conversation, where any
+ * surface of its own would read as a second input bar.
  *
  * One infinite driver phase-shifted per dot rather than three independent
  * animations: that is what makes it read as a travelling wave instead of three
