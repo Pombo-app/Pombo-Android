@@ -146,7 +146,15 @@ internal fun ChatsTab(vm: AppViewModel, onCreate: () -> Unit, onJoin: () -> Unit
                 }
             } else {
                 Row(verticalAlignment = Alignment.CenterVertically) {
-                    // Wallet: what this account holds, beside the bell as on the web.
+                    // Join by stream ID. Creating a channel lives in Explore.
+                    Box(
+                        Modifier.size(32.dp).background(Color.White.copy(alpha = 0.08f), CircleShape).clickableNoRipple(onJoin),
+                        contentAlignment = Alignment.Center
+                    ) { Text("#", color = PomboColors.Text, fontSize = 16.sp, fontWeight = FontWeight.Bold) }
+                    Spacer(Modifier.width(8.dp))
+                    // Wallet: what this account holds. The bell keeps the outer
+                    // edge, where the web mobile header also puts it and where a
+                    // badge is most visible.
                     var walletOpen by remember { mutableStateOf(false) }
                     Box(
                         Modifier.size(32.dp)
@@ -234,12 +242,6 @@ internal fun ChatsTab(vm: AppViewModel, onCreate: () -> Unit, onJoin: () -> Unit
                             ActiveTransfersSection(vm, channels)
                         }
                     }
-                    Spacer(Modifier.width(8.dp))
-                    // Join by stream ID. Creating a channel lives in Explore.
-                    Box(
-                        Modifier.size(32.dp).background(Color.White.copy(alpha = 0.08f), CircleShape).clickableNoRipple(onJoin),
-                        contentAlignment = Alignment.Center
-                    ) { Text("#", color = PomboColors.Text, fontSize = 16.sp, fontWeight = FontWeight.Bold) }
                 }
             }
         }
