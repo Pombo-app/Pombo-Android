@@ -25,6 +25,7 @@ import androidx.compose.material.icons.outlined.Explore
 import androidx.compose.material.icons.outlined.Settings
 import androidx.compose.material.icons.outlined.MailOutline
 import androidx.compose.material.icons.filled.MoreVert
+import androidx.compose.material.icons.outlined.ContentCopy
 import androidx.compose.material.icons.outlined.Edit
 import androidx.compose.material.icons.outlined.Close
 import androidx.compose.material3.Icon
@@ -55,6 +56,7 @@ internal fun ContactsTab(vm: AppViewModel) {
     val contacts by vm.contacts.collectAsState()
     val ensNames by vm.ensNames.collectAsState()
     val status by vm.status.collectAsState()
+    val clipboard = androidx.compose.ui.platform.LocalClipboardManager.current
     var showAdd by remember { mutableStateOf(false) }
     /** Contact whose nickname is being edited (web showEditModal). */
     var editing by remember { mutableStateOf<com.pombo.android.data.Contact?>(null) }
@@ -125,23 +127,26 @@ internal fun ContactsTab(vm: AppViewModel) {
                                 tint = Color.White.copy(alpha = 0.25f),
                                 modifier = Modifier.size(20.dp).clickableNoRipple { menuOpen = true }
                             )
-                            androidx.compose.material3.DropdownMenu(
-                                expanded = menuOpen,
-                                onDismissRequest = { menuOpen = false },
-                                modifier = Modifier.background(Color(0xFF111113))
-                            ) {
-                                ContactMenuItem("Edit Contact", Icons.Outlined.Edit) {
-                                    menuOpen = false; editing = c
-                                }
-                                ContactMenuItem("Send DM", Icons.Outlined.MailOutline) {
-                                    menuOpen = false; vm.startDm(c.address)
-                                }
-                                Box(
-                                    Modifier.fillMaxWidth().padding(vertical = 4.dp).height(1.dp)
-                                        .background(Color.White.copy(alpha = 0.08f))
-                                )
-                                ContactMenuItem("Remove Contact", Icons.Outlined.Close, danger = true) {
-                                    menuOpen = false; vm.removeContact(c.address)
+                            if (menuOpen) {
+                                com.pombo.android.ui.PomboAnchoredMenu(onDismiss = { menuOpen = false }) {
+                                    ContactMenuItem("Edit Contact", Icons.Outlined.Edit) {
+                                        menuOpen = false; editing = c
+                                    }
+                                    ContactMenuItem("Send DM", Icons.Outlined.MailOutline) {
+                                        menuOpen = false; vm.startDm(c.address)
+                                    }
+                                    ContactMenuItem("Copy address", Icons.Outlined.ContentCopy) {
+                                        menuOpen = false
+                                        clipboard.setText(androidx.compose.ui.text.AnnotatedString(c.address))
+                                        vm.toast("Address copied", com.pombo.android.ui.ToastKind.SUCCESS)
+                                    }
+                                    Box(
+                                        Modifier.fillMaxWidth().padding(vertical = 4.dp).height(1.dp)
+                                            .background(Color.White.copy(alpha = 0.08f))
+                                    )
+                                    ContactMenuItem("Remove Contact", Icons.Outlined.Close, danger = true) {
+                                        menuOpen = false; vm.removeContact(c.address)
+                                    }
                                 }
                             }
                         }

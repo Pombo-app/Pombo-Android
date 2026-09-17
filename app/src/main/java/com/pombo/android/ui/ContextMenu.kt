@@ -86,22 +86,65 @@ fun PomboContextMenu(
         onDismissRequest = onDismiss,
         properties = PopupProperties(focusable = true)
     ) {
-        Column(
-            Modifier
-                // A Popup hands its content the whole window as the max width,
-                // so items that fillMaxWidth would stretch the menu edge to
-                // edge. Sizing to the widest item reproduces the web's
-                // `min-w-[180px]` on an otherwise fit-content box.
-                .width(IntrinsicSize.Max)
-                .widthIn(min = 180.dp)
-                .shadow(16.dp, RoundedCornerShape(12.dp))
-                .background(Color(0xFF16161B), RoundedCornerShape(12.dp))
-                .border(1.dp, Color.White.copy(alpha = 0.10f), RoundedCornerShape(12.dp))
-                // `py-1`
-                .padding(vertical = 4.dp),
-            content = content
-        )
+        PomboMenuSurface(content)
     }
+}
+
+/**
+ * The same menu, hung under the control that opened it instead of under the
+ * finger: a kebab has a place on screen, so the menu belongs to the button.
+ * Flips above the anchor when there is no room below.
+ */
+@Composable
+fun PomboAnchoredMenu(
+    onDismiss: () -> Unit,
+    content: @Composable ColumnScope.() -> Unit
+) {
+    val marginPx = with(LocalDensity.current) { 10.dp.roundToPx() }
+    val gapPx = with(LocalDensity.current) { 4.dp.roundToPx() }
+    val positionProvider = remember(marginPx, gapPx) {
+        object : PopupPositionProvider {
+            override fun calculatePosition(
+                anchorBounds: IntRect,
+                windowSize: IntSize,
+                layoutDirection: LayoutDirection,
+                popupContentSize: IntSize
+            ): IntOffset {
+                val x = (anchorBounds.right - popupContentSize.width)
+                    .coerceAtMost(windowSize.width - popupContentSize.width - marginPx)
+                    .coerceAtLeast(marginPx)
+                val below = anchorBounds.bottom + gapPx
+                val y = if (below + popupContentSize.height + marginPx <= windowSize.height) below
+                        else (anchorBounds.top - gapPx - popupContentSize.height).coerceAtLeast(marginPx)
+                return IntOffset(x, y)
+            }
+        }
+    }
+
+    Popup(
+        popupPositionProvider = positionProvider,
+        onDismissRequest = onDismiss,
+        properties = PopupProperties(focusable = true)
+    ) {
+        PomboMenuSurface(content)
+    }
+}
+
+/** The panel both menus draw, from the web's `#message-context-menu`. */
+@Composable
+private fun PomboMenuSurface(content: @Composable ColumnScope.() -> Unit) {
+    Column(
+        Modifier
+            // A Popup hands its content the whole window as the max width, so
+            // items that fillMaxWidth would stretch the menu edge to edge.
+            .width(IntrinsicSize.Max)
+            .widthIn(min = 180.dp)
+            .shadow(16.dp, RoundedCornerShape(12.dp))
+            .background(Color(0xFF16161B), RoundedCornerShape(12.dp))
+            .border(1.dp, Color.White.copy(alpha = 0.10f), RoundedCornerShape(12.dp))
+            .padding(vertical = 4.dp),
+        content = content
+    )
 }
 
 /** `.context-menu-item`: px-4 py-2, text-sm, 16px icon, gap-2. */
