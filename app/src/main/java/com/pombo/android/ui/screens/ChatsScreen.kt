@@ -227,8 +227,6 @@ internal fun ChatsTab(vm: AppViewModel, onCreate: () -> Unit, onJoin: () -> Unit
             }
         }
 
-        Spacer(Modifier.height(8.dp))
-
         // Filter tabs (All / Personal / Communities) — active gets an orange underline
         Box(Modifier.fillMaxWidth().padding(horizontal = 8.dp)) {
             androidx.compose.material3.HorizontalDivider(
@@ -388,7 +386,7 @@ internal fun ChatsTab(vm: AppViewModel, onCreate: () -> Unit, onJoin: () -> Unit
             // tying it to the offset (as a 2026-08-21 edit briefly did) shrank it
             // to the point the button sat flush against the pill.
             Box(
-                Modifier.fillMaxWidth().padding(start = 16.dp, end = 16.dp, top = 12.dp, bottom = 28.dp),
+                Modifier.fillMaxWidth().padding(start = 16.dp, end = 16.dp, top = 6.dp, bottom = 28.dp),
                 contentAlignment = Alignment.Center
             ) {
                 if (hasDmInbox) {

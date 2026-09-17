@@ -501,7 +501,9 @@ internal fun PomboHeader(status: NetStatus, trailing: @Composable (() -> Unit)? 
     Row(
         Modifier.fillMaxWidth()
             .background(PomboColors.Background)
-            .padding(horizontal = 14.dp, vertical = 10.dp),
+            // Less below than above: whatever sits under the header brings its
+            // own top padding, and the two together read as a hole.
+            .padding(start = 14.dp, end = 14.dp, top = 10.dp, bottom = 6.dp),
         verticalAlignment = Alignment.CenterVertically
     ) {
         androidx.compose.foundation.Image(
