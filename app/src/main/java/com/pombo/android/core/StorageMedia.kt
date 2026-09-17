@@ -369,9 +369,9 @@ class StorageMedia(
                         done = true
                     } catch (e: StorageHttp.HttpStatusException) {
                         if (e.code == 400) { endpoints.setMetaFormatSupport(base, false); Log.w(TAG, "format=metadata unavailable on $base — full reads") }
-                        else { endpoints.noteFailure(base); Log.w(TAG, "$label: metadata read failed on $base — full read") }
+                        else { endpoints.noteReadError(base, e); Log.w(TAG, "$label: metadata read failed on $base — full read") }
                     } catch (e: Exception) {
-                        endpoints.noteFailure(base); Log.w(TAG, "$label: metadata read failed on $base — full read")
+                        endpoints.noteReadError(base, e); Log.w(TAG, "$label: metadata read failed on $base — full read")
                     }
                 }
                 if (!done) {
@@ -383,7 +383,7 @@ class StorageMedia(
                     } catch (e: Exception) {
                         synchronized(lock) { stats?.let { it.winsFailed++ } }
                         Log.w(TAG, "$label: window P${w.partition} read failed: ${e.message}")
-                        if (base != null) endpoints.noteFailure(base)
+                        if (base != null) endpoints.noteReadError(base, e)
                     }
                 }
                 onProgress?.invoke(found.toSet())
@@ -971,7 +971,7 @@ class StorageMedia(
                             try { if (StorageHttp.directFetchRangeMeta(base, messageStreamId, p0, from, to).any { it.timestamp == annTs }) { found = true; break }; continue }
                             catch (e: StorageHttp.HttpStatusException) { if (e.code == 400) endpoints.setMetaFormatSupport(base, false) }
                         }
-                        try { StorageHttp.directFetchRange(base, messageStreamId, p0, from, to) { if (it.timestamp == annTs) found = true } } catch (e: Exception) { endpoints.noteFailure(base) }
+                        try { StorageHttp.directFetchRange(base, messageStreamId, p0, from, to) { if (it.timestamp == annTs) found = true } } catch (e: Exception) { endpoints.noteReadError(base, e) }
                         if (found) break
                     }
                 }
@@ -1246,7 +1246,7 @@ class StorageMedia(
                             // on purpose (see downloadFile's row handler).
                             throw e
                         } catch (e: Exception) {
-                            endpoints.noteFailure(base)
+                            endpoints.noteReadError(base, e)
                             Log.w(TAG, "storage download window P${w.partition} @ $base failed: ${e.message}")
                         }
                     }

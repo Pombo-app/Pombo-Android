@@ -147,6 +147,16 @@ class StorageEndpoints(
         failures[u] = (failures[u] ?: 0) + 1
     }
 
+    /**
+     * Record a read that threw. A 4xx is the node answering about the request
+     * (stream gone, unsigned, no access), not a sign of its health, so it
+     * neither counts towards ejection nor resets the count.
+     */
+    fun noteReadError(url: String, error: Throwable) {
+        if (error is StorageHttp.HttpStatusException && error.code in 400..499) return
+        noteFailure(url)
+    }
+
     /** Record a successful read (resets the consecutive-failure count). */
     fun noteSuccess(url: String) {
         failures.remove(normalizeUrl(url))

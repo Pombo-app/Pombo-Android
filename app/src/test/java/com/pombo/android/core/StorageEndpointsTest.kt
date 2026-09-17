@@ -292,6 +292,19 @@ class StorageEndpointsTest {
     }
 
     @Test
+    fun `noteReadError ignores 4xx answers but counts other errors`() = runBlocking {
+        val ep = StorageEndpoints(
+            fetcher = { listOf(node("0xa", "https://a1.example.com", "https://a2.example.com")) },
+            failureLimit = 3
+        )
+        repeat(3) { ep.noteReadError("https://a1.example.com", StorageHttp.HttpStatusException(404)) }
+        assertEquals(listOf("https://a1.example.com", "https://a2.example.com"), ep.rotation("s"))
+
+        repeat(3) { ep.noteReadError("https://a1.example.com", StorageHttp.HttpStatusException(503)) }
+        assertEquals(listOf("https://a2.example.com"), ep.rotation("s"))
+    }
+
+    @Test
     fun `probeStream on a stream without storage probes nothing`() = runBlocking {
         val calls = AtomicInteger(0)
         val ep = StorageEndpoints(fetcher = { emptyList() }, capabilityFetcher = { calls.incrementAndGet(); FORK })
