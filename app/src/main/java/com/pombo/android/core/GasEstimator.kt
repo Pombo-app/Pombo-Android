@@ -186,16 +186,66 @@ object GasEstimator {
     suspend fun getBalance(address: String): BigInteger? =
         hexToWei(rpcCall("eth_getBalance", JSONArray().put(address).put("latest"))?.optString("result"))
 
-    /** Streamr DATA token on Polygon. */
-    private const val DATA_TOKEN_POLYGON = "0x3a9A81d576d83FF21f26f325066054540720fC34"
-
-    /** ERC-20 balanceOf(address) via eth_call. null when every RPC failed. */
-    suspend fun getDataBalance(address: String): BigInteger? {
+    /** ERC-20 balanceOf on any token. null when every RPC failed. */
+    suspend fun getTokenBalance(token: String, address: String): BigInteger? {
         val padded = address.removePrefix("0x").lowercase().padStart(64, '0')
         val call = JSONObject()
-            .put("to", DATA_TOKEN_POLYGON)
+            .put("to", token)
             .put("data", "0x70a08231$padded")
         return ethCall(call)
+    }
+
+    /** What a token calls itself and how it counts. */
+    data class TokenMeta(val symbol: String, val decimals: Int)
+
+    /**
+     * `symbol()` and `decimals()` off the contract. Both are needed to render
+     * an amount at all, so either one missing means null: rendering a 6-decimal
+     * balance as if it had 18 understates it by a factor of a trillion.
+     *
+     * The symbol is text the token's author chose. It is returned as-is and
+     * callers must treat it as untrusted display text.
+     */
+    suspend fun getTokenMeta(token: String): TokenMeta? {
+        val symbolHex = ethCallRaw(JSONObject().put("to", token).put("data", "0x95d89b41"))
+            ?: return null
+        val decimalsHex = ethCallRaw(JSONObject().put("to", token).put("data", "0x313ce567"))
+            ?: return null
+        val symbol = decodeAbiString(symbolHex) ?: return null
+        val decimals = try {
+            BigInteger(decimalsHex.removePrefix("0x"), 16).toInt()
+        } catch (e: Exception) {
+            return null
+        }
+        if (symbol.isEmpty() || decimals < 0 || decimals > 36) return null
+        return TokenMeta(symbol, decimals)
+    }
+
+    /**
+     * An ABI-encoded string: offset, length, bytes. Tokens older than the
+     * standard answer with a bare bytes32 instead, which is one word long and
+     * padded with NULs.
+     */
+    internal fun decodeAbiString(hex: String): String? {
+        val body = hex.removePrefix("0x")
+        if (body.isEmpty()) return null
+        return try {
+            if (body.length > 128) {
+                val length = BigInteger(body.substring(64, 128), 16).toInt()
+                if (length <= 0 || 128 + length * 2 > body.length) return null
+                val bytes = ByteArray(length) { i ->
+                    body.substring(128 + i * 2, 130 + i * 2).toInt(16).toByte()
+                }
+                String(bytes, Charsets.UTF_8).trim()
+            } else {
+                val bytes = ByteArray(body.length / 2) { i ->
+                    body.substring(i * 2, i * 2 + 2).toInt(16).toByte()
+                }
+                String(bytes, Charsets.UTF_8).trimEnd(Char(0)).trim()
+            }
+        } catch (e: Exception) {
+            null
+        }
     }
 
     /**
@@ -206,7 +256,10 @@ object GasEstimator {
      * such a node. Here only a real 32-byte word counts; anything else moves
      * on to the next endpoint.
      */
-    private suspend fun ethCall(call: JSONObject): BigInteger? = withContext(Dispatchers.IO) {
+    private suspend fun ethCall(call: JSONObject): BigInteger? =
+        ethCallRaw(call)?.let { hexToWei(it) }
+
+    private suspend fun ethCallRaw(call: JSONObject): String? = withContext(Dispatchers.IO) {
         val body = JSONObject()
             .put("jsonrpc", "2.0")
             .put("method", "eth_call")
@@ -241,7 +294,7 @@ object GasEstimator {
                 val result = json.optString("result")
                 if (result.startsWith("0x") && result.length > 2) {
                     android.util.Log.d(TAG, "ethCall $url -> ok (${result.length} chars)")
-                    return@withContext hexToWei(result)
+                    return@withContext result
                 }
                 android.util.Log.d(TAG, "ethCall $url -> empty result '$result'")
             } catch (e: Exception) {
@@ -325,18 +378,6 @@ object GasEstimator {
             )
         } catch (e: Exception) {
             Probe(Reach.DEAD)
-        }
-    }
-
-    fun formatBalanceDATA(wei: BigInteger?): String {
-        if (wei == null) return "Error"
-        val v = wei.toDouble() / 1e18
-        return when {
-            v == 0.0 -> "0 DATA"
-            v < 0.0001 -> "< 0.0001 DATA"
-            v < 1 -> fmt("%.4f DATA", v)
-            v < 100 -> fmt("%.3f DATA", v)
-            else -> fmt("%.2f DATA", v)
         }
     }
 

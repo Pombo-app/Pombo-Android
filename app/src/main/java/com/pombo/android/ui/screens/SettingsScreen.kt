@@ -128,7 +128,6 @@ private fun SettingsHeader(title: String) {
  */
 internal enum class SettingsPanel(val label: String, val icon: ImageVector, val section: Int) {
     ACCOUNT("Account", Icons.Outlined.Person, 0),
-    WALLET("Wallet", Icons.Outlined.AccountBalanceWallet, 0),
     NOTIFICATIONS("Notifications", Icons.Outlined.Notifications, 0),
     API("API", Icons.Outlined.Link, 0),
     CONTENT("Content", Icons.Outlined.SmartDisplay, 0),
@@ -176,7 +175,6 @@ internal fun SettingsTab(vm: AppViewModel, pagerState: androidx.compose.foundati
             ) {
                 when (SettingsPanel.entries[page]) {
                     SettingsPanel.ACCOUNT -> AccountPanel(vm)
-                    SettingsPanel.WALLET -> WalletPanel(vm)
                     SettingsPanel.NOTIFICATIONS -> NotificationsSection(vm)
                     SettingsPanel.SECURITY -> SecurityPanel(vm)
                     SettingsPanel.DM_INBOX -> DmInboxPanel(vm)
@@ -1086,125 +1084,6 @@ private fun ContentToggleRow(
                 uncheckedThumbColor = Color.White.copy(alpha = 0.60f)
             )
         )
-    }
-}
-
-/**
- * Web settings-panel-wallet: the POL balance card with a refresh action and
- * the "Fund with MetaMask" button. Additions here: a DATA token balance card
- * (not on the web) — and no DM inbox status, which was never part of the
- * web's wallet panel.
- */
-@Composable
-private fun WalletPanel(vm: AppViewModel) {
-    val address by vm.address.collectAsState()
-    val balanceWei by vm.balanceWei.collectAsState()
-    val dataBalanceWei by vm.dataBalanceWei.collectAsState()
-    val balancesFailed by vm.balancesFailed.collectAsState()
-    val clipboard = androidx.compose.ui.platform.LocalClipboardManager.current
-    val context = androidx.compose.ui.platform.LocalContext.current
-    val uriHandler = androidx.compose.ui.platform.LocalUriHandler.current
-    // Web: SettingsUI refreshes the balance when the wallet panel is shown.
-    LaunchedEffect(address) { if (address != null) vm.refreshGas() }
-    SettingsSection {
-        WalletBalanceCard(
-            label = "POL Balance",
-            value = when {
-                balanceWei != null -> com.pombo.android.core.GasEstimator.formatBalancePOL(balanceWei)
-                balancesFailed -> "Unavailable — tap refresh"
-                else -> "Loading..."
-            },
-            onRefresh = { vm.refreshGas() }
-        )
-        Spacer(Modifier.height(16.dp))
-        WalletBalanceCard(
-            label = "DATA Balance",
-            value = when {
-                dataBalanceWei != null -> com.pombo.android.core.GasEstimator.formatBalanceDATA(dataBalanceWei)
-                balancesFailed -> "Unavailable — tap refresh"
-                else -> "Loading..."
-            },
-            onRefresh = { vm.refreshGas() }
-        )
-        Spacer(Modifier.height(16.dp))
-        // Web fund-metamask-btn talks to the injected extension; on Android
-        // the MetaMask APP deep link opens its send screen pre-filled with
-        // this address on Polygon (chain 137) — the amount is chosen there.
-        // Without MetaMask installed the link lands on their install page.
-        Row(
-            Modifier.fillMaxWidth()
-                .background(PomboColors.Accent.copy(alpha = 0.10f), RoundedCornerShape(12.dp))
-                .border(1.dp, PomboColors.Accent.copy(alpha = 0.30f), RoundedCornerShape(12.dp))
-                .clickableNoRipple {
-                    address?.let { addr ->
-                        // MetaMask's /send deep-link route demands a chain id
-                        // it then can't match against the wallet's networks —
-                        // "network not found" with @137 and @0x89, "missing
-                        // chain_id" without. So: copy the address, open the
-                        // MetaMask APP directly, and the user pastes into
-                        // Send. Not installed → Play Store page.
-                        clipboard.setText(androidx.compose.ui.text.AnnotatedString(addr))
-                        vm.toast(
-                            "Address copied — paste it in MetaMask's Send",
-                            com.pombo.android.ui.ToastKind.SUCCESS, 5000L
-                        )
-                        val launch = context.packageManager.getLaunchIntentForPackage("io.metamask")
-                        if (launch != null) {
-                            context.startActivity(launch)
-                        } else {
-                            uriHandler.openUri("https://play.google.com/store/apps/details?id=io.metamask")
-                        }
-                    }
-                }
-                .padding(vertical = 11.dp),
-            horizontalArrangement = Arrangement.Center,
-            verticalAlignment = Alignment.CenterVertically
-        ) {
-            Icon(
-                Icons.Outlined.AccountBalanceWallet, contentDescription = null,
-                tint = PomboColors.Accent, modifier = Modifier.size(16.dp)
-            )
-            Spacer(Modifier.width(8.dp))
-            Text("Fund with MetaMask", color = PomboColors.Accent, fontSize = 14.sp, fontWeight = FontWeight.Medium)
-        }
-        Spacer(Modifier.height(8.dp))
-        Text(
-            "Send POL from your MetaMask wallet",
-            color = Color.White.copy(alpha = 0.30f), fontSize = 12.sp,
-            modifier = Modifier.fillMaxWidth(),
-            textAlign = androidx.compose.ui.text.style.TextAlign.Center
-        )
-    }
-}
-
-/** Web wallet panel balance card: value + refresh icon, network hint below. */
-@Composable
-private fun WalletBalanceCard(label: String, value: String, onRefresh: () -> Unit) {
-    Text(
-        label.uppercase(),
-        color = Color.White.copy(alpha = 0.80f), fontSize = 11.sp,
-        fontWeight = FontWeight.Medium, letterSpacing = 0.08.em
-    )
-    Spacer(Modifier.height(8.dp))
-    Column(
-        Modifier.fillMaxWidth()
-            .background(Color.White.copy(alpha = 0.05f), RoundedCornerShape(12.dp))
-            .border(1.dp, Color.White.copy(alpha = 0.10f), RoundedCornerShape(12.dp))
-            .padding(horizontal = 14.dp, vertical = 12.dp)
-    ) {
-        Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
-            Text(
-                value, color = PomboColors.Text, fontSize = 14.sp, fontWeight = FontWeight.Medium,
-                modifier = Modifier.weight(1f)
-            )
-            Icon(
-                Icons.Outlined.Refresh, contentDescription = "Refresh",
-                tint = Color.White.copy(alpha = 0.40f),
-                modifier = Modifier.size(16.dp).clickableNoRipple(onRefresh)
-            )
-        }
-        Spacer(Modifier.height(2.dp))
-        Text("On Polygon network", color = Color.White.copy(alpha = 0.30f), fontSize = 12.sp)
     }
 }
 
