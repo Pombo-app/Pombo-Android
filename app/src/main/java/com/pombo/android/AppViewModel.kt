@@ -2631,22 +2631,14 @@ class AppViewModel(app: Application) : AndroidViewModel(app), PomboBridge.Listen
         }
     }
 
-    /** True when the last balance fetch came back empty — drives "Unavailable". */
-    private val _balancesFailed = MutableStateFlow(false)
-    val balancesFailed: StateFlow<Boolean> = _balancesFailed.asStateFlow()
-
     /** Pulled when a spend-money screen opens; all calls are independently cached/cheap. */
     fun refreshGas() = viewModelScope.launch {
         // Reset to null first so the UI shows a loading state immediately.
         _balanceWei.value = null
-        _dataBalanceWei.value = null
-        _balancesFailed.value = false
         _gasCosts.value = com.pombo.android.core.GasEstimator.estimateCosts()
         _address.value?.let {
             _balanceWei.value = com.pombo.android.core.GasEstimator.getBalance(it)
-            _dataBalanceWei.value = com.pombo.android.core.GasEstimator.getDataBalance(it)
         }
-        _balancesFailed.value = _balanceWei.value == null || _dataBalanceWei.value == null
     }
 
     /**
