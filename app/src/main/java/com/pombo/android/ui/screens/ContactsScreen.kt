@@ -241,40 +241,19 @@ private fun EditContactDialog(
 private fun AddContactDialog(onDismiss: () -> Unit, onAdd: (String, String?) -> Unit) {
     var address by remember { mutableStateOf("") }
     var name by remember { mutableStateOf("") }
-    androidx.compose.material3.AlertDialog(
-        onDismissRequest = onDismiss,
-        // Same frame as the Settings cards: a 1px white/8 hairline on a rounded
-        // corner. The bare M3 surface is true black on true black, so the dialog
-        // had no edge at all — nothing said where it ended.
-        modifier = Modifier.border(1.dp, PomboColors.Border, RoundedCornerShape(16.dp)),
-        shape = RoundedCornerShape(16.dp),
-        containerColor = PomboColors.Surface,
-        titleContentColor = PomboColors.Text,
-        textContentColor = PomboColors.Text,
-        title = { Text("Add contact") },
-        text = {
-            Column {
-                // Web placeholder: "0x... or ENS name" — addContact resolves
-                // the name before saving, so the stored contact is always an
-                // address and stays valid if the ENS record later changes.
-                androidx.compose.material3.OutlinedTextField(
-                    value = address, onValueChange = { address = it },
-                    label = { Text("0x… or ENS name") }, colors = pomboFieldColors(),
-                    singleLine = true, modifier = Modifier.fillMaxWidth()
-                )
-                Spacer(Modifier.height(12.dp))
-                androidx.compose.material3.OutlinedTextField(
-                    value = name, onValueChange = { name = it },
-                    label = { Text("Nickname (optional)") }, colors = pomboFieldColors(),
-                    singleLine = true, modifier = Modifier.fillMaxWidth()
-                )
-            }
-        },
-        confirmButton = {
-            androidx.compose.material3.TextButton(onClick = { onAdd(address, name.ifEmpty { null }) }, enabled = address.isNotBlank()) {
-                Text("Add", color = if (address.isNotBlank()) PomboColors.Accent else PomboColors.TextDim, fontWeight = FontWeight.Bold)
-            }
-        },
-        dismissButton = { androidx.compose.material3.TextButton(onClick = onDismiss) { Text("Cancel", color = PomboColors.TextDim) } }
-    )
+    PomboDialogFrame("Add contact", onDismiss) {
+        // addContact resolves an ENS name before saving, so what is stored is
+        // always an address and survives the record changing later.
+        PomboFieldLabel("ADDRESS OR ENS")
+        PomboDialogField(address, { address = it }, placeholder = "0x… or name.eth")
+        Spacer(Modifier.height(12.dp))
+
+        PomboFieldLabel("NICKNAME (OPTIONAL)")
+        PomboDialogField(name, { name = it }, placeholder = "e.g. Alice")
+
+        Spacer(Modifier.height(20.dp))
+        PomboPrimaryButton("Add", enabled = address.isNotBlank()) {
+            onAdd(address, name.ifEmpty { null })
+        }
+    }
 }
