@@ -2315,9 +2315,124 @@ class AppViewModel(app: Application) : AndroidViewModel(app), PomboBridge.Listen
     private val _balanceWei = MutableStateFlow<java.math.BigInteger?>(null)
     val balanceWei: StateFlow<java.math.BigInteger?> = _balanceWei.asStateFlow()
 
-    /** DATA token balance (Settings → Wallet) — an addition over the web panel. */
-    private val _dataBalanceWei = MutableStateFlow<java.math.BigInteger?>(null)
-    val dataBalanceWei: StateFlow<java.math.BigInteger?> = _dataBalanceWei.asStateFlow()
+
+    // ==================== Wallet panel (web: the wallet modal) ====================
+
+    /**
+     * One line of the wallet panel. [amount] null with [failed] false means the
+     * read is still in flight; [failed] means every RPC refused, which is not
+     * the same as a zero balance and must never be shown as one.
+     */
+    data class WalletRow(
+        val id: String,
+        val symbol: String,
+        val address: String?,
+        val kind: Kind,
+        val amount: String? = null,
+        val failed: Boolean = false,
+        val raw: java.math.BigInteger? = null
+    ) {
+        enum class Kind { BASE, CURATED, CUSTOM }
+    }
+
+    private val walletTokenStore = com.pombo.android.data.WalletTokenStore(app)
+
+    private val _walletRows = MutableStateFlow<List<WalletRow>>(emptyList())
+    val walletRows: StateFlow<List<WalletRow>> = _walletRows.asStateFlow()
+
+    /** Why an "Add token" was turned down; cleared when the field changes. */
+    private val _walletAddError = MutableStateFlow<String?>(null)
+    val walletAddError: StateFlow<String?> = _walletAddError.asStateFlow()
+
+    private var walletJob: kotlinx.coroutines.Job? = null
+
+    /**
+     * Read every listed token. Curated entries are dropped unless they hold a
+     * balance: they are an offer, not a promise, and a flaky RPC must not fill
+     * the panel with errors for coins the user never asked about.
+     */
+    fun refreshWallet() {
+        val address = _address.value ?: return
+        walletJob?.cancel()
+        val store = walletTokenStore
+        val estimator = com.pombo.android.core.GasEstimator
+
+        val base = listOf(
+            WalletRow("pol", "POL", null, WalletRow.Kind.BASE),
+            WalletRow("data", "DATA", com.pombo.android.core.WalletTokens.DATA, WalletRow.Kind.BASE),
+            WalletRow("usdc", "USDC", com.pombo.android.core.WalletTokens.USDC, WalletRow.Kind.BASE)
+        )
+        val curated = com.pombo.android.core.WalletTokens.CURATED.map {
+            WalletRow("curated:${it.lowercase()}", "", it, WalletRow.Kind.CURATED)
+        }
+        val custom = store.list(address).map {
+            WalletRow("custom:${it.lowercase()}", "", it, WalletRow.Kind.CUSTOM)
+        }
+        _walletRows.value = base + custom
+
+        walletJob = viewModelScope.launch {
+            val rows = (base + curated + custom).toMutableList()
+            val done = mutableListOf<WalletRow>()
+            for ((index, row) in rows.withIndex()) {
+                val filled = if (row.address == null) {
+                    val wei = estimator.getBalance(address)
+                    row.copy(
+                        amount = com.pombo.android.core.TokenAmount.format(wei, 18),
+                        failed = wei == null,
+                        raw = wei
+                    )
+                } else {
+                    val meta = estimator.getTokenMeta(row.address)
+                    val wei = if (meta == null) null else estimator.getTokenBalance(row.address, address)
+                    row.copy(
+                        symbol = meta?.symbol?.take(12) ?: row.symbol,
+                        amount = if (meta == null || wei == null) null
+                                 else com.pombo.android.core.TokenAmount.format(wei, meta.decimals),
+                        failed = meta == null || wei == null,
+                        raw = wei
+                    )
+                }
+                rows[index] = filled
+                done.add(filled)
+                _walletRows.value = rows.filter { r ->
+                    r.kind != WalletRow.Kind.CURATED ||
+                        (!r.failed && r.raw != null && r.raw.signum() > 0)
+                }
+            }
+        }
+    }
+
+    /** Add an ERC-20 by address, once the chain confirms it is one. */
+    fun addWalletToken(input: String) = viewModelScope.launch {
+        val address = _address.value ?: return@launch
+        val token = input.trim()
+        if (!com.pombo.android.data.WalletTokenStore.isAddress(token)) {
+            _walletAddError.value = "Paste a token address (0x and 40 hex characters)"
+            return@launch
+        }
+        val listed = _walletRows.value.any { it.address?.equals(token, ignoreCase = true) == true } ||
+            com.pombo.android.core.WalletTokens.CURATED.any { it.equals(token, ignoreCase = true) } ||
+            walletTokenStore.list(address).any { it.equals(token, ignoreCase = true) }
+        if (listed) {
+            _walletAddError.value = "Already listed"
+            return@launch
+        }
+        val meta = com.pombo.android.core.GasEstimator.getTokenMeta(token)
+        if (meta == null) {
+            _walletAddError.value = "Not an ERC-20 on Polygon"
+            return@launch
+        }
+        walletTokenStore.add(address, token)
+        _walletAddError.value = null
+        refreshWallet()
+    }
+
+    fun removeWalletToken(token: String) {
+        walletTokenStore.remove(_address.value, token)
+        refreshWallet()
+    }
+
+    fun clearWalletAddError() { _walletAddError.value = null }
 
     // ==================== RPC selection (web #rpc-endpoint-list) ====================
 

@@ -28,6 +28,7 @@ import androidx.compose.material.icons.filled.MailOutline
 import androidx.compose.material.icons.filled.Pause
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.ui.draw.alpha
+import androidx.compose.material.icons.outlined.AccountBalanceWallet
 import androidx.compose.material.icons.outlined.Campaign
 import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.foundation.layout.offset
@@ -145,6 +146,23 @@ internal fun ChatsTab(vm: AppViewModel, onCreate: () -> Unit, onJoin: () -> Unit
                 }
             } else {
                 Row(verticalAlignment = Alignment.CenterVertically) {
+                    // Wallet: what this account holds, beside the bell as on the web.
+                    var walletOpen by remember { mutableStateOf(false) }
+                    Box(
+                        Modifier.size(32.dp)
+                            .background(Color.White.copy(alpha = 0.08f), CircleShape)
+                            .clickableNoRipple { walletOpen = true },
+                        contentAlignment = Alignment.Center
+                    ) {
+                        Icon(
+                            Icons.Outlined.AccountBalanceWallet, contentDescription = "Wallet",
+                            tint = PomboColors.Text, modifier = Modifier.size(17.dp)
+                        )
+                    }
+                    if (walletOpen) {
+                        com.pombo.android.ui.WalletSheet(vm) { walletOpen = false }
+                    }
+                    Spacer(Modifier.width(8.dp))
                     // Bell: recent channel invites. Android addition — on the
                     // web an invite only ever exists as a transient toast; here
                     // unanswered ones stay reachable until accepted/dismissed.
