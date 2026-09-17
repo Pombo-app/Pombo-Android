@@ -2,6 +2,8 @@ package com.pombo.android.ui.screens
 
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
+import androidx.compose.foundation.layout.ColumnScope
+import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
@@ -38,6 +40,7 @@ import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.Icon
+import androidx.compose.material.icons.outlined.Close
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.OutlinedTextFieldDefaults
@@ -85,6 +88,10 @@ import androidx.compose.material.icons.outlined.ErrorOutline
 import androidx.compose.material.icons.outlined.WarningAmber
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.text.TextStyle
+import androidx.compose.ui.graphics.SolidColor
+import androidx.compose.ui.focus.onFocusChanged
+import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.graphics.Color
 import com.pombo.android.AppViewModel
@@ -2498,58 +2505,31 @@ internal fun JoinChannelDialog(onDismiss: () -> Unit, onJoin: (String, String?, 
     var localName by remember { mutableStateOf("") }
     var classification by remember { mutableStateOf("personal") }
 
-    AlertDialog(
-        onDismissRequest = onDismiss,
-        // Same frame as AddContactDialog/AboutDialog: a 1px hairline border
-        // and matching corner radius — the bare M3 surface is true black on
-        // true black and reads as text floating with no box around it.
-        modifier = Modifier.border(1.dp, PomboColors.Border, RoundedCornerShape(16.dp)),
-        shape = RoundedCornerShape(16.dp),
-        containerColor = PomboColors.Surface,
-        titleContentColor = PomboColors.Text,
-        textContentColor = PomboColors.Text,
-        title = { Text("Join a channel") },
-        text = {
-            Column {
-                Text("Paste the channel ID (e.g. 0x…/name-1)", color = PomboColors.TextDim, fontSize = 12.sp)
-                Spacer(Modifier.height(8.dp))
-                OutlinedTextField(
-                    value = id, onValueChange = { id = it },
-                    label = { Text("Channel ID") }, colors = pomboFieldColors(),
-                    modifier = Modifier.fillMaxWidth()
-                )
-                Spacer(Modifier.height(12.dp))
-                OutlinedTextField(
-                    value = password, onValueChange = { password = it },
-                    label = { Text("Password (if any)") },
-                    visualTransformation = PasswordVisualTransformation(),
-                    colors = pomboFieldColors(), modifier = Modifier.fillMaxWidth()
-                )
-                Spacer(Modifier.height(12.dp))
-                OutlinedTextField(
-                    value = localName, onValueChange = { localName = it },
-                    label = { Text("Local name (optional)") }, colors = pomboFieldColors(),
-                    modifier = Modifier.fillMaxWidth()
-                )
-                Text(
-                    "Stored locally only. Channels with a public name keep it.",
-                    color = Color.White.copy(alpha = 0.30f), fontSize = 11.sp,
-                    modifier = Modifier.padding(top = 4.dp)
-                )
-                Spacer(Modifier.height(12.dp))
-                ClassificationChips(classification) { classification = it }
-            }
-        },
-        confirmButton = {
-            TextButton(
-                onClick = { onJoin(id, password.ifEmpty { null }, localName.trim().ifEmpty { null }, classification) },
-                enabled = id.isNotBlank()
-            ) {
-                Text("Join", color = if (id.isNotBlank()) PomboColors.Accent else PomboColors.TextDim, fontWeight = FontWeight.Bold)
-            }
-        },
-        dismissButton = { TextButton(onClick = onDismiss) { Text("Cancel", color = PomboColors.TextDim) } }
-    )
+    PomboDialogFrame("Join a channel", onDismiss) {
+        PomboFieldLabel("CHANNEL ID")
+        PomboDialogField(id, { id = it }, placeholder = "0x…/name-1")
+        Spacer(Modifier.height(12.dp))
+
+        PomboFieldLabel("PASSWORD (IF ANY)")
+        PomboDialogField(password, { password = it }, password = true)
+        Spacer(Modifier.height(12.dp))
+
+        PomboFieldLabel("LOCAL NAME (OPTIONAL)")
+        PomboDialogField(localName, { localName = it }, placeholder = "e.g. Notícias")
+        Spacer(Modifier.height(4.dp))
+        Text(
+            "Stored locally only. Channels with a public name keep it.",
+            color = Color.White.copy(alpha = 0.25f), fontSize = 12.sp
+        )
+
+        Spacer(Modifier.height(14.dp))
+        ClassificationChips(classification) { classification = it }
+
+        Spacer(Modifier.height(20.dp))
+        PomboPrimaryButton("Join", enabled = id.isNotBlank()) {
+            onJoin(id, password.ifEmpty { null }, localName.trim().ifEmpty { null }, classification)
+        }
+    }
 }
 
 /** Personal/Community selector shared by the join dialog and the local identity panel. */
@@ -2810,6 +2790,114 @@ internal fun dayLabel(ts: Long): String {
 
 internal fun formatTime(ts: Long): String =
     if (ts <= 0) "" else SimpleDateFormat("HH:mm", Locale.getDefault()).format(Date(ts))
+
+/**
+ * The frame every form dialog uses: a dark panel with a hairline edge, the
+ * title, and a close affordance in the corner instead of a Cancel button.
+ */
+@Composable
+internal fun PomboDialogFrame(
+    title: String,
+    onDismiss: () -> Unit,
+    content: @Composable ColumnScope.() -> Unit
+) {
+    Dialog(onDismissRequest = onDismiss) {
+        Column(
+            Modifier
+                .width(340.dp)
+                .background(Color(0xFF111113), RoundedCornerShape(16.dp))
+                .border(1.dp, Color.White.copy(alpha = 0.06f), RoundedCornerShape(16.dp))
+                .padding(20.dp)
+        ) {
+            Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                Text(
+                    title, color = PomboColors.Text, fontSize = 16.sp,
+                    fontWeight = FontWeight.Medium, modifier = Modifier.weight(1f)
+                )
+                Icon(
+                    Icons.Outlined.Close, contentDescription = "Close",
+                    tint = Color.White.copy(alpha = 0.40f),
+                    modifier = Modifier.size(18.dp).clickable(onClick = onDismiss)
+                )
+            }
+            Spacer(Modifier.height(16.dp))
+            content()
+        }
+    }
+}
+
+/** The small-caps label these dialogs put above a field, not inside it. */
+@Composable
+internal fun PomboFieldLabel(text: String) {
+    Text(text, color = Color.White.copy(alpha = 0.30f), fontSize = 12.sp, letterSpacing = 0.8.sp)
+    Spacer(Modifier.height(6.dp))
+}
+
+/**
+ * A one-line field sized to its text. The Material field reserves room for a
+ * floating label whether or not one is used, which is what made these panels
+ * a stack of tall boxes.
+ */
+@Composable
+internal fun PomboDialogField(
+    value: String,
+    onValueChange: (String) -> Unit,
+    placeholder: String = "",
+    password: Boolean = false
+) {
+    var focused by remember { mutableStateOf(false) }
+    Box(
+        Modifier
+            .fillMaxWidth()
+            .background(PomboColors.SurfaceHigh, RoundedCornerShape(12.dp))
+            .border(
+                1.dp,
+                if (focused) PomboColors.Accent else Color.White.copy(alpha = 0.10f),
+                RoundedCornerShape(12.dp)
+            )
+            .padding(horizontal = 12.dp, vertical = 11.dp)
+    ) {
+        if (value.isEmpty() && placeholder.isNotEmpty()) {
+            Text(placeholder, color = Color.White.copy(alpha = 0.25f), fontSize = 14.sp)
+        }
+        BasicTextField(
+            value = value,
+            onValueChange = onValueChange,
+            singleLine = true,
+            textStyle = TextStyle(color = PomboColors.Text, fontSize = 14.sp),
+            cursorBrush = SolidColor(PomboColors.Accent),
+            visualTransformation = if (password) PasswordVisualTransformation() else VisualTransformation.None,
+            modifier = Modifier.fillMaxWidth().onFocusChanged { focused = it.isFocused }
+        )
+    }
+}
+
+/** The action button of a form dialog: the accent pill the app uses elsewhere. */
+@Composable
+internal fun PomboPrimaryButton(label: String, enabled: Boolean = true, onClick: () -> Unit) {
+    Box(
+        Modifier
+            .fillMaxWidth()
+            .background(
+                PomboColors.Accent.copy(alpha = if (enabled) 0.15f else 0.06f),
+                RoundedCornerShape(12.dp)
+            )
+            .border(
+                1.dp,
+                PomboColors.Accent.copy(alpha = if (enabled) 0.30f else 0.12f),
+                RoundedCornerShape(12.dp)
+            )
+            .clickable(enabled = enabled, onClick = onClick)
+            .padding(vertical = 11.dp),
+        contentAlignment = Alignment.Center
+    ) {
+        Text(
+            label,
+            color = if (enabled) Color.White else Color.White.copy(alpha = 0.35f),
+            fontSize = 14.sp, fontWeight = FontWeight.Medium
+        )
+    }
+}
 
 @Composable
 internal fun pomboFieldColors() = OutlinedTextFieldDefaults.colors(

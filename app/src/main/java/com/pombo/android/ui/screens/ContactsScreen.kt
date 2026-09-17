@@ -25,6 +25,7 @@ import androidx.compose.material.icons.outlined.Explore
 import androidx.compose.material.icons.outlined.Settings
 import androidx.compose.material.icons.outlined.MailOutline
 import androidx.compose.material.icons.filled.MoreVert
+import androidx.compose.material.icons.outlined.ContentCopy
 import androidx.compose.material.icons.outlined.Edit
 import androidx.compose.material.icons.outlined.Close
 import androidx.compose.material3.Icon
@@ -55,6 +56,7 @@ internal fun ContactsTab(vm: AppViewModel) {
     val contacts by vm.contacts.collectAsState()
     val ensNames by vm.ensNames.collectAsState()
     val status by vm.status.collectAsState()
+    val clipboard = androidx.compose.ui.platform.LocalClipboardManager.current
     var showAdd by remember { mutableStateOf(false) }
     /** Contact whose nickname is being edited (web showEditModal). */
     var editing by remember { mutableStateOf<com.pombo.android.data.Contact?>(null) }
@@ -125,23 +127,26 @@ internal fun ContactsTab(vm: AppViewModel) {
                                 tint = Color.White.copy(alpha = 0.25f),
                                 modifier = Modifier.size(20.dp).clickableNoRipple { menuOpen = true }
                             )
-                            androidx.compose.material3.DropdownMenu(
-                                expanded = menuOpen,
-                                onDismissRequest = { menuOpen = false },
-                                modifier = Modifier.background(Color(0xFF111113))
-                            ) {
-                                ContactMenuItem("Edit Contact", Icons.Outlined.Edit) {
-                                    menuOpen = false; editing = c
-                                }
-                                ContactMenuItem("Send DM", Icons.Outlined.MailOutline) {
-                                    menuOpen = false; vm.startDm(c.address)
-                                }
-                                Box(
-                                    Modifier.fillMaxWidth().padding(vertical = 4.dp).height(1.dp)
-                                        .background(Color.White.copy(alpha = 0.08f))
-                                )
-                                ContactMenuItem("Remove Contact", Icons.Outlined.Close, danger = true) {
-                                    menuOpen = false; vm.removeContact(c.address)
+                            if (menuOpen) {
+                                com.pombo.android.ui.PomboAnchoredMenu(onDismiss = { menuOpen = false }) {
+                                    ContactMenuItem("Edit Contact", Icons.Outlined.Edit) {
+                                        menuOpen = false; editing = c
+                                    }
+                                    ContactMenuItem("Send DM", Icons.Outlined.MailOutline) {
+                                        menuOpen = false; vm.startDm(c.address)
+                                    }
+                                    ContactMenuItem("Copy address", Icons.Outlined.ContentCopy) {
+                                        menuOpen = false
+                                        clipboard.setText(androidx.compose.ui.text.AnnotatedString(c.address))
+                                        vm.toast("Address copied", com.pombo.android.ui.ToastKind.SUCCESS)
+                                    }
+                                    Box(
+                                        Modifier.fillMaxWidth().padding(vertical = 4.dp).height(1.dp)
+                                            .background(Color.White.copy(alpha = 0.08f))
+                                    )
+                                    ContactMenuItem("Remove Contact", Icons.Outlined.Close, danger = true) {
+                                        menuOpen = false; vm.removeContact(c.address)
+                                    }
                                 }
                             }
                         }
@@ -241,40 +246,19 @@ private fun EditContactDialog(
 private fun AddContactDialog(onDismiss: () -> Unit, onAdd: (String, String?) -> Unit) {
     var address by remember { mutableStateOf("") }
     var name by remember { mutableStateOf("") }
-    androidx.compose.material3.AlertDialog(
-        onDismissRequest = onDismiss,
-        // Same frame as the Settings cards: a 1px white/8 hairline on a rounded
-        // corner. The bare M3 surface is true black on true black, so the dialog
-        // had no edge at all — nothing said where it ended.
-        modifier = Modifier.border(1.dp, PomboColors.Border, RoundedCornerShape(16.dp)),
-        shape = RoundedCornerShape(16.dp),
-        containerColor = PomboColors.Surface,
-        titleContentColor = PomboColors.Text,
-        textContentColor = PomboColors.Text,
-        title = { Text("Add contact") },
-        text = {
-            Column {
-                // Web placeholder: "0x... or ENS name" — addContact resolves
-                // the name before saving, so the stored contact is always an
-                // address and stays valid if the ENS record later changes.
-                androidx.compose.material3.OutlinedTextField(
-                    value = address, onValueChange = { address = it },
-                    label = { Text("0x… or ENS name") }, colors = pomboFieldColors(),
-                    singleLine = true, modifier = Modifier.fillMaxWidth()
-                )
-                Spacer(Modifier.height(12.dp))
-                androidx.compose.material3.OutlinedTextField(
-                    value = name, onValueChange = { name = it },
-                    label = { Text("Nickname (optional)") }, colors = pomboFieldColors(),
-                    singleLine = true, modifier = Modifier.fillMaxWidth()
-                )
-            }
-        },
-        confirmButton = {
-            androidx.compose.material3.TextButton(onClick = { onAdd(address, name.ifEmpty { null }) }, enabled = address.isNotBlank()) {
-                Text("Add", color = if (address.isNotBlank()) PomboColors.Accent else PomboColors.TextDim, fontWeight = FontWeight.Bold)
-            }
-        },
-        dismissButton = { androidx.compose.material3.TextButton(onClick = onDismiss) { Text("Cancel", color = PomboColors.TextDim) } }
-    )
+    PomboDialogFrame("Add contact", onDismiss) {
+        // addContact resolves an ENS name before saving, so what is stored is
+        // always an address and survives the record changing later.
+        PomboFieldLabel("ADDRESS OR ENS")
+        PomboDialogField(address, { address = it }, placeholder = "0x… or name.eth")
+        Spacer(Modifier.height(12.dp))
+
+        PomboFieldLabel("NICKNAME (OPTIONAL)")
+        PomboDialogField(name, { name = it }, placeholder = "e.g. Alice")
+
+        Spacer(Modifier.height(20.dp))
+        PomboPrimaryButton("Add", enabled = address.isNotBlank()) {
+            onAdd(address, name.ifEmpty { null })
+        }
+    }
 }

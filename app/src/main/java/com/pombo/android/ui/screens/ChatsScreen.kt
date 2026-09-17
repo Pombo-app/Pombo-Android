@@ -58,6 +58,7 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.graphics.vector.ImageVector
@@ -246,8 +247,6 @@ internal fun ChatsTab(vm: AppViewModel, onCreate: () -> Unit, onJoin: () -> Unit
             }
         }
 
-        Spacer(Modifier.height(8.dp))
-
         // Filter tabs (All / Personal / Communities) — active gets an orange underline
         Box(Modifier.fillMaxWidth().padding(horizontal = 8.dp)) {
             androidx.compose.material3.HorizontalDivider(
@@ -302,9 +301,13 @@ internal fun ChatsTab(vm: AppViewModel, onCreate: () -> Unit, onJoin: () -> Unit
             var localOrder by remember { mutableStateOf(filtered) }
             LaunchedEffect(filtered) { if (draggingKey == null) localOrder = filtered }
 
+            // The list runs to the foot of the screen, under the DM button and
+            // the floating pill: it is cut there whatever we do, so the cut is
+            // faded into the background instead of left as a sliced card.
+            Box(Modifier.weight(1f).fillMaxWidth()) {
             LazyColumn(
                 state = listState,
-                modifier = Modifier.weight(1f).fillMaxWidth()
+                modifier = Modifier.fillMaxSize()
                     .pointerInput(filter) {
                         detectHorizontalDragGestures(
                             onDragEnd = {
@@ -318,7 +321,7 @@ internal fun ChatsTab(vm: AppViewModel, onCreate: () -> Unit, onJoin: () -> Unit
                             onHorizontalDrag = { _, delta -> swipeAccum += delta }
                         )
                     },
-                contentPadding = PaddingValues(horizontal = 10.dp, vertical = 6.dp),
+                contentPadding = PaddingValues(start = 10.dp, end = 10.dp, top = 6.dp, bottom = 18.dp),
                 verticalArrangement = Arrangement.spacedBy(2.dp)
             ) {
                 itemsIndexed(localOrder, key = { _, ch -> ch.messageStreamId }) { _, ch ->
@@ -374,6 +377,15 @@ internal fun ChatsTab(vm: AppViewModel, onCreate: () -> Unit, onJoin: () -> Unit
                     }
                 }
             }
+            Box(
+                Modifier.align(Alignment.BottomCenter).fillMaxWidth().height(32.dp)
+                    .background(
+                        Brush.verticalGradient(
+                            listOf(Color.Transparent, PomboColors.Background)
+                        )
+                    )
+            )
+            }
         }
 
         // DM affordance under the channel list (web: #dm-inbox-setup /
@@ -394,7 +406,7 @@ internal fun ChatsTab(vm: AppViewModel, onCreate: () -> Unit, onJoin: () -> Unit
             // tying it to the offset (as a 2026-08-21 edit briefly did) shrank it
             // to the point the button sat flush against the pill.
             Box(
-                Modifier.fillMaxWidth().padding(start = 16.dp, end = 16.dp, top = 12.dp, bottom = 28.dp),
+                Modifier.fillMaxWidth().padding(start = 16.dp, end = 16.dp, top = 6.dp, bottom = 28.dp),
                 contentAlignment = Alignment.Center
             ) {
                 if (hasDmInbox) {
