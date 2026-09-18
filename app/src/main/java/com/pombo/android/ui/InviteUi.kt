@@ -161,17 +161,17 @@ fun InviteToChannelDialog(
     // it is a bearer credential, not just a pointer.
     val linkIsSecret = channelType == "password"
 
-    Dialog(onDismissRequest = onDismiss) {
-        Box {
-        Column(
-            Modifier
-                .width(380.dp)
-                .background(CardBg, RoundedCornerShape(16.dp))
-                .border(1.dp, w(0.06f), RoundedCornerShape(16.dp))
-                .padding(20.dp)
-        ) {
-            Text("Invite to Channel", color = Color.White, fontSize = 16.sp, fontWeight = FontWeight.Medium)
-            Spacer(Modifier.height(16.dp))
+    com.pombo.android.ui.screens.PomboDialogFrame(
+        "Invite to channel",
+        onDismiss,
+        overlay = {
+            ToastHost(
+                toasts = toasts,
+                onDismiss = onDismissToast,
+                modifier = Modifier.align(Alignment.TopCenter).padding(top = 8.dp)
+            )
+        }
+    ) {
 
             // Tab bar: a white/[0.05] trough with a 4dp inset, active pill in solid white.
             Row(
@@ -277,13 +277,6 @@ fun InviteToChannelDialog(
             Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End) {
                 SecondaryButton("Close", onClick = onDismiss)
             }
-        }
-        ToastHost(
-            toasts = toasts,
-            onDismiss = onDismissToast,
-            modifier = Modifier.align(Alignment.TopCenter).padding(top = 8.dp)
-        )
-        }
     }
 }
 
@@ -298,19 +291,10 @@ fun IncomingInviteDialog(
     onDecline: () -> Unit,
     onAccept: () -> Unit
 ) {
-    Dialog(onDismissRequest = onDecline) {
-        Column(
-            Modifier
-                .width(360.dp)
-                .background(CardBg, RoundedCornerShape(16.dp))
-                .border(1.dp, w(0.06f), RoundedCornerShape(16.dp))
-        ) {
-            Column(Modifier.padding(start = 20.dp, end = 20.dp, top = 20.dp, bottom = 12.dp)) {
-                Text("Channel Invite", color = Color.White, fontSize = 15.sp, fontWeight = FontWeight.Medium)
-                Spacer(Modifier.height(4.dp))
-                Text("You've been invited to join a channel", color = w(0.50f), fontSize = 13.sp)
-            }
-            Column(Modifier.padding(horizontal = 20.dp).padding(bottom = 16.dp)) {
+    com.pombo.android.ui.screens.PomboDialogFrame("Channel invite", onDecline) {
+            Text("You've been invited to join a channel", color = w(0.50f), fontSize = 13.sp)
+            Spacer(Modifier.height(14.dp))
+            Column(Modifier.fillMaxWidth()) {
                 Column(
                     Modifier.fillMaxWidth()
                         .background(w(0.05f), RoundedCornerShape(12.dp))
@@ -341,14 +325,11 @@ fun IncomingInviteDialog(
                     )
                 }
             }
-            Row(
-                Modifier.fillMaxWidth().padding(horizontal = 20.dp).padding(bottom = 20.dp),
-                horizontalArrangement = Arrangement.spacedBy(12.dp)
-            ) {
+            Spacer(Modifier.height(20.dp))
+            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(12.dp)) {
                 SecondaryButton("Decline", modifier = Modifier.weight(1f), fontSize = 13, onClick = onDecline)
                 PrimaryButton("Join Channel", modifier = Modifier.weight(1f), onClick = onAccept)
             }
-        }
     }
 }
 

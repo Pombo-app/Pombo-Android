@@ -794,58 +794,22 @@ private fun AccentPillButton(label: String, icon: androidx.compose.ui.graphics.v
 private fun NewDmDialog(onDismiss: () -> Unit, onStart: (String, String?) -> Unit) {
     var address by remember { mutableStateOf("") }
     var localName by remember { mutableStateOf("") }
-    Dialog(onDismissRequest = onDismiss) {
-        Column(
-            Modifier
-                .width(340.dp)
-                .background(Color(0xFF111113), RoundedCornerShape(16.dp))
-                .border(1.dp, Color.White.copy(alpha = 0.06f), RoundedCornerShape(16.dp))
-                .padding(20.dp)
-        ) {
-            Text("New DM", color = PomboColors.Text, fontSize = 16.sp, fontWeight = FontWeight.Medium)
-            Spacer(Modifier.height(16.dp))
+    PomboDialogFrame("New DM", onDismiss) {
+        PomboFieldLabel("ADDRESS OR ENS")
+        PomboDialogField(address, { address = it }, placeholder = "0x… or name.eth")
+        Spacer(Modifier.height(12.dp))
 
-            Text("ADDRESS OR ENS", color = Color.White.copy(alpha = 0.30f), fontSize = 12.sp, letterSpacing = 0.8.sp)
-            Spacer(Modifier.height(6.dp))
-            OutlinedTextField(
-                value = address, onValueChange = { address = it },
-                placeholder = { Text("0x... or name.eth", color = Color.White.copy(alpha = 0.25f), fontSize = 14.sp) },
-                singleLine = true, shape = RoundedCornerShape(12.dp),
-                textStyle = androidx.compose.ui.text.TextStyle(fontSize = 14.sp, color = PomboColors.Text),
-                colors = pomboFieldColors(), modifier = Modifier.fillMaxWidth()
-            )
-            Spacer(Modifier.height(12.dp))
+        PomboFieldLabel("LOCAL NAME (OPTIONAL)")
+        PomboDialogField(localName, { if (it.length <= 30) localName = it }, placeholder = "e.g. Alice")
+        Spacer(Modifier.height(4.dp))
+        Text(
+            "Stored locally, only visible to you",
+            color = Color.White.copy(alpha = 0.25f), fontSize = 12.sp
+        )
 
-            Text("LOCAL NAME (OPTIONAL)", color = Color.White.copy(alpha = 0.30f), fontSize = 12.sp, letterSpacing = 0.8.sp)
-            Spacer(Modifier.height(6.dp))
-            OutlinedTextField(
-                value = localName, onValueChange = { if (it.length <= 30) localName = it },
-                placeholder = { Text("e.g. Alice", color = Color.White.copy(alpha = 0.25f), fontSize = 14.sp) },
-                singleLine = true, shape = RoundedCornerShape(12.dp),
-                textStyle = androidx.compose.ui.text.TextStyle(fontSize = 14.sp, color = PomboColors.Text),
-                colors = pomboFieldColors(), modifier = Modifier.fillMaxWidth()
-            )
-            Spacer(Modifier.height(4.dp))
-            Text("Stored locally, only visible to you", color = Color.White.copy(alpha = 0.25f), fontSize = 12.sp)
-
-            Spacer(Modifier.height(20.dp))
-            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                Box(
-                    Modifier.weight(1f)
-                        .background(Color.White.copy(alpha = 0.05f), RoundedCornerShape(12.dp))
-                        .border(1.dp, Color.White.copy(alpha = 0.08f), RoundedCornerShape(12.dp))
-                        .clickable(onClick = onDismiss)
-                        .padding(vertical = 10.dp),
-                    contentAlignment = Alignment.Center
-                ) { Text("Cancel", color = Color.White.copy(alpha = 0.50f), fontSize = 14.sp, fontWeight = FontWeight.Medium) }
-                Box(
-                    Modifier.weight(1f)
-                        .background(Color.White, RoundedCornerShape(12.dp))
-                        .clickable(enabled = address.isNotBlank()) { onStart(address.trim(), localName) }
-                        .padding(vertical = 10.dp),
-                    contentAlignment = Alignment.Center
-                ) { Text("Start DM", color = Color.Black, fontSize = 14.sp, fontWeight = FontWeight.Medium) }
-            }
+        Spacer(Modifier.height(20.dp))
+        PomboPrimaryButton("Start DM", enabled = address.isNotBlank()) {
+            onStart(address.trim(), localName)
         }
     }
 }

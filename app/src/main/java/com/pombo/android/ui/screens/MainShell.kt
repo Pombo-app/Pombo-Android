@@ -525,48 +525,19 @@ internal fun PomboHeader(status: NetStatus, trailing: @Composable (() -> Unit)? 
  */
 @Composable
 private fun AboutDialog(onDismiss: () -> Unit) {
-    androidx.compose.material3.AlertDialog(
-        onDismissRequest = onDismiss,
-        // Same frame as AddContactDialog: a 1px hairline border and matching
-        // corner radius — the bare M3 surface is true black on true black and
-        // reads as text floating with no box around it at all.
-        modifier = Modifier.border(1.dp, PomboColors.Border, RoundedCornerShape(16.dp)),
-        shape = RoundedCornerShape(16.dp),
-        containerColor = PomboColors.Surface,
-        titleContentColor = PomboColors.Text,
-        textContentColor = PomboColors.Text,
-        title = {
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                Icon(
-                    Icons.Outlined.Info, contentDescription = null,
-                    tint = PomboColors.Text, modifier = Modifier.size(16.dp)
-                )
-                Spacer(Modifier.width(8.dp))
-                Text("Disclaimer", fontSize = 15.sp, fontWeight = FontWeight.Medium)
-            }
-        },
-        text = {
-            Column(Modifier.padding(top = 4.dp)) {
-                Text(
-                    "Pombo provides access to decentralized communication protocols. " +
-                        "You assume full legal responsibility for your actions within your " +
-                        "jurisdiction. We disclaim all liability and reserve the right to " +
-                        "restrict access to specific channels via this interface.",
-                    color = PomboColors.Text, fontSize = 14.sp, lineHeight = 22.sp,
-                    textAlign = androidx.compose.ui.text.style.TextAlign.Justify
-                )
-                Spacer(Modifier.height(16.dp))
-                Text("pombo.cc", color = PomboColors.TextDim, fontSize = 13.sp)
-            }
-        },
-        // Web parity + AddContactDialog's own "Cancel": a neutral dismiss, not
-        // an accent call-to-action — About has nothing to confirm.
-        confirmButton = {
-            androidx.compose.material3.TextButton(onClick = onDismiss) {
-                Text("Close", color = PomboColors.TextDim)
-            }
-        }
-    )
+    PomboDialogFrame("Disclaimer", onDismiss) {
+        // Legal notice, verbatim from web #settings-panel-about — never paraphrase.
+        Text(
+            "Pombo provides access to decentralized communication protocols. " +
+                "You assume full legal responsibility for your actions within your " +
+                "jurisdiction. We disclaim all liability and reserve the right to " +
+                "restrict access to specific channels via this interface.",
+            color = PomboColors.Text, fontSize = 14.sp, lineHeight = 22.sp,
+            textAlign = androidx.compose.ui.text.style.TextAlign.Justify
+        )
+        Spacer(Modifier.height(16.dp))
+        Text("pombo.cc", color = PomboColors.TextDim, fontSize = 13.sp)
+    }
 }
 
 /**

@@ -23,6 +23,7 @@ import androidx.compose.foundation.layout.safeDrawing
 import androidx.compose.foundation.layout.safeDrawingPadding
 import androidx.compose.foundation.layout.systemBarsPadding
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.lazy.items
@@ -34,7 +35,6 @@ import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.AttachFile
 import androidx.compose.material.icons.filled.Lock
 import androidx.compose.foundation.verticalScroll
-import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.CircularProgressIndicator
@@ -493,66 +493,64 @@ fun ConnectAccountDialog(
     onRestore: () -> Unit,
     onDismiss: () -> Unit
 ) {
-    androidx.compose.ui.window.Dialog(onDismissRequest = onDismiss) {
-        Column(
-            Modifier
-                .width(340.dp)
-                .background(Color(0xFF111113), RoundedCornerShape(16.dp))
-                .border(1.dp, Color.White.copy(alpha = 0.06f), RoundedCornerShape(16.dp))
-        ) {
-            Row(
-                Modifier.fillMaxWidth().padding(start = 20.dp, top = 20.dp, end = 16.dp, bottom = 12.dp),
-                verticalAlignment = Alignment.CenterVertically
-            ) {
-                Text("Connect Account", color = Color.White, fontSize = 15.sp, fontWeight = FontWeight.Medium, modifier = Modifier.weight(1f))
-                Text("✕", color = Color.White.copy(alpha = 0.30f), fontSize = 15.sp,
-                    modifier = Modifier.clickableNoRipple(onDismiss).padding(4.dp))
-            }
-            Row(
-                Modifier.fillMaxWidth().padding(horizontal = 20.dp)
-                    .background(PomboColors.Accent, RoundedCornerShape(12.dp))
-                    .clickableNoRipple(onCreate)
-                    .padding(14.dp),
-                verticalAlignment = Alignment.CenterVertically
-            ) {
-                Box(
-                    Modifier.size(36.dp).background(Color.Black.copy(alpha = 0.20f), RoundedCornerShape(12.dp)),
-                    contentAlignment = Alignment.Center
-                ) { Icon(Icons.Filled.Add, contentDescription = null, tint = Color.White, modifier = Modifier.size(26.dp)) }
-                Spacer(Modifier.width(12.dp))
-                Column {
-                    Text("Create New Account", color = Color.White, fontSize = 14.sp, fontWeight = FontWeight.Medium)
-                    Text("Generate a new private key", color = Color.White.copy(alpha = 0.80f), fontSize = 13.sp)
-                }
-            }
-            Spacer(Modifier.height(8.dp))
-            Row(
-                Modifier.fillMaxWidth().padding(horizontal = 20.dp)
-                    .background(Color.White, RoundedCornerShape(12.dp))
-                    .clickableNoRipple(onImport)
-                    .padding(14.dp),
-                verticalAlignment = Alignment.CenterVertically
-            ) {
-                Box(
-                    Modifier.size(36.dp).background(Color(0xFF09090B), RoundedCornerShape(12.dp)),
-                    contentAlignment = Alignment.Center
-                ) { Icon(Icons.Filled.AttachFile, contentDescription = null, tint = Color.White, modifier = Modifier.size(16.dp)) }
-                Spacer(Modifier.width(12.dp))
-                Column {
-                    Text("Import Private Key", color = Color.Black, fontSize = 14.sp, fontWeight = FontWeight.Medium)
-                    Text("Use existing account", color = Color.Black.copy(alpha = 0.90f), fontSize = 13.sp)
-                }
-            }
-            Row(
-                Modifier.fillMaxWidth().padding(start = 20.dp, end = 20.dp, top = 12.dp, bottom = 16.dp),
-                horizontalArrangement = Arrangement.End,
-                verticalAlignment = Alignment.CenterVertically
-            ) {
-                Text(
-                    "↻ restore", color = Color.White.copy(alpha = 0.40f), fontSize = 11.sp,
-                    modifier = Modifier.clickableNoRipple(onRestore).padding(4.dp)
-                )
-            }
+    PomboDialogFrame("Connect account", onDismiss) {
+        AccountChoiceRow(
+            icon = Icons.Filled.Add,
+            title = "Create New Account",
+            subtitle = "Generate a new private key",
+            background = PomboColors.Accent,
+            titleColor = Color.White,
+            subtitleColor = Color.White.copy(alpha = 0.80f),
+            tileColor = Color.Black.copy(alpha = 0.20f),
+            onClick = onCreate
+        )
+        Spacer(Modifier.height(8.dp))
+        AccountChoiceRow(
+            icon = Icons.Filled.AttachFile,
+            title = "Import Private Key",
+            subtitle = "Use existing account",
+            background = Color.White,
+            titleColor = Color.Black,
+            subtitleColor = Color.Black.copy(alpha = 0.90f),
+            tileColor = Color(0xFF09090B),
+            onClick = onImport
+        )
+        Spacer(Modifier.height(12.dp))
+        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End) {
+            Text(
+                "↻ restore", color = Color.White.copy(alpha = 0.40f), fontSize = 11.sp,
+                modifier = Modifier.clickableNoRipple(onRestore).padding(4.dp)
+            )
+        }
+    }
+}
+
+@Composable
+private fun AccountChoiceRow(
+    icon: androidx.compose.ui.graphics.vector.ImageVector,
+    title: String,
+    subtitle: String,
+    background: Color,
+    titleColor: Color,
+    subtitleColor: Color,
+    tileColor: Color,
+    onClick: () -> Unit
+) {
+    Row(
+        Modifier.fillMaxWidth()
+            .background(background, RoundedCornerShape(12.dp))
+            .clickableNoRipple(onClick)
+            .padding(14.dp),
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        Box(
+            Modifier.size(36.dp).background(tileColor, RoundedCornerShape(12.dp)),
+            contentAlignment = Alignment.Center
+        ) { Icon(icon, contentDescription = null, tint = Color.White, modifier = Modifier.size(18.dp)) }
+        Spacer(Modifier.width(12.dp))
+        Column {
+            Text(title, color = titleColor, fontSize = 14.sp, fontWeight = FontWeight.Medium)
+            Text(subtitle, color = subtitleColor, fontSize = 13.sp)
         }
     }
 }
@@ -866,91 +864,40 @@ fun ImportKeyDialog(onDismiss: () -> Unit, onImport: (String) -> Unit) {
     var reveal by remember { mutableStateOf(false) }
     // Accepts a 64-hex private key (0x optional) or a recovery phrase.
     val valid = key.trim().let {
-        Regex("^(0x)?[a-fA-F0-9]{64}$").matches(it) || it.split(Regex("\\s+")).size >= 12
+        Regex("^(0x)?[a-fA-F0-9]{64}$").matches(it) || it.split(Regex("s+")).size >= 12
     }
-    androidx.compose.ui.window.Dialog(onDismissRequest = onDismiss) {
-        Column(
-            Modifier
-                .width(380.dp)
-                .background(Color(0xFF111113), RoundedCornerShape(16.dp))
-                .border(1.dp, Color.White.copy(alpha = 0.06f), RoundedCornerShape(16.dp))
-        ) {
-            Row(
-                Modifier.fillMaxWidth().padding(horizontal = 20.dp, vertical = 14.dp),
-                verticalAlignment = Alignment.CenterVertically
-            ) {
-                Box(
-                    Modifier.size(36.dp).background(Color(0xFF1A1F2E), RoundedCornerShape(12.dp)),
-                    contentAlignment = Alignment.Center
-                ) { Icon(Icons.Filled.VpnKey, contentDescription = null, tint = Color(0xFF60A5FA), modifier = Modifier.size(18.dp)) }
-                Spacer(Modifier.width(12.dp))
-                Column(Modifier.weight(1f)) {
-                    Text("Import Private Key", color = Color.White.copy(alpha = 0.90f), fontSize = 17.sp, fontWeight = FontWeight.Medium)
-                    Text("Restore your account", color = Color.White.copy(alpha = 0.40f), fontSize = 12.sp)
-                }
-                Text("✕", color = Color.White.copy(alpha = 0.40f), fontSize = 15.sp,
-                    modifier = Modifier.clickableNoRipple(onDismiss).padding(4.dp))
-            }
-            Box(Modifier.fillMaxWidth().height(1.dp).background(Color.White.copy(alpha = 0.05f)))
+    PomboDialogFrame("Import private key", onDismiss, icon = Icons.Filled.VpnKey) {
+        Text(
+            "Restore your account",
+            color = Color.White.copy(alpha = 0.40f), fontSize = 12.sp
+        )
+        Spacer(Modifier.height(14.dp))
 
-            Column(Modifier.padding(20.dp)) {
-                Text("PRIVATE KEY", color = Color.White.copy(alpha = 0.40f), fontSize = 12.sp, letterSpacing = 0.8.sp, fontWeight = FontWeight.Medium)
-                Spacer(Modifier.height(8.dp))
-                OutlinedTextField(
-                    value = key, onValueChange = { key = it },
-                    placeholder = {
-                        Text("64 hex characters (with or without 0x)",
-                            color = Color.White.copy(alpha = 0.20f), fontSize = 14.sp)
-                    },
-                    singleLine = true, shape = RoundedCornerShape(12.dp),
-                    visualTransformation = if (reveal) VisualTransformation.None else PasswordVisualTransformation(),
-                    trailingIcon = {
-                        Icon(
-                            if (reveal) Icons.Filled.Visibility else Icons.Filled.VisibilityOff,
-                            contentDescription = "Toggle visibility",
-                            tint = Color.White.copy(alpha = 0.40f),
-                            modifier = Modifier.size(20.dp).clickableNoRipple { reveal = !reveal }
-                        )
-                    },
-                    textStyle = androidx.compose.ui.text.TextStyle(
-                        fontSize = 14.sp, color = PomboColors.Text,
-                        fontFamily = androidx.compose.ui.text.font.FontFamily.Monospace
-                    ),
-                    colors = pomboFieldColors(), modifier = Modifier.fillMaxWidth()
+        PomboFieldLabel("PRIVATE KEY")
+        PomboDialogField(
+            key, { key = it },
+            placeholder = "64 hex characters (with or without 0x)",
+            password = !reveal,
+            monospace = true,
+            trailing = {
+                Icon(
+                    if (reveal) Icons.Filled.Visibility else Icons.Filled.VisibilityOff,
+                    contentDescription = "Toggle visibility",
+                    tint = Color.White.copy(alpha = 0.40f),
+                    modifier = Modifier.size(18.dp).clickableNoRipple { reveal = !reveal }
                 )
-                if (key.isNotBlank() && !valid) {
-                    Spacer(Modifier.height(8.dp))
-                    Text("Invalid format - must be 64 hex characters",
-                        color = Color(0xFFF87171), fontSize = 12.sp)
-                }
             }
-            Box(Modifier.fillMaxWidth().height(1.dp).background(Color.White.copy(alpha = 0.05f)))
-
-            Row(Modifier.fillMaxWidth().padding(20.dp), horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-                Box(
-                    Modifier.weight(1f)
-                        .background(Color.White.copy(alpha = 0.05f), RoundedCornerShape(12.dp))
-                        .border(1.dp, Color.White.copy(alpha = 0.10f), RoundedCornerShape(12.dp))
-                        .clickableNoRipple(onDismiss)
-                        .padding(vertical = 12.dp),
-                    contentAlignment = Alignment.Center
-                ) { Text("Cancel", color = Color.White.copy(alpha = 0.70f), fontSize = 14.sp, fontWeight = FontWeight.Medium) }
-                Box(
-                    Modifier.weight(1f)
-                        .background(
-                            if (valid) Color.White else Color.White.copy(alpha = 0.10f),
-                            RoundedCornerShape(12.dp)
-                        )
-                        .clickableNoRipple { if (valid) onImport(key.trim()) }
-                        .padding(vertical = 12.dp),
-                    contentAlignment = Alignment.Center
-                ) {
-                    Text("Import",
-                        color = if (valid) Color.Black else Color.White.copy(alpha = 0.30f),
-                        fontSize = 14.sp, fontWeight = FontWeight.Medium)
-                }
-            }
+        )
+        if (key.isNotBlank() && !valid) {
+            Spacer(Modifier.height(8.dp))
+            Text(
+                "Invalid format - must be 64 hex characters",
+                color = Color(0xFFF87171), fontSize = 12.sp
+            )
         }
+
+        Spacer(Modifier.height(20.dp))
+        PomboPrimaryButton("Import", enabled = valid) { onImport(key.trim()) }
     }
 }
 
@@ -2006,42 +1953,9 @@ fun CreateDmInboxDialog(
     val gasCosts by vm.gasCosts.collectAsState()
     LaunchedEffect(Unit) { vm.refreshGas() }
 
-    androidx.compose.ui.window.Dialog(onDismissRequest = onDismiss) {
-        Column(
-            Modifier
-                .width(380.dp)
-                .background(Color(0xFF111113), RoundedCornerShape(16.dp))
-                .border(1.dp, Color.White.copy(alpha = 0.06f), RoundedCornerShape(16.dp))
-        ) {
-            Row(
-                Modifier.fillMaxWidth().padding(start = 20.dp, top = 16.dp, end = 16.dp, bottom = 14.dp),
-                verticalAlignment = Alignment.CenterVertically
-            ) {
-                Box(
-                    Modifier.size(36.dp).background(PomboColors.Accent.copy(alpha = 0.15f), RoundedCornerShape(12.dp)),
-                    contentAlignment = Alignment.Center
-                ) {
-                    Icon(
-                        Icons.Outlined.MailOutline, contentDescription = null,
-                        tint = PomboColors.Accent, modifier = Modifier.size(18.dp)
-                    )
-                }
-                Spacer(Modifier.width(12.dp))
-                Text(
-                    "Create DM Inbox", color = Color.White.copy(alpha = 0.90f),
-                    fontSize = 17.sp, fontWeight = FontWeight.Medium, modifier = Modifier.weight(1f)
-                )
-                Text(
-                    "✕", color = Color.White.copy(alpha = 0.40f), fontSize = 15.sp,
-                    modifier = Modifier.clickableNoRipple(onDismiss).padding(4.dp)
-                )
-            }
-            Box(Modifier.fillMaxWidth().height(1.dp).background(Color.White.copy(alpha = 0.05f)))
-
+    PomboDialogFrame("Create DM inbox", onDismiss, icon = Icons.Outlined.MailOutline) {
             Column(
-                Modifier.weight(1f, fill = false)
-                    .verticalScroll(rememberScrollState())
-                    .padding(20.dp)
+                Modifier.fillMaxWidth()
             ) {
                 Row(
                     Modifier.fillMaxWidth()
@@ -2249,7 +2163,6 @@ fun CreateDmInboxDialog(
                 }
             }
         }
-    }
 }
 
 /** Web ChannelModalsUI.updateStorageDaysDisplay — days collapse into months. */
@@ -2318,80 +2231,35 @@ private fun ConfirmPasswordDialog(expected: String, onCancel: () -> Unit, onConf
     var reveal by remember { mutableStateOf(false) }
     var mismatch by remember { mutableStateOf(false) }
 
-    androidx.compose.ui.window.Dialog(onDismissRequest = onCancel) {
-        Column(
-            Modifier
-                .background(Color(0xFF16161B), RoundedCornerShape(16.dp))
-                .border(1.dp, Color.White.copy(alpha = 0.08f), RoundedCornerShape(16.dp))
-                .padding(20.dp)
-        ) {
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                Icon(
-                    Icons.Outlined.Lock, contentDescription = null,
-                    tint = PomboColors.Accent, modifier = Modifier.size(18.dp)
-                )
-                Spacer(Modifier.width(10.dp))
-                Text("Confirm password", color = Color.White.copy(alpha = 0.90f), fontSize = 15.sp, fontWeight = FontWeight.Medium)
-            }
-            Spacer(Modifier.height(10.dp))
-            Text(
-                "Type the channel password again.",
-                color = Color.White.copy(alpha = 0.50f), fontSize = 13.sp, lineHeight = 19.sp
-            )
-            Spacer(Modifier.height(14.dp))
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                androidx.compose.foundation.text.BasicTextField(
-                    value = typed,
-                    onValueChange = { typed = it; mismatch = false },
-                    singleLine = true,
-                    visualTransformation = if (reveal) androidx.compose.ui.text.input.VisualTransformation.None
-                    else androidx.compose.ui.text.input.PasswordVisualTransformation(),
-                    textStyle = androidx.compose.ui.text.TextStyle(fontSize = 14.sp, color = PomboColors.Text),
-                    cursorBrush = androidx.compose.ui.graphics.SolidColor(PomboColors.Accent),
-                    modifier = Modifier.weight(1f)
-                        .background(Color.White.copy(alpha = 0.05f), RoundedCornerShape(8.dp))
-                        .border(
-                            1.dp,
-                            if (mismatch) PomboColors.Danger.copy(alpha = 0.50f) else Color.White.copy(alpha = 0.10f),
-                            RoundedCornerShape(8.dp)
-                        )
-                        .padding(horizontal = 12.dp, vertical = 10.dp),
-                    decorationBox = { inner ->
-                        if (typed.isEmpty()) Text(
-                            "Channel password", color = Color.White.copy(alpha = 0.20f), fontSize = 14.sp
-                        )
-                        inner()
-                    }
-                )
-                Spacer(Modifier.width(8.dp))
+    PomboDialogFrame("Confirm password", onCancel, icon = Icons.Outlined.Lock) {
+        Text(
+            "Type the channel password again.",
+            color = Color.White.copy(alpha = 0.50f), fontSize = 13.sp, lineHeight = 19.sp
+        )
+        Spacer(Modifier.height(14.dp))
+
+        PomboFieldLabel("PASSWORD")
+        PomboDialogField(
+            typed, { typed = it; mismatch = false },
+            placeholder = "Channel password",
+            password = !reveal,
+            trailing = {
                 Icon(
                     if (reveal) Icons.Outlined.VisibilityOff else Icons.Outlined.Visibility,
                     contentDescription = if (reveal) "Hide password" else "Show password",
                     tint = Color.White.copy(alpha = 0.40f),
-                    modifier = Modifier.size(20.dp).clickableNoRipple { reveal = !reveal }
+                    modifier = Modifier.size(18.dp).clickableNoRipple { reveal = !reveal }
                 )
             }
-            if (mismatch) {
-                Spacer(Modifier.height(8.dp))
-                Text("Passwords do not match", color = PomboColors.Danger, fontSize = 12.sp)
-            }
-            Spacer(Modifier.height(18.dp))
-            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End) {
-                Box(
-                    Modifier
-                        .background(Color.White.copy(alpha = 0.10f), RoundedCornerShape(8.dp))
-                        .clickableNoRipple(onCancel)
-                        .padding(horizontal = 14.dp, vertical = 8.dp)
-                ) { Text("Cancel", color = Color.White.copy(alpha = 0.70f), fontSize = 13.sp, fontWeight = FontWeight.Medium) }
-                Spacer(Modifier.width(8.dp))
-                Box(
-                    Modifier
-                        .background(PomboColors.Accent.copy(alpha = 0.15f), RoundedCornerShape(8.dp))
-                        .border(1.dp, PomboColors.Accent.copy(alpha = 0.40f), RoundedCornerShape(8.dp))
-                        .clickableNoRipple { if (typed == expected) onConfirmed() else mismatch = true }
-                        .padding(horizontal = 14.dp, vertical = 8.dp)
-                ) { Text("Confirm", color = Color.White, fontSize = 13.sp, fontWeight = FontWeight.Medium) }
-            }
+        )
+        if (mismatch) {
+            Spacer(Modifier.height(8.dp))
+            Text("Passwords do not match", color = PomboColors.Danger, fontSize = 12.sp)
+        }
+
+        Spacer(Modifier.height(20.dp))
+        PomboPrimaryButton("Confirm") {
+            if (typed == expected) onConfirmed() else mismatch = true
         }
     }
 }
@@ -2579,42 +2447,27 @@ internal fun LocalChannelIdentityDialog(
         mutableStateOf(channel.classification ?: "personal")
     }
 
-    AlertDialog(
-        onDismissRequest = onDismiss,
-        modifier = Modifier.border(1.dp, PomboColors.Border, RoundedCornerShape(16.dp)),
-        shape = RoundedCornerShape(16.dp),
-        containerColor = PomboColors.Surface,
-        titleContentColor = PomboColors.Text,
-        textContentColor = PomboColors.Text,
-        title = { Text("Name This Channel") },
-        text = {
-            Column {
-                Text(
-                    "This channel has no public name. Give it one for your devices.",
-                    color = PomboColors.TextDim, fontSize = 12.sp
-                )
-                Spacer(Modifier.height(8.dp))
-                OutlinedTextField(
-                    value = name, onValueChange = { name = it },
-                    label = { Text("Channel name") }, colors = pomboFieldColors(),
-                    modifier = Modifier.fillMaxWidth()
-                )
-                Text(
-                    "This name is stored locally only",
-                    color = Color.White.copy(alpha = 0.30f), fontSize = 11.sp,
-                    modifier = Modifier.padding(top = 4.dp)
-                )
-                Spacer(Modifier.height(12.dp))
-                ClassificationChips(classification) { classification = it }
-            }
-        },
-        confirmButton = {
-            TextButton(onClick = { onSave(name, classification) }, enabled = name.isNotBlank()) {
-                Text("Save", color = if (name.isNotBlank()) PomboColors.Accent else PomboColors.TextDim, fontWeight = FontWeight.Bold)
-            }
-        },
-        dismissButton = { TextButton(onClick = onDismiss) { Text("Skip", color = PomboColors.TextDim) } }
-    )
+    PomboDialogFrame("Name this channel", onDismiss) {
+        Text(
+            "This channel has no public name. Give it one for your devices.",
+            color = PomboColors.TextDim, fontSize = 12.sp
+        )
+        Spacer(Modifier.height(14.dp))
+
+        PomboFieldLabel("CHANNEL NAME")
+        PomboDialogField(name, { name = it }, placeholder = "e.g. Notícias")
+        Spacer(Modifier.height(4.dp))
+        Text(
+            "This name is stored locally only",
+            color = Color.White.copy(alpha = 0.25f), fontSize = 12.sp
+        )
+
+        Spacer(Modifier.height(14.dp))
+        ClassificationChips(classification) { classification = it }
+
+        Spacer(Modifier.height(20.dp))
+        PomboPrimaryButton("Save", enabled = name.isNotBlank()) { onSave(name, classification) }
+    }
 }
 
 @Composable
@@ -2791,25 +2644,40 @@ internal fun dayLabel(ts: Long): String {
 internal fun formatTime(ts: Long): String =
     if (ts <= 0) "" else SimpleDateFormat("HH:mm", Locale.getDefault()).format(Date(ts))
 
-/**
- * The frame every form dialog uses: a dark panel with a hairline edge, the
- * title, and a close affordance in the corner instead of a Cancel button.
- */
+/** The frame every form dialog uses; closed by the corner X, never a Cancel. */
 @Composable
 internal fun PomboDialogFrame(
     title: String,
     onDismiss: () -> Unit,
+    icon: androidx.compose.ui.graphics.vector.ImageVector? = null,
+    // A Dialog is its own window: anything meant to sit above the panel, such
+    // as a toast, renders under it unless drawn in here.
+    overlay: @Composable androidx.compose.foundation.layout.BoxScope.() -> Unit = {},
     content: @Composable ColumnScope.() -> Unit
 ) {
-    Dialog(onDismissRequest = onDismiss) {
+    // usePlatformDefaultWidth ignores the modifier's width, hence false.
+    Dialog(
+        onDismissRequest = onDismiss,
+        properties = androidx.compose.ui.window.DialogProperties(usePlatformDefaultWidth = false)
+    ) {
+        Box {
         Column(
             Modifier
-                .width(340.dp)
+                .padding(horizontal = 16.dp)
+                .widthIn(max = 420.dp)
+                .fillMaxWidth()
                 .background(Color(0xFF111113), RoundedCornerShape(16.dp))
                 .border(1.dp, Color.White.copy(alpha = 0.06f), RoundedCornerShape(16.dp))
                 .padding(20.dp)
         ) {
             Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                if (icon != null) {
+                    Icon(
+                        icon, contentDescription = null,
+                        tint = PomboColors.Accent, modifier = Modifier.size(16.dp)
+                    )
+                    Spacer(Modifier.width(8.dp))
+                }
                 Text(
                     title, color = PomboColors.Text, fontSize = 16.sp,
                     fontWeight = FontWeight.Medium, modifier = Modifier.weight(1f)
@@ -2821,7 +2689,14 @@ internal fun PomboDialogFrame(
                 )
             }
             Spacer(Modifier.height(16.dp))
-            content()
+            // The only scroller: a second one inside measures against infinite
+            // height and never scrolls.
+            Column(
+                Modifier.verticalScroll(rememberScrollState()),
+                content = content
+            )
+        }
+        overlay()
         }
     }
 }
@@ -2833,20 +2708,18 @@ internal fun PomboFieldLabel(text: String) {
     Spacer(Modifier.height(6.dp))
 }
 
-/**
- * A one-line field sized to its text. The Material field reserves room for a
- * floating label whether or not one is used, which is what made these panels
- * a stack of tall boxes.
- */
+/** A one-line field sized to its text, without Material's floating-label room. */
 @Composable
 internal fun PomboDialogField(
     value: String,
     onValueChange: (String) -> Unit,
     placeholder: String = "",
-    password: Boolean = false
+    password: Boolean = false,
+    monospace: Boolean = false,
+    trailing: @Composable (() -> Unit)? = null
 ) {
     var focused by remember { mutableStateOf(false) }
-    Box(
+    Row(
         Modifier
             .fillMaxWidth()
             .background(PomboColors.SurfaceHigh, RoundedCornerShape(12.dp))
@@ -2855,36 +2728,55 @@ internal fun PomboDialogField(
                 if (focused) PomboColors.Accent else Color.White.copy(alpha = 0.10f),
                 RoundedCornerShape(12.dp)
             )
-            .padding(horizontal = 12.dp, vertical = 11.dp)
+            .padding(horizontal = 12.dp, vertical = 11.dp),
+        verticalAlignment = Alignment.CenterVertically
     ) {
-        if (value.isEmpty() && placeholder.isNotEmpty()) {
-            Text(placeholder, color = Color.White.copy(alpha = 0.25f), fontSize = 14.sp)
+        Box(Modifier.weight(1f)) {
+            if (value.isEmpty() && placeholder.isNotEmpty()) {
+                Text(
+                    placeholder, color = Color.White.copy(alpha = 0.25f), fontSize = 14.sp,
+                    maxLines = 1, overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis
+                )
+            }
+            BasicTextField(
+                value = value,
+                onValueChange = onValueChange,
+                singleLine = true,
+                textStyle = TextStyle(
+                    color = PomboColors.Text, fontSize = 14.sp,
+                    fontFamily = if (monospace) androidx.compose.ui.text.font.FontFamily.Monospace else null
+                ),
+                cursorBrush = SolidColor(PomboColors.Accent),
+                visualTransformation = if (password) PasswordVisualTransformation() else VisualTransformation.None,
+                modifier = Modifier.fillMaxWidth().onFocusChanged { focused = it.isFocused }
+            )
         }
-        BasicTextField(
-            value = value,
-            onValueChange = onValueChange,
-            singleLine = true,
-            textStyle = TextStyle(color = PomboColors.Text, fontSize = 14.sp),
-            cursorBrush = SolidColor(PomboColors.Accent),
-            visualTransformation = if (password) PasswordVisualTransformation() else VisualTransformation.None,
-            modifier = Modifier.fillMaxWidth().onFocusChanged { focused = it.isFocused }
-        )
+        if (trailing != null) {
+            Spacer(Modifier.width(8.dp))
+            trailing()
+        }
     }
 }
 
 /** The action button of a form dialog: the accent pill the app uses elsewhere. */
 @Composable
-internal fun PomboPrimaryButton(label: String, enabled: Boolean = true, onClick: () -> Unit) {
+internal fun PomboPrimaryButton(
+    label: String,
+    enabled: Boolean = true,
+    danger: Boolean = false,
+    onClick: () -> Unit
+) {
+    val tone = if (danger) PomboColors.Danger else PomboColors.Accent
     Box(
         Modifier
             .fillMaxWidth()
             .background(
-                PomboColors.Accent.copy(alpha = if (enabled) 0.15f else 0.06f),
+                tone.copy(alpha = if (enabled) 0.15f else 0.06f),
                 RoundedCornerShape(12.dp)
             )
             .border(
                 1.dp,
-                PomboColors.Accent.copy(alpha = if (enabled) 0.30f else 0.12f),
+                tone.copy(alpha = if (enabled) 0.30f else 0.12f),
                 RoundedCornerShape(12.dp)
             )
             .clickable(enabled = enabled, onClick = onClick)
@@ -2893,7 +2785,11 @@ internal fun PomboPrimaryButton(label: String, enabled: Boolean = true, onClick:
     ) {
         Text(
             label,
-            color = if (enabled) Color.White else Color.White.copy(alpha = 0.35f),
+            color = when {
+                !enabled -> Color.White.copy(alpha = 0.35f)
+                danger -> tone
+                else -> Color.White
+            },
             fontSize = 14.sp, fontWeight = FontWeight.Medium
         )
     }
@@ -2924,60 +2820,17 @@ internal fun ChannelPasswordDialog(
     onSubmit: (String) -> Unit
 ) {
     var password by remember { mutableStateOf("") }
-    androidx.compose.ui.window.Dialog(onDismissRequest = onDismiss) {
-        Column(
-            Modifier
-                .width(340.dp)
-                .background(Color(0xFF111113), RoundedCornerShape(16.dp))
-                .border(1.dp, Color.White.copy(alpha = 0.06f), RoundedCornerShape(16.dp))
-                .padding(20.dp)
-        ) {
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                Icon(Icons.Filled.Lock, contentDescription = null, tint = PomboColors.Accent, modifier = Modifier.size(16.dp))
-                Spacer(Modifier.width(8.dp))
-                Text("Protected channel", color = Color.White, fontSize = 16.sp, fontWeight = FontWeight.Medium)
-            }
-            Spacer(Modifier.height(6.dp))
-            Text(
-                "$channelName requires a password to read its messages.",
-                color = Color.White.copy(alpha = 0.50f), fontSize = 13.sp
-            )
-            Spacer(Modifier.height(16.dp))
-            OutlinedTextField(
-                value = password, onValueChange = { password = it },
-                placeholder = { Text("Channel password", color = Color.White.copy(alpha = 0.25f), fontSize = 14.sp) },
-                singleLine = true, shape = RoundedCornerShape(12.dp),
-                visualTransformation = PasswordVisualTransformation(),
-                textStyle = androidx.compose.ui.text.TextStyle(fontSize = 14.sp, color = PomboColors.Text),
-                colors = pomboFieldColors(), modifier = Modifier.fillMaxWidth()
-            )
-            Spacer(Modifier.height(20.dp))
-            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                Box(
-                    Modifier.weight(1f)
-                        .background(Color.White.copy(alpha = 0.05f), RoundedCornerShape(12.dp))
-                        .border(1.dp, Color.White.copy(alpha = 0.08f), RoundedCornerShape(12.dp))
-                        .clickableNoRipple(onDismiss)
-                        .padding(vertical = 10.dp),
-                    contentAlignment = Alignment.Center
-                ) { Text("Cancel", color = Color.White.copy(alpha = 0.50f), fontSize = 14.sp, fontWeight = FontWeight.Medium) }
-                Box(
-                    Modifier.weight(1f)
-                        .background(
-                            if (password.isNotBlank()) Color.White else Color.White.copy(alpha = 0.10f),
-                            RoundedCornerShape(12.dp)
-                        )
-                        .clickableNoRipple { if (password.isNotBlank()) onSubmit(password) }
-                        .padding(vertical = 10.dp),
-                    contentAlignment = Alignment.Center
-                ) {
-                    Text(
-                        "Unlock",
-                        color = if (password.isNotBlank()) Color.Black else Color.White.copy(alpha = 0.30f),
-                        fontSize = 14.sp, fontWeight = FontWeight.Medium
-                    )
-                }
-            }
-        }
+    PomboDialogFrame("Protected channel", onDismiss, icon = Icons.Filled.Lock) {
+        Text(
+            "$channelName requires a password to read its messages.",
+            color = Color.White.copy(alpha = 0.50f), fontSize = 13.sp
+        )
+        Spacer(Modifier.height(14.dp))
+
+        PomboFieldLabel("PASSWORD")
+        PomboDialogField(password, { password = it }, password = true)
+
+        Spacer(Modifier.height(20.dp))
+        PomboPrimaryButton("Unlock", enabled = password.isNotBlank()) { onSubmit(password) }
     }
 }
