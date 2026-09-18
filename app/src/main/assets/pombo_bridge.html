@@ -694,7 +694,11 @@ const api = {
             ? await pwEncryptString(JSON.stringify(a.content), String(a.password))
             : a.content;
         const prev = pubChains.get(key) || Promise.resolve();
-        const next = prev.catch(function () {}).then(function () {
+        const next = prev.catch(function () {}).then(async function () {
+            // The admin stream is read from storage, not live, and the SDK's
+            // publish broadcasts into whatever topology exists: from a cold
+            // session that can be nobody. Wait for a neighbour, as _publishAs does.
+            if (/-3$/.test(a.streamId)) await api._awaitNeighbour(a.streamId, a.partition);
             return client.publish({ streamId: a.streamId, partition: a.partition }, content);
         });
         pubChains.set(key, next);
@@ -706,6 +710,17 @@ const api = {
         if (msg && typeof msg.timestamp === 'number') ts = msg.timestamp;
         else if (msg && msg.streamMessage && typeof msg.streamMessage.getTimestamp === 'function') ts = msg.streamMessage.getTimestamp();
         return { ok: true, timestamp: ts };
+    },
+
+    // Wait, briefly, for at least one neighbour on a stream partition before
+    // broadcasting into it. Best-effort: on timeout the publish goes anyway.
+    async _awaitNeighbour(streamId, partition) {
+        const streamPartId = streamId + '#' + partition;
+        try {
+            await client.getNode().join(streamPartId, { minCount: 1, timeout: 5000 });
+        } catch (e) {
+            console.warn('publish: no neighbours on ' + streamPartId + ' yet (' + (e && e.message || e) + ') — publishing anyway');
+        }
     },
 
     // ===== publishAs — publish under an identity that is not the client's =====
