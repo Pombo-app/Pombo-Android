@@ -34,6 +34,7 @@ import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.ui.draw.alpha
+import androidx.compose.material.icons.outlined.AddCircleOutline
 import androidx.compose.material.icons.outlined.ChatBubbleOutline
 import androidx.compose.material.icons.outlined.Home
 import androidx.compose.runtime.mutableFloatStateOf
@@ -744,14 +745,14 @@ private fun ProfileTab(vm: AppViewModel, onAddAccount: () -> Unit) {
             Modifier.fillMaxWidth().background(PomboColors.Surface, RoundedCornerShape(12.dp))
                 .border(1.dp, PomboColors.Border, RoundedCornerShape(12.dp))
         ) {
-            ProfileAction("Add account", onClick = onAddAccount)
+            ProfileAction("Add account", Icons.Outlined.AddCircleOutline, onClick = onAddAccount)
             androidx.compose.material3.HorizontalDivider(color = PomboColors.Border)
             // Leaves the account behind rather than erasing it: `disconnect()`
             // calls WalletStore.clear(), which drops the current account's key
             // for good. Destroying an account belongs in Settings → Security,
             // behind its device-auth gate and typed confirmation — not one tap
             // away in the profile menu.
-            ProfileAction("Browse as guest") { vm.browseAsGuest() }
+            ProfileAction("Browse as guest", com.pombo.android.ui.PomboIcons.Ghost) { vm.browseAsGuest() }
         }
         // Moved out of Settings (2026-08-21 user call): About is app-level, not
         // account-scoped, and this screen is what "the avatar" means on Android —
@@ -765,24 +766,39 @@ private fun ProfileTab(vm: AppViewModel, onAddAccount: () -> Unit) {
             Modifier.fillMaxWidth().background(PomboColors.Surface, RoundedCornerShape(12.dp))
                 .border(1.dp, PomboColors.Border, RoundedCornerShape(12.dp))
         ) {
-            ProfileAction("About") { showAbout = true }
+            ProfileAction("About", Icons.Outlined.Info) { showAbout = true }
         }
         if (showAbout) AboutDialog(onDismiss = { showAbout = false })
     }
 }
 
 @Composable
-private fun ProfileAction(label: String, danger: Boolean = false, enabled: Boolean = true, onClick: () -> Unit) {
-    Text(
-        label + if (!enabled) "  (coming soon)" else "",
-        color = when {
-            danger -> PomboColors.Danger
-            !enabled -> PomboColors.TextDim
-            else -> PomboColors.Text
-        },
-        fontSize = 14.sp,
-        modifier = Modifier.fillMaxWidth().clickableNoRipple { if (enabled) onClick() }.padding(16.dp)
-    )
+private fun ProfileAction(
+    label: String,
+    icon: androidx.compose.ui.graphics.vector.ImageVector? = null,
+    danger: Boolean = false,
+    enabled: Boolean = true,
+    onClick: () -> Unit
+) {
+    val tint = when {
+        danger -> PomboColors.Danger
+        !enabled -> PomboColors.TextDim
+        else -> PomboColors.Text
+    }
+    Row(
+        Modifier.fillMaxWidth().clickableNoRipple { if (enabled) onClick() }.padding(16.dp),
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        icon?.let {
+            Icon(it, contentDescription = null, tint = tint.copy(alpha = 0.60f), modifier = Modifier.size(18.dp))
+            Spacer(Modifier.width(12.dp))
+        }
+        Text(
+            label + if (!enabled) "  (coming soon)" else "",
+            color = tint,
+            fontSize = 14.sp
+        )
+    }
 }
 
 /**
