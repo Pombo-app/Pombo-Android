@@ -2809,7 +2809,13 @@ class ChannelManager(
      */
     private var inboxExistsCache: String? = null
 
-    suspend fun hasInbox(): Boolean {
+    suspend fun hasInbox(): Boolean = probeInbox() == true
+
+    /**
+     * Null when the probe could not be answered; only the chain reporting the
+     * stream absent counts as "no inbox".
+     */
+    suspend fun probeInbox(): Boolean? {
         val me = myAddress()?.lowercase() ?: return false
         val inbox = "$me/Pombo-DM-1"
         if (inboxExistsCache == inbox) return true
@@ -2818,7 +2824,7 @@ class ChannelManager(
             inboxExistsCache = inbox
             true
         } catch (e: Exception) {
-            false
+            if (STREAM_ABSENT.containsMatchIn(e.message ?: "")) false else null
         }
     }
 

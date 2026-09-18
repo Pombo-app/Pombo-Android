@@ -409,13 +409,10 @@ internal fun ChatsTab(vm: AppViewModel, onCreate: () -> Unit, onJoin: () -> Unit
                 Modifier.fillMaxWidth().padding(start = 16.dp, end = 16.dp, top = 6.dp, bottom = 28.dp),
                 contentAlignment = Alignment.Center
             ) {
-                if (hasDmInbox) {
-                    AccentPillButton("New DM", Icons.Filled.Add) { showNewDm = true }
-                } else {
-                    // Web only shows the cost line inside its create-inbox
-                    // modal. `hasDmInbox` reads false while the bridge is
-                    // still connecting, so a cost line here flashed on every start.
-                    AccentPillButton("Create DM Inbox", Icons.Filled.MailOutline) { showDmSetup = true }
+                when (hasDmInbox) {
+                    true -> AccentPillButton("New DM", Icons.Filled.Add) { showNewDm = true }
+                    false -> AccentPillButton("Create DM Inbox", Icons.Filled.MailOutline) { showDmSetup = true }
+                    null -> PillButtonPlaceholder()
                 }
             }
         }
@@ -769,6 +766,33 @@ private fun TransferRow(
                 modifier = Modifier.size(15.dp).clickableNoRipple { onCancel() }
             )
         }
+    }
+}
+
+/**
+ * The pill while the inbox probe is in flight. Lays out the New DM content
+ * invisibly so the pill keeps that button's size.
+ */
+@Composable
+private fun PillButtonPlaceholder() {
+    Box(
+        Modifier
+            .background(PomboColors.Accent.copy(alpha = 0.15f), RoundedCornerShape(12.dp))
+            .border(1.dp, PomboColors.Accent.copy(alpha = 0.30f), RoundedCornerShape(12.dp))
+            .padding(horizontal = 20.dp, vertical = 10.dp),
+        contentAlignment = Alignment.Center
+    ) {
+        Row(Modifier.alpha(0f), verticalAlignment = Alignment.CenterVertically) {
+            Icon(Icons.Filled.Add, contentDescription = null, modifier = Modifier.size(16.dp))
+            Spacer(Modifier.width(8.dp))
+            Text("New DM", fontSize = 14.sp, fontWeight = FontWeight.Medium)
+        }
+        androidx.compose.material3.CircularProgressIndicator(
+            modifier = Modifier.size(18.dp),
+            color = Color.White,
+            trackColor = Color.White.copy(alpha = 0.25f),
+            strokeWidth = 2.dp
+        )
     }
 }
 

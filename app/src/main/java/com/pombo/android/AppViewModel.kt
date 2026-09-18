@@ -11,6 +11,7 @@ import com.pombo.android.data.Contact
 import com.pombo.android.data.ContactsStore
 import com.pombo.android.identity.WalletStore
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.async
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.sync.withPermit
@@ -527,7 +528,7 @@ class AppViewModel(app: Application) : AndroidViewModel(app), PomboBridge.Listen
             toast("Enable Push Notifications first", com.pombo.android.ui.ToastKind.WARNING)
             return@launch
         }
-        if (!_hasDmInbox.value) {
+        if (_hasDmInbox.value != true) {
             toast("Create your DM inbox first", com.pombo.android.ui.ToastKind.WARNING)
             return@launch
         }
@@ -1570,6 +1571,8 @@ class AppViewModel(app: Application) : AndroidViewModel(app), PomboBridge.Listen
         _ensAvatarsEnabled.value = settingsStore.ensAvatars
         com.pombo.android.ui.EnsAvatarsSetting.set(settingsStore.ensAvatars)
         _dmPushEnabled.value = settingsStore.dmPushEnabled
+        dmInboxProbe?.cancel()
+        _hasDmInbox.value = if (guest) false else settingsStore.dmInboxKnown.takeIf { it }
         // Per account, and read before the next connect decides whether to fire
         // the start-up sync.
         _syncMode.value = settingsStore.syncMode
@@ -3106,16 +3109,45 @@ class AppViewModel(app: Application) : AndroidViewModel(app), PomboBridge.Listen
     }
 
     /**
-     * Whether my DM inbox exists. Drives which button the Chats tab shows —
-     * "Create DM Inbox" before, "New DM" after (web: DMModalsUI.updateVisibility).
-     * Never shown to guests, who have no persistent identity.
+     * Whether my DM inbox exists, null while the probe runs. Drives which
+     * button the Chats tab shows (web: DMModalsUI.updateVisibility).
      */
-    private val _hasDmInbox = MutableStateFlow(false)
-    val hasDmInbox: StateFlow<Boolean> = _hasDmInbox.asStateFlow()
+    private val _hasDmInbox = MutableStateFlow<Boolean?>(null)
+    val hasDmInbox: StateFlow<Boolean?> = _hasDmInbox.asStateFlow()
+
+    private var dmInboxProbe: Job? = null
+    private val DM_INBOX_PROBE_TRIES = 3
+    private val DM_INBOX_PROBE_BACKOFF_MS = 2_000L
 
     fun refreshDmInbox() {
-        viewModelScope.launch {
-            _hasDmInbox.value = if (_isGuest.value) false else manager.hasInbox()
+        if (dmInboxProbe?.isActive == true) return
+        dmInboxProbe = viewModelScope.launch {
+            if (_isGuest.value) {
+                _hasDmInbox.value = false
+                return@launch
+            }
+            if (settingsStore.dmInboxKnown) {
+                _hasDmInbox.value = true
+                return@launch
+            }
+            _hasDmInbox.value = null
+            repeat(DM_INBOX_PROBE_TRIES) { attempt ->
+                when (manager.probeInbox()) {
+                    true -> {
+                        settingsStore.dmInboxKnown = true
+                        _hasDmInbox.value = true
+                        return@launch
+                    }
+                    false -> {
+                        _hasDmInbox.value = false
+                        return@launch
+                    }
+                    null -> if (attempt < DM_INBOX_PROBE_TRIES - 1) {
+                        delay(DM_INBOX_PROBE_BACKOFF_MS * (attempt + 1))
+                    }
+                }
+            }
+            _hasDmInbox.value = false
         }
     }
 
@@ -3155,6 +3187,7 @@ class AppViewModel(app: Application) : AndroidViewModel(app), PomboBridge.Listen
                 }
                 setToastProgress(id, step, label)
             }
+            settingsStore.dmInboxKnown = true
             _hasDmInbox.value = true
             dismissToast(id)
             toast("DM inbox created!", com.pombo.android.ui.ToastKind.SUCCESS)
