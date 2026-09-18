@@ -1169,15 +1169,8 @@ internal fun BanMemberDialog(
     val canPurge = purgeProviders > 0 && canClientBan
     val red = PomboColors.Danger
 
-    androidx.compose.ui.window.Dialog(onDismissRequest = onDismiss) {
-        Column(
-            Modifier.fillMaxWidth()
-                .background(Color(0xFF16161B), RoundedCornerShape(20.dp))
-                .border(1.dp, Color.White.copy(alpha = 0.08f), RoundedCornerShape(20.dp))
-                .padding(20.dp)
-        ) {
-            Text("Ban $label", color = Color.White, fontSize = 17.sp, fontWeight = FontWeight.SemiBold)
-            Spacer(Modifier.height(14.dp))
+    com.pombo.android.ui.screens.PomboDialogFrame("Ban $label", onDismiss) {
+
 
             BanLevelRow(
                 title = "Hide their messages",
@@ -1217,41 +1210,10 @@ internal fun BanMemberDialog(
             ) { purge = it }
 
             Spacer(Modifier.height(18.dp))
-            Row {
-                Box(
-                    Modifier.weight(1f)
-                        .background(Color.White.copy(alpha = 0.05f), RoundedCornerShape(12.dp))
-                        .clickableNoRipple(onDismiss)
-                        .padding(vertical = 10.dp),
-                    contentAlignment = Alignment.Center
-                ) { Text("Cancel", color = Color.White.copy(alpha = 0.60f), fontSize = 14.sp) }
-                Spacer(Modifier.width(10.dp))
-                val armed = (client && canClientBan) || (protocol && gated && canProtocolBan)
-                Box(
-                    Modifier.weight(1f)
-                        .background(
-                            if (armed) red.copy(alpha = 0.15f) else Color.White.copy(alpha = 0.04f),
-                            RoundedCornerShape(12.dp)
-                        )
-                        .border(
-                            1.dp,
-                            if (armed) red.copy(alpha = 0.30f) else Color.White.copy(alpha = 0.06f),
-                            RoundedCornerShape(12.dp)
-                        )
-                        .clickableNoRipple {
-                            if (armed) onConfirm(client && canClientBan, protocol && gated, purge && canPurge && client)
-                        }
-                        .padding(vertical = 10.dp),
-                    contentAlignment = Alignment.Center
-                ) {
-                    Text(
-                        "Ban",
-                        color = if (armed) red else Color.White.copy(alpha = 0.25f),
-                        fontSize = 14.sp, fontWeight = FontWeight.Medium
-                    )
-                }
+            val armed = (client && canClientBan) || (protocol && gated && canProtocolBan)
+            PomboPrimaryButton("Ban", enabled = armed, danger = true) {
+                onConfirm(client && canClientBan, protocol && gated, purge && canPurge && client)
             }
-        }
     }
 }
 

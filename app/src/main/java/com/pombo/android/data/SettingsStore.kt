@@ -100,6 +100,11 @@ class SettingsStore(context: Context) {
         get() = prefs.getBoolean(scoped(KEY_DM_PUSH), false)
         set(value) = prefs.edit().putBoolean(scoped(KEY_DM_PUSH), value).apply()
 
+    /** Only ever written true: inbox streams are not deleted. */
+    var dmInboxKnown: Boolean
+        get() = prefs.getBoolean(scoped(KEY_DM_INBOX_KNOWN), false)
+        set(value) = prefs.edit().putBoolean(scoped(KEY_DM_INBOX_KNOWN), value).apply()
+
     /**
      * The "Channel Invites" settings toggle (web invitesMuted_<addr>, default
      * unmuted): whether the inbox notification partition (P3) is subscribed.
@@ -212,6 +217,7 @@ class SettingsStore(context: Context) {
         const val KEY_NSFW = "nsfw_enabled"
         const val KEY_ENS_AVATARS = "ens_avatars_enabled"
         const val KEY_DM_PUSH = "dm_push_enabled"
+        const val KEY_DM_INBOX_KNOWN = "dm_inbox_known"
         const val KEY_INVITE_NOTIFS = "invite_notifications_enabled"
         const val KEY_MUTED_DM = "muted_dm_peers"
         const val KEY_RPC_SELECTION = "rpc_selection"

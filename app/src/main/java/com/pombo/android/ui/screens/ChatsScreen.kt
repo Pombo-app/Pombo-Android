@@ -134,17 +134,7 @@ internal fun ChatsTab(vm: AppViewModel, onCreate: () -> Unit, onJoin: () -> Unit
     Column(Modifier.fillMaxSize()) {
         PomboHeader(status) {
             if (isGuest) {
-                // Web: guest shows the orange "Create Account" button instead of the actions
-                Row(
-                    Modifier.background(PomboColors.Accent, RoundedCornerShape(12.dp))
-                        .clickableNoRipple(onConnect)
-                        .padding(horizontal = 12.dp, vertical = 6.dp),
-                    verticalAlignment = Alignment.CenterVertically
-                ) {
-                    Icon(Icons.Outlined.Person, contentDescription = null, tint = Color.White, modifier = Modifier.size(14.dp))
-                    Spacer(Modifier.width(5.dp))
-                    Text("Create Account", color = Color.White, fontSize = 13.sp, fontWeight = FontWeight.Medium)
-                }
+                CreateAccountButton(onConnect)
             } else {
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     // Join by stream ID. Creating a channel lives in Explore.
@@ -409,13 +399,10 @@ internal fun ChatsTab(vm: AppViewModel, onCreate: () -> Unit, onJoin: () -> Unit
                 Modifier.fillMaxWidth().padding(start = 16.dp, end = 16.dp, top = 6.dp, bottom = 28.dp),
                 contentAlignment = Alignment.Center
             ) {
-                if (hasDmInbox) {
-                    AccentPillButton("New DM", Icons.Filled.Add) { showNewDm = true }
-                } else {
-                    // Web only shows the cost line inside its create-inbox
-                    // modal. `hasDmInbox` reads false while the bridge is
-                    // still connecting, so a cost line here flashed on every start.
-                    AccentPillButton("Create DM Inbox", Icons.Filled.MailOutline) { showDmSetup = true }
+                when (hasDmInbox) {
+                    true -> AccentPillButton("New DM", Icons.Filled.Add) { showNewDm = true }
+                    false -> AccentPillButton("Create DM Inbox", Icons.Filled.MailOutline) { showDmSetup = true }
+                    null -> PillButtonPlaceholder()
                 }
             }
         }
@@ -772,6 +759,33 @@ private fun TransferRow(
     }
 }
 
+/**
+ * The pill while the inbox probe is in flight. Lays out the New DM content
+ * invisibly so the pill keeps that button's size.
+ */
+@Composable
+private fun PillButtonPlaceholder() {
+    Box(
+        Modifier
+            .background(PomboColors.Accent.copy(alpha = 0.15f), RoundedCornerShape(12.dp))
+            .border(1.dp, PomboColors.Accent.copy(alpha = 0.30f), RoundedCornerShape(12.dp))
+            .padding(horizontal = 20.dp, vertical = 10.dp),
+        contentAlignment = Alignment.Center
+    ) {
+        Row(Modifier.alpha(0f), verticalAlignment = Alignment.CenterVertically) {
+            Icon(Icons.Filled.Add, contentDescription = null, modifier = Modifier.size(16.dp))
+            Spacer(Modifier.width(8.dp))
+            Text("New DM", fontSize = 14.sp, fontWeight = FontWeight.Medium)
+        }
+        androidx.compose.material3.CircularProgressIndicator(
+            modifier = Modifier.size(18.dp),
+            color = Color.White,
+            trackColor = Color.White.copy(alpha = 0.25f),
+            strokeWidth = 2.dp
+        )
+    }
+}
+
 /** Web: the shared accent button style used by both DM buttons. */
 @Composable
 private fun AccentPillButton(label: String, icon: androidx.compose.ui.graphics.vector.ImageVector, onClick: () -> Unit) {
@@ -794,58 +808,22 @@ private fun AccentPillButton(label: String, icon: androidx.compose.ui.graphics.v
 private fun NewDmDialog(onDismiss: () -> Unit, onStart: (String, String?) -> Unit) {
     var address by remember { mutableStateOf("") }
     var localName by remember { mutableStateOf("") }
-    Dialog(onDismissRequest = onDismiss) {
-        Column(
-            Modifier
-                .width(340.dp)
-                .background(Color(0xFF111113), RoundedCornerShape(16.dp))
-                .border(1.dp, Color.White.copy(alpha = 0.06f), RoundedCornerShape(16.dp))
-                .padding(20.dp)
-        ) {
-            Text("New DM", color = PomboColors.Text, fontSize = 16.sp, fontWeight = FontWeight.Medium)
-            Spacer(Modifier.height(16.dp))
+    PomboDialogFrame("New DM", onDismiss) {
+        PomboFieldLabel("ADDRESS OR ENS")
+        PomboDialogField(address, { address = it }, placeholder = "0x… or name.eth")
+        Spacer(Modifier.height(12.dp))
 
-            Text("ADDRESS OR ENS", color = Color.White.copy(alpha = 0.30f), fontSize = 12.sp, letterSpacing = 0.8.sp)
-            Spacer(Modifier.height(6.dp))
-            OutlinedTextField(
-                value = address, onValueChange = { address = it },
-                placeholder = { Text("0x... or name.eth", color = Color.White.copy(alpha = 0.25f), fontSize = 14.sp) },
-                singleLine = true, shape = RoundedCornerShape(12.dp),
-                textStyle = androidx.compose.ui.text.TextStyle(fontSize = 14.sp, color = PomboColors.Text),
-                colors = pomboFieldColors(), modifier = Modifier.fillMaxWidth()
-            )
-            Spacer(Modifier.height(12.dp))
+        PomboFieldLabel("LOCAL NAME (OPTIONAL)")
+        PomboDialogField(localName, { if (it.length <= 30) localName = it }, placeholder = "e.g. Alice")
+        Spacer(Modifier.height(4.dp))
+        Text(
+            "Stored locally, only visible to you",
+            color = Color.White.copy(alpha = 0.25f), fontSize = 12.sp
+        )
 
-            Text("LOCAL NAME (OPTIONAL)", color = Color.White.copy(alpha = 0.30f), fontSize = 12.sp, letterSpacing = 0.8.sp)
-            Spacer(Modifier.height(6.dp))
-            OutlinedTextField(
-                value = localName, onValueChange = { if (it.length <= 30) localName = it },
-                placeholder = { Text("e.g. Alice", color = Color.White.copy(alpha = 0.25f), fontSize = 14.sp) },
-                singleLine = true, shape = RoundedCornerShape(12.dp),
-                textStyle = androidx.compose.ui.text.TextStyle(fontSize = 14.sp, color = PomboColors.Text),
-                colors = pomboFieldColors(), modifier = Modifier.fillMaxWidth()
-            )
-            Spacer(Modifier.height(4.dp))
-            Text("Stored locally, only visible to you", color = Color.White.copy(alpha = 0.25f), fontSize = 12.sp)
-
-            Spacer(Modifier.height(20.dp))
-            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                Box(
-                    Modifier.weight(1f)
-                        .background(Color.White.copy(alpha = 0.05f), RoundedCornerShape(12.dp))
-                        .border(1.dp, Color.White.copy(alpha = 0.08f), RoundedCornerShape(12.dp))
-                        .clickable(onClick = onDismiss)
-                        .padding(vertical = 10.dp),
-                    contentAlignment = Alignment.Center
-                ) { Text("Cancel", color = Color.White.copy(alpha = 0.50f), fontSize = 14.sp, fontWeight = FontWeight.Medium) }
-                Box(
-                    Modifier.weight(1f)
-                        .background(Color.White, RoundedCornerShape(12.dp))
-                        .clickable(enabled = address.isNotBlank()) { onStart(address.trim(), localName) }
-                        .padding(vertical = 10.dp),
-                    contentAlignment = Alignment.Center
-                ) { Text("Start DM", color = Color.Black, fontSize = 14.sp, fontWeight = FontWeight.Medium) }
-            }
+        Spacer(Modifier.height(20.dp))
+        PomboPrimaryButton("Start DM", enabled = address.isNotBlank()) {
+            onStart(address.trim(), localName)
         }
     }
 }

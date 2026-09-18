@@ -206,40 +206,21 @@ private fun EditContactDialog(
     onSave: (String?) -> Unit
 ) {
     var name by remember { mutableStateOf(contact.nickname ?: "") }
-    androidx.compose.material3.AlertDialog(
-        onDismissRequest = onDismiss,
-        containerColor = PomboColors.Surface,
-        titleContentColor = PomboColors.Text,
-        textContentColor = PomboColors.Text,
-        title = { Text("Edit contact") },
-        text = {
-            Column {
-                Text(
-                    contact.address,
-                    color = PomboColors.TextDim, fontSize = 11.sp,
-                    fontFamily = androidx.compose.ui.text.font.FontFamily.Monospace,
-                    maxLines = 1, overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis
-                )
-                Spacer(Modifier.height(10.dp))
-                OutlinedTextField(
-                    value = name, onValueChange = { if (it.length <= 18) name = it },
-                    placeholder = { Text("Local name (optional)", color = PomboColors.TextDim) },
-                    colors = pomboFieldColors(), singleLine = true,
-                    modifier = Modifier.fillMaxWidth()
-                )
-            }
-        },
-        confirmButton = {
-            androidx.compose.material3.TextButton(onClick = { onSave(name.trim().ifEmpty { null }) }) {
-                Text("Save", color = PomboColors.Accent, fontWeight = FontWeight.Bold)
-            }
-        },
-        dismissButton = {
-            androidx.compose.material3.TextButton(onClick = onDismiss) {
-                Text("Cancel", color = PomboColors.TextDim)
-            }
-        }
-    )
+    PomboDialogFrame("Edit contact", onDismiss) {
+        // The zero-width break is the only point the address may wrap at.
+        Text(
+            contact.address.take(21) + Char(0x200B) + contact.address.drop(21),
+            color = PomboColors.TextDim, fontSize = 11.sp, lineHeight = 16.sp,
+            fontFamily = androidx.compose.ui.text.font.FontFamily.Monospace
+        )
+        Spacer(Modifier.height(14.dp))
+
+        PomboFieldLabel("LOCAL NAME (OPTIONAL)")
+        PomboDialogField(name, { if (it.length <= 18) name = it }, placeholder = "e.g. Alice")
+
+        Spacer(Modifier.height(20.dp))
+        PomboPrimaryButton("Save") { onSave(name.trim().ifEmpty { null }) }
+    }
 }
 
 @Composable

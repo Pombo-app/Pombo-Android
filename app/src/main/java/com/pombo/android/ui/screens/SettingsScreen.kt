@@ -347,7 +347,7 @@ private fun AccountPanel(vm: AppViewModel) {
         // pushSync/pullSync both bail on `inboxExists()`, so without an inbox
         // the whole block is absent rather than disabled.
         val hasDmInbox by vm.hasDmInbox.collectAsState()
-        if (hasDmInbox) {
+        if (hasDmInbox == true) {
             Spacer(Modifier.height(20.dp))
             Box(Modifier.fillMaxWidth().height(1.dp).background(Color.White.copy(alpha = 0.05f)))
             Spacer(Modifier.height(20.dp))
@@ -496,101 +496,56 @@ internal fun BackupPasswordDialog(
     var confirm by remember { mutableStateOf("") }
     var toggled by remember { mutableStateOf(true) }
     val valid = password.length >= minLength && (!confirmPassword || confirm == password)
-    androidx.compose.ui.window.Dialog(onDismissRequest = onDismiss) {
-        Column(
-            Modifier
-                .width(340.dp)
-                .background(Color(0xFF111113), RoundedCornerShape(16.dp))
-                .border(1.dp, Color.White.copy(alpha = 0.06f), RoundedCornerShape(16.dp))
-                .padding(20.dp)
-        ) {
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                Icon(Icons.Filled.Lock, contentDescription = null, tint = PomboColors.Accent, modifier = Modifier.size(16.dp))
-                Spacer(Modifier.width(8.dp))
-                Text(title, color = Color.White, fontSize = 16.sp, fontWeight = FontWeight.Medium)
-            }
-            Spacer(Modifier.height(6.dp))
-            Text(hint, color = Color.White.copy(alpha = 0.50f), fontSize = 13.sp, lineHeight = 18.sp)
-            Spacer(Modifier.height(16.dp))
-            OutlinedTextField(
-                value = password, onValueChange = { password = it },
-                placeholder = { Text("Password", color = Color.White.copy(alpha = 0.25f), fontSize = 14.sp) },
-                singleLine = true, shape = RoundedCornerShape(12.dp),
-                visualTransformation = androidx.compose.ui.text.input.PasswordVisualTransformation(),
-                textStyle = androidx.compose.ui.text.TextStyle(fontSize = 14.sp, color = PomboColors.Text),
-                colors = pomboFieldColors(), modifier = Modifier.fillMaxWidth()
-            )
-            if (confirmPassword) {
+
+    PomboDialogFrame(title, onDismiss, icon = Icons.Filled.Lock) {
+        Text(hint, color = Color.White.copy(alpha = 0.50f), fontSize = 13.sp, lineHeight = 19.sp)
+        Spacer(Modifier.height(14.dp))
+
+        PomboFieldLabel("PASSWORD")
+        PomboDialogField(password, { password = it }, placeholder = "Password", password = true)
+
+        if (confirmPassword) {
+            Spacer(Modifier.height(12.dp))
+            PomboFieldLabel("CONFIRM PASSWORD")
+            PomboDialogField(confirm, { confirm = it }, placeholder = "Repeat the password", password = true)
+            if (confirm.isNotEmpty() && confirm != password) {
                 Spacer(Modifier.height(8.dp))
-                OutlinedTextField(
-                    value = confirm, onValueChange = { confirm = it },
-                    placeholder = { Text("Confirm password", color = Color.White.copy(alpha = 0.25f), fontSize = 14.sp) },
-                    singleLine = true, shape = RoundedCornerShape(12.dp),
-                    visualTransformation = androidx.compose.ui.text.input.PasswordVisualTransformation(),
-                    textStyle = androidx.compose.ui.text.TextStyle(fontSize = 14.sp, color = PomboColors.Text),
-                    colors = pomboFieldColors(), modifier = Modifier.fillMaxWidth()
-                )
-                if (confirm.isNotEmpty() && confirm != password) {
-                    Spacer(Modifier.height(6.dp))
-                    Text(
-                        "Passwords don't match",
-                        color = Color(0xFFE57373), fontSize = 12.sp
-                    )
-                }
-            }
-            toggleLabel?.let { label ->
-                Spacer(Modifier.height(12.dp))
-                Row(
-                    verticalAlignment = Alignment.CenterVertically,
-                    modifier = Modifier.clickableNoRipple { toggled = !toggled }
-                ) {
-                    Box(
-                        Modifier
-                            .size(18.dp)
-                            .background(
-                                if (toggled) Color.White else Color.White.copy(alpha = 0.08f),
-                                RoundedCornerShape(5.dp)
-                            )
-                            .border(1.dp, Color.White.copy(alpha = 0.15f), RoundedCornerShape(5.dp)),
-                        contentAlignment = Alignment.Center
-                    ) {
-                        if (toggled) Icon(
-                            Icons.Filled.Check, contentDescription = null,
-                            tint = Color.Black, modifier = Modifier.size(13.dp)
-                        )
-                    }
-                    Spacer(Modifier.width(8.dp))
-                    Text(label, color = Color.White.copy(alpha = 0.60f), fontSize = 13.sp)
-                }
-            }
-            Spacer(Modifier.height(20.dp))
-            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                Box(
-                    Modifier.weight(1f)
-                        .background(Color.White.copy(alpha = 0.05f), RoundedCornerShape(12.dp))
-                        .border(1.dp, Color.White.copy(alpha = 0.08f), RoundedCornerShape(12.dp))
-                        .clickableNoRipple(onDismiss)
-                        .padding(vertical = 10.dp),
-                    contentAlignment = Alignment.Center
-                ) { Text("Cancel", color = Color.White.copy(alpha = 0.50f), fontSize = 14.sp, fontWeight = FontWeight.Medium) }
-                Box(
-                    Modifier.weight(1f)
-                        .background(
-                            if (valid) Color.White else Color.White.copy(alpha = 0.10f),
-                            RoundedCornerShape(12.dp)
-                        )
-                        .clickableNoRipple { if (valid) onSubmit(password, toggled) }
-                        .padding(vertical = 10.dp),
-                    contentAlignment = Alignment.Center
-                ) {
-                    Text(
-                        confirmLabel,
-                        color = if (valid) Color.Black else Color.White.copy(alpha = 0.30f),
-                        fontSize = 14.sp, fontWeight = FontWeight.Medium
-                    )
-                }
+                Text("Passwords do not match", color = PomboColors.Danger, fontSize = 12.sp)
             }
         }
+
+        toggleLabel?.let { label ->
+            Spacer(Modifier.height(14.dp))
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                modifier = Modifier.clickableNoRipple { toggled = !toggled }
+            ) {
+                Box(
+                    Modifier
+                        .size(18.dp)
+                        .background(
+                            if (toggled) PomboColors.Accent else Color.White.copy(alpha = 0.08f),
+                            RoundedCornerShape(5.dp)
+                        )
+                        .border(
+                            1.dp,
+                            if (toggled) PomboColors.Accent else Color.White.copy(alpha = 0.15f),
+                            RoundedCornerShape(5.dp)
+                        ),
+                    contentAlignment = Alignment.Center
+                ) {
+                    if (toggled) Icon(
+                        Icons.Filled.Check, contentDescription = null,
+                        tint = Color.White, modifier = Modifier.size(13.dp)
+                    )
+                }
+                Spacer(Modifier.width(8.dp))
+                Text(label, color = Color.White.copy(alpha = 0.60f), fontSize = 13.sp)
+            }
+        }
+
+        Spacer(Modifier.height(20.dp))
+        PomboPrimaryButton(confirmLabel, enabled = valid) { onSubmit(password, toggled) }
     }
 }
 

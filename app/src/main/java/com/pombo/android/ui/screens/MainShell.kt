@@ -34,6 +34,7 @@ import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.ui.draw.alpha
+import androidx.compose.material.icons.outlined.AddCircleOutline
 import androidx.compose.material.icons.outlined.ChatBubbleOutline
 import androidx.compose.material.icons.outlined.Home
 import androidx.compose.runtime.mutableFloatStateOf
@@ -518,6 +519,26 @@ internal fun PomboHeader(status: NetStatus, trailing: @Composable (() -> Unit)? 
     }
 }
 
+/** A guest's header action, sized like the icon buttons it stands in for. */
+@Composable
+internal fun CreateAccountButton(onClick: () -> Unit) {
+    Row(
+        Modifier
+            .height(32.dp)
+            .background(PomboColors.Accent, RoundedCornerShape(12.dp))
+            .clickableNoRipple(onClick)
+            .padding(horizontal = 14.dp),
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        Icon(
+            Icons.Outlined.Person, contentDescription = null,
+            tint = Color.White, modifier = Modifier.size(14.dp)
+        )
+        Spacer(Modifier.width(6.dp))
+        Text("Create Account", color = Color.White, fontSize = 13.sp, fontWeight = FontWeight.Medium)
+    }
+}
+
 /**
  * Reached from a plain "About" button on Profile (2026-08-21), not an inline
  * text block — the disclaimer is a legal notice, copied verbatim from the
@@ -525,48 +546,19 @@ internal fun PomboHeader(status: NetStatus, trailing: @Composable (() -> Unit)? 
  */
 @Composable
 private fun AboutDialog(onDismiss: () -> Unit) {
-    androidx.compose.material3.AlertDialog(
-        onDismissRequest = onDismiss,
-        // Same frame as AddContactDialog: a 1px hairline border and matching
-        // corner radius — the bare M3 surface is true black on true black and
-        // reads as text floating with no box around it at all.
-        modifier = Modifier.border(1.dp, PomboColors.Border, RoundedCornerShape(16.dp)),
-        shape = RoundedCornerShape(16.dp),
-        containerColor = PomboColors.Surface,
-        titleContentColor = PomboColors.Text,
-        textContentColor = PomboColors.Text,
-        title = {
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                Icon(
-                    Icons.Outlined.Info, contentDescription = null,
-                    tint = PomboColors.Text, modifier = Modifier.size(16.dp)
-                )
-                Spacer(Modifier.width(8.dp))
-                Text("Disclaimer", fontSize = 15.sp, fontWeight = FontWeight.Medium)
-            }
-        },
-        text = {
-            Column(Modifier.padding(top = 4.dp)) {
-                Text(
-                    "Pombo provides access to decentralized communication protocols. " +
-                        "You assume full legal responsibility for your actions within your " +
-                        "jurisdiction. We disclaim all liability and reserve the right to " +
-                        "restrict access to specific channels via this interface.",
-                    color = PomboColors.Text, fontSize = 14.sp, lineHeight = 22.sp,
-                    textAlign = androidx.compose.ui.text.style.TextAlign.Justify
-                )
-                Spacer(Modifier.height(16.dp))
-                Text("pombo.cc", color = PomboColors.TextDim, fontSize = 13.sp)
-            }
-        },
-        // Web parity + AddContactDialog's own "Cancel": a neutral dismiss, not
-        // an accent call-to-action — About has nothing to confirm.
-        confirmButton = {
-            androidx.compose.material3.TextButton(onClick = onDismiss) {
-                Text("Close", color = PomboColors.TextDim)
-            }
-        }
-    )
+    PomboDialogFrame("Disclaimer", onDismiss) {
+        // Legal notice, verbatim from web #settings-panel-about — never paraphrase.
+        Text(
+            "Pombo provides access to decentralized communication protocols. " +
+                "You assume full legal responsibility for your actions within your " +
+                "jurisdiction. We disclaim all liability and reserve the right to " +
+                "restrict access to specific channels via this interface.",
+            color = PomboColors.Text, fontSize = 14.sp, lineHeight = 22.sp,
+            textAlign = androidx.compose.ui.text.style.TextAlign.Justify
+        )
+        Spacer(Modifier.height(16.dp))
+        Text("pombo.cc", color = PomboColors.TextDim, fontSize = 13.sp)
+    }
 }
 
 /**
@@ -773,14 +765,14 @@ private fun ProfileTab(vm: AppViewModel, onAddAccount: () -> Unit) {
             Modifier.fillMaxWidth().background(PomboColors.Surface, RoundedCornerShape(12.dp))
                 .border(1.dp, PomboColors.Border, RoundedCornerShape(12.dp))
         ) {
-            ProfileAction("Add account", onClick = onAddAccount)
+            ProfileAction("Add account", Icons.Outlined.AddCircleOutline, onClick = onAddAccount)
             androidx.compose.material3.HorizontalDivider(color = PomboColors.Border)
             // Leaves the account behind rather than erasing it: `disconnect()`
             // calls WalletStore.clear(), which drops the current account's key
             // for good. Destroying an account belongs in Settings → Security,
             // behind its device-auth gate and typed confirmation — not one tap
             // away in the profile menu.
-            ProfileAction("Browse as guest") { vm.browseAsGuest() }
+            ProfileAction("Browse as guest", com.pombo.android.ui.PomboIcons.Ghost) { vm.browseAsGuest() }
         }
         // Moved out of Settings (2026-08-21 user call): About is app-level, not
         // account-scoped, and this screen is what "the avatar" means on Android —
@@ -794,24 +786,39 @@ private fun ProfileTab(vm: AppViewModel, onAddAccount: () -> Unit) {
             Modifier.fillMaxWidth().background(PomboColors.Surface, RoundedCornerShape(12.dp))
                 .border(1.dp, PomboColors.Border, RoundedCornerShape(12.dp))
         ) {
-            ProfileAction("About") { showAbout = true }
+            ProfileAction("About", Icons.Outlined.Info) { showAbout = true }
         }
         if (showAbout) AboutDialog(onDismiss = { showAbout = false })
     }
 }
 
 @Composable
-private fun ProfileAction(label: String, danger: Boolean = false, enabled: Boolean = true, onClick: () -> Unit) {
-    Text(
-        label + if (!enabled) "  (coming soon)" else "",
-        color = when {
-            danger -> PomboColors.Danger
-            !enabled -> PomboColors.TextDim
-            else -> PomboColors.Text
-        },
-        fontSize = 14.sp,
-        modifier = Modifier.fillMaxWidth().clickableNoRipple { if (enabled) onClick() }.padding(16.dp)
-    )
+private fun ProfileAction(
+    label: String,
+    icon: androidx.compose.ui.graphics.vector.ImageVector? = null,
+    danger: Boolean = false,
+    enabled: Boolean = true,
+    onClick: () -> Unit
+) {
+    val tint = when {
+        danger -> PomboColors.Danger
+        !enabled -> PomboColors.TextDim
+        else -> PomboColors.Text
+    }
+    Row(
+        Modifier.fillMaxWidth().clickableNoRipple { if (enabled) onClick() }.padding(16.dp),
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        icon?.let {
+            Icon(it, contentDescription = null, tint = tint.copy(alpha = 0.60f), modifier = Modifier.size(18.dp))
+            Spacer(Modifier.width(12.dp))
+        }
+        Text(
+            label + if (!enabled) "  (coming soon)" else "",
+            color = tint,
+            fontSize = 14.sp
+        )
+    }
 }
 
 /**

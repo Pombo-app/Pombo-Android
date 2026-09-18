@@ -101,20 +101,9 @@ internal fun ExploreTab(vm: AppViewModel, onCreate: () -> Unit, onConnect: () ->
         )
     }
     Column(Modifier.fillMaxSize()) {
-        // Guests get the same orange "Create Account" call to action as in
-        // Chats, in the same header slot; accounts get "create channel".
         PomboHeader(status) {
             if (isGuest) {
-                Row(
-                    Modifier.background(PomboColors.Accent, RoundedCornerShape(12.dp))
-                        .clickableNoRipple(onConnect)
-                        .padding(horizontal = 12.dp, vertical = 6.dp),
-                    verticalAlignment = Alignment.CenterVertically
-                ) {
-                    Icon(Icons.Outlined.Person, contentDescription = null, tint = Color.White, modifier = Modifier.size(14.dp))
-                    Spacer(Modifier.width(5.dp))
-                    Text("Create Account", color = Color.White, fontSize = 13.sp, fontWeight = FontWeight.Medium)
-                }
+                CreateAccountButton(onConnect)
             } else {
                 // Web #header-create-channel-btn: `px-4 py-1.5 rounded-xl
                 // bg-[#F6851B]/15 border-[#F6851B]/30` with a WHITE plus — a
