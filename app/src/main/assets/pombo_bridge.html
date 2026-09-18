@@ -133,7 +133,16 @@ function u8ToB64(u8) {
 //  - storedAt, from a paired `format=metadata` read of the same page, kept by
 //    (stream, partition, timestamp, sequenceNumber) and stamped onto the
 //    resend entries' meta for Kotlin to judge kid freshness by;
-//  - 503 (the node cannot consult the chain) retried with backoff.
+//  - 503 (the node cannot consult the chain) retried with backoff, when no
+//    other node can be asked instead;
+//  - failover between node URLs: the SDK picks one URL at random among the
+//    stream's providers and gives up when it fails; a resend that gets no
+//    answer (network, no headers in time), a 5xx, or a page without the
+//    storedAt the node owes is repeated, re-signed, against the next healthy
+//    URL of the stream's storage (resolved here the way Kotlin's
+//    StorageEndpoints does, with a health view of its own), never on a 4xx;
+//    an ejected URL is skipped up front and probed out of band until it
+//    recovers.
 // Whether a stream is gated is Kotlin's knowledge (Native.isGatedStream).
 // Parity of the signed message with the web is locked by
 // docs/STORAGE-signed-read-vectors.json.
@@ -141,10 +150,20 @@ const storageFetch = (function () {
     const DATA_PATH = /^(.*)\/streams\/([^/]+)\/data\/partitions\/(\d+)\/(last|from|range)$/;
     const TTL_MS = 10 * 60 * 1000;
     const RETRY_503_MS = [1000, 3000, 7000];
+    // A node that has not started answering by then is left for the next;
+    // two attempts must fit the 45 s a page read is given by Kotlin. On a
+    // slow link (the emulator at startup) healthy nodes take over 12 s.
+    const HEADERS_TIMEOUT_MS = 20000;
+    const FAILURE_LIMIT = 3;          // StorageMediaConfig.NODE_FAILURE_LIMIT
+    const RECOVERY_PROBE_MS = 5 * 60 * 1000;
     const STORED_AT_MAX = 50000;
     const original = window.fetch.bind(window);
     const capabilities = new Map();   // base → { at, features: Set }
     const probes = new Map();         // base → in-flight promise
+    const rotations = new Map();      // streamId → { at, nodes: [{ urls }] }
+    const rotationFetches = new Map(); // streamId → in-flight resolution
+    const failures = new Map();       // base → consecutive failures
+    const recoveryProbes = new Map(); // base → epochMs of the last readmission probe
     const storedAt = new Map();       // stream|partition|ts|seq → storedAt
     const lastErrors = new Map();     // streamId|partition → { status, signed, at }
     const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
@@ -185,15 +204,16 @@ const storageFetch = (function () {
             'x-pombo-nonce': n, 'x-pombo-signature': sig
         };
     }
-    async function probeCapabilities(base) {
+    async function probeCapabilities(base, force) {
         const cached = capabilities.get(base);
-        if (cached && Date.now() - cached.at < TTL_MS) return cached.features;
+        if (!force && cached && Date.now() - cached.at < TTL_MS) return cached.features;
         if (probes.has(base)) return probes.get(base);
         const p = (async function () {
             const ctrl = new AbortController();
             const t = setTimeout(() => ctrl.abort(), 8000);
             try {
-                const resp = await original(base + '/capabilities', { signal: ctrl.signal });
+                // Never from the HTTP cache: a readmission probe must reach the node.
+                const resp = await original(base + '/capabilities', { signal: ctrl.signal, cache: 'no-store' });
                 if (resp.status === 404) return new Set();
                 if (!resp.ok) return undefined;
                 const body = await resp.json();
@@ -260,7 +280,140 @@ const storageFetch = (function () {
         console.warn('storedAt unavailable for ' + p.streamId.slice(-24) + ' P' + p.partition);
         return false;
     }
+    // ---- node health and rotation (the bridge's own view; Kotlin's
+    // StorageEndpoints keeps the one the native file reads use) ----
+    function norm(u) { return String(u || '').trim().replace(/\/+$/, ''); }
+    // Same filter as web isWebSafeStorageNodeUrl / Kotlin isWebSafeStorageNodeUrl.
+    function webSafe(value) {
+        try {
+            const u = new URL(String(value).trim());
+            const host = u.hostname.toLowerCase();
+            if (u.protocol !== 'https:' || !host || host === 'localhost' || host.endsWith('.localhost')) return false;
+            return !(/^\d{1,3}(\.\d{1,3}){3}$/.test(host) || host.indexOf(':') !== -1 || host.charAt(0) === '[');
+        } catch (e) {
+            return false;
+        }
+    }
+    function isRawRead(p) { return /(^|&)format=raw(&|$)/.test(p.canonicalQuery); }
+    function isEjected(base) { return (failures.get(norm(base)) || 0) >= FAILURE_LIMIT; }
+    function noteFailure(base) {
+        const u = norm(base);
+        const n = (failures.get(u) || 0) + 1;
+        failures.set(u, n);
+        if (n === FAILURE_LIMIT) console.warn('storage node ejected from rotation for this session: ' + u);
+    }
+    function noteSuccess(base) { failures.delete(norm(base)); }
+    // An ejected node is probed out of band, at most once per interval, and
+    // readmitted when it answers `/capabilities` again (a 404 is a live
+    // vanilla node). No user read pays for the probe.
+    function probeRecovery(base) {
+        const u = norm(base);
+        const last = recoveryProbes.get(u) || 0;
+        if (Date.now() - last < RECOVERY_PROBE_MS) return;
+        recoveryProbes.set(u, Date.now());
+        probeCapabilities(u, true).then((features) => {
+            if (features === undefined) return;
+            noteSuccess(u);
+            console.warn('storage node back in rotation: ' + u);
+        });
+    }
+    // Every healthy URL of the stream's providers, interleaved by index across
+    // providers like Kotlin's StorageEndpoints.rotation; cached per stream.
+    async function rotation(streamId) {
+        const cached = rotations.get(streamId);
+        let nodes;
+        if (cached && Date.now() - cached.at < TTL_MS) {
+            nodes = cached.nodes;
+        } else if (rotationFetches.has(streamId)) {
+            nodes = await rotationFetches.get(streamId);
+        } else {
+            const p = api.resolveStorageEndpoints({ streamId: streamId }).then((res) => {
+                const resolved = (res.nodes || [])
+                    .map((n) => ({ urls: (n.urls || []).filter(webSafe).map(norm) }))
+                    .filter((n) => n.urls.length > 0);
+                rotations.set(streamId, { at: Date.now(), nodes: resolved });
+                return resolved;
+            }).finally(() => rotationFetches.delete(streamId));
+            rotationFetches.set(streamId, p);
+            nodes = await p;
+        }
+        const out = [];
+        for (let i = 0; ; i++) {
+            let any = false;
+            nodes.forEach((node) => {
+                const u = node.urls[i];
+                if (u === undefined) return;
+                any = true;
+                if (!isEjected(u)) out.push(u);
+            });
+            if (!any) break;
+        }
+        return out;
+    }
+    // The same read addressed to another node URL.
+    function retarget(p, base) { return parse(base + p.url.slice(p.base.length)); }
+    function settle(outcome) {
+        if (outcome.error) throw outcome.error;
+        return outcome.response;
+    }
     async function read(p, init) {
+        // Only the SDK's own resends fail over (they always ask for raw
+        // frames); anything else keeps the single-node behaviour.
+        if (!isRawRead(p)) return settle(await readFrom(p, init, { hasAlternative: async () => false, headersTimeoutMs: 0 }));
+        const label = 'storage read ' + p.resendType + ' ' + p.streamId.slice(-24) + ' P' + p.partition;
+        const tried = new Set([norm(p.base)]);
+        let urls = null;
+        // Resolved once per read, and only once a node has failed: a read
+        // that succeeds first time costs nothing more.
+        const untried = async function () {
+            if (!urls) {
+                try {
+                    urls = await rotation(p.streamId);
+                } catch (e) {
+                    console.warn(label + ': no rotation to fail over to (' + (e && e.message) + ')');
+                    urls = [];
+                }
+            }
+            return urls.filter((u) => !tried.has(u));
+        };
+        const options = {
+            hasAlternative: async function () { return (await untried()).length > 0; },
+            headersTimeoutMs: HEADERS_TIMEOUT_MS
+        };
+        let target = p;
+        // The SDK picked this node at random among the stream's providers.
+        // One already out of the rotation is skipped without paying for the
+        // attempt, and probed out of band so it comes back when it recovers.
+        if (isEjected(p.base)) {
+            const next = (await untried())[0];
+            const retargeted = next ? retarget(p, next) : null;
+            if (retargeted) {
+                probeRecovery(p.base);
+                tried.add(next);
+                target = retargeted;
+                console.warn(label + ': ' + p.base + ' is out of rotation, reading from ' + next);
+            }
+        }
+        for (;;) {
+            const outcome = await readFrom(target, init, options);
+            // A caller that gave up is not a node that failed.
+            if (!outcome.failed || (init.signal && init.signal.aborted)) return settle(outcome);
+            noteFailure(target.base);
+            const next = (await untried())[0];
+            const retargeted = next ? retarget(target, next) : null;
+            if (!retargeted) return settle(outcome);
+            outcome.abandon();
+            tried.add(next);
+            console.warn(label + ': ' + outcome.reason + ' at ' + target.base + ', trying ' + next);
+            target = retargeted;
+        }
+    }
+    // One node's answer to a read: the response on success and on a 4xx
+    // (the node answered about the request); a failure, which the caller may
+    // take to another node, when the node itself did not deliver (no answer,
+    // a 5xx no retry cured, a page without the storedAt it owes).
+    async function readFrom(p, init, opts) {
+        const label = 'storage read ' + p.resendType + ' ' + p.streamId.slice(-24) + ' P' + p.partition;
         const features = (await probeCapabilities(p.base)) || new Set();
         const gated = isGated(p.streamId);
         const hasIdentity = !!BRIDGE_ADDRESS;
@@ -272,7 +425,22 @@ const storageFetch = (function () {
         // storedAt is read wherever a page gets judged: every stream of a
         // node that supplies it.
         let wantStoredAt = features.has('storedAt');
-        let attempt = 0;
+        // One controller per node: it ends this node's raw and storedAt reads
+        // together when the read moves on, and it follows the caller's own
+        // signal so a channel switch still ends a body being streamed.
+        const outer = init.signal;
+        const attempt = new AbortController();
+        const onOuterAbort = () => attempt.abort();
+        if (outer && outer.aborted) attempt.abort();
+        else if (outer && outer.addEventListener) outer.addEventListener('abort', onOuterAbort, { once: true });
+        const attemptInit = Object.assign({}, init, { signal: attempt.signal });
+        const abandon = function () {
+            if (outer && outer.removeEventListener) outer.removeEventListener('abort', onOuterAbort);
+            attempt.abort();
+        };
+        const failure = (reason, extra) => Object.assign({ failed: true, reason: reason, error: null, response: null, abandon: abandon }, extra || {});
+        const errorKey = p.streamId + '|' + p.partition;
+        let retry = 0;
         let retried401 = false;
         for (;;) {
             const headers = new Headers(init.headers || undefined);
@@ -280,8 +448,23 @@ const storageFetch = (function () {
                 const h = signedHeaders(p);
                 if (h) Object.keys(h).forEach((k) => headers.set(k, h[k]));
             }
-            const metadata = wantStoredAt ? collectStoredAt(p, sign, init) : null;
-            const resp = await original(p.url, Object.assign({}, init, { headers }));
+            const metadata = wantStoredAt ? collectStoredAt(p, sign, attemptInit) : null;
+            let resp;
+            let timedOut = false;
+            const timer = opts.headersTimeoutMs > 0
+                ? setTimeout(() => { timedOut = true; attempt.abort(); }, opts.headersTimeoutMs)
+                : null;
+            try {
+                resp = await original(p.url, Object.assign({}, attemptInit, { headers }));
+            } catch (e) {
+                if (timer) clearTimeout(timer);
+                if (outer && outer.aborted) return failure('abandoned by the caller', { error: e });
+                const reason = timedOut ? 'no answer in ' + opts.headersTimeoutMs + ' ms' : 'network: ' + (e && e.message);
+                console.warn(label + ': ' + reason + ' at ' + p.base);
+                abandon();
+                return failure(reason, { error: e });
+            }
+            if (timer) clearTimeout(timer);
             // A 401 is the node asking for a signature, whatever the probe
             // said (it may have timed out on a slow node).
             if (resp.status === 401 && !sign && hasIdentity && !retried401) {
@@ -293,31 +476,37 @@ const storageFetch = (function () {
                 if (metadata) await metadata;
                 continue;
             }
-            if (resp.status === 503 && attempt < RETRY_503_MS.length) {
-                await sleep(RETRY_503_MS[attempt++]);
-                if (metadata) await metadata;
-                continue;
+            if (resp.status === 503) {
+                // The chain is unreachable from this node, not necessarily
+                // from another: the next URL is asked before this one is
+                // retried, and the backoff here only runs when there is none.
+                if (await opts.hasAlternative()) return failure('HTTP 503', { response: resp });
+                if (retry < RETRY_503_MS.length) {
+                    await sleep(RETRY_503_MS[retry++]);
+                    if (metadata) await metadata;
+                    continue;
+                }
             }
             const collected = metadata ? await metadata : true;
             if (resp.ok && !collected) {
                 // History without storedAt cannot tell a forged row from a
                 // genuine one, and a node that announces storedAt owes it:
                 // the page is refused the way a node outage is.
-                lastErrors.set(p.streamId + '|' + p.partition, { status: 503, signed: sign, at: Date.now(), reason: 'storedAt' });
-                console.warn('storage read ' + p.resendType + ' ' + p.streamId.slice(-24) + ' P' + p.partition + ': no storedAt, page refused');
-                return new Response('', { status: 503, statusText: 'storedAt unavailable' });
+                lastErrors.set(errorKey, { status: 503, signed: sign, at: Date.now(), reason: 'storedAt', url: p.base });
+                console.warn(label + ': no storedAt from ' + p.base + ', page refused');
+                abandon();
+                return failure('no storedAt', { response: new Response('', { status: 503, statusText: 'storedAt unavailable' }) });
             }
             if (resp.ok) {
-                lastErrors.delete(p.streamId + '|' + p.partition);
+                lastErrors.delete(errorKey);
+                noteSuccess(p.base);
                 // warn, not info: a release WebView forwards only warnings.
-                console.warn('storage read ' + p.resendType + ' ' + p.streamId.slice(-24) + ' P' + p.partition +
-                    ': ok' + (sign ? ' signed' : ' unsigned') + (metadata ? ' +storedAt' : ' -storedAt'));
-            } else {
-                lastErrors.set(p.streamId + '|' + p.partition, { status: resp.status, signed: sign, at: Date.now() });
-                console.warn('storage read ' + p.resendType + ' ' + p.streamId.slice(-24) + ' P' + p.partition +
-                    ': HTTP ' + resp.status + (sign ? ' (signed)' : ''));
+                console.warn(label + ': ok' + (sign ? ' signed' : ' unsigned') + (metadata ? ' +storedAt' : ' -storedAt') + ' from ' + p.base);
+                return { response: resp };
             }
-            return resp;
+            lastErrors.set(errorKey, { status: resp.status, signed: sign, at: Date.now(), url: p.base });
+            console.warn(label + ': HTTP ' + resp.status + (sign ? ' (signed)' : '') + ' at ' + p.base);
+            return resp.status >= 500 ? failure('HTTP ' + resp.status, { response: resp }) : { response: resp };
         }
     }
     window.fetch = function (input, init) {
