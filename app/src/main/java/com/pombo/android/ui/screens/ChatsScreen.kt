@@ -134,17 +134,7 @@ internal fun ChatsTab(vm: AppViewModel, onCreate: () -> Unit, onJoin: () -> Unit
     Column(Modifier.fillMaxSize()) {
         PomboHeader(status) {
             if (isGuest) {
-                // Web: guest shows the orange "Create Account" button instead of the actions
-                Row(
-                    Modifier.background(PomboColors.Accent, RoundedCornerShape(12.dp))
-                        .clickableNoRipple(onConnect)
-                        .padding(horizontal = 12.dp, vertical = 6.dp),
-                    verticalAlignment = Alignment.CenterVertically
-                ) {
-                    Icon(Icons.Outlined.Person, contentDescription = null, tint = Color.White, modifier = Modifier.size(14.dp))
-                    Spacer(Modifier.width(5.dp))
-                    Text("Create Account", color = Color.White, fontSize = 13.sp, fontWeight = FontWeight.Medium)
-                }
+                CreateAccountButton(onConnect)
             } else {
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     // Join by stream ID. Creating a channel lives in Explore.
