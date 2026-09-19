@@ -69,7 +69,7 @@ class PushVerifierTest {
 
     @Test
     fun `public and password reads stay anonymous`() = runBlocking {
-        for (type in listOf("public", "password", "native")) {
+        for (type in listOf("public", "password")) {
             val rec = Recorder(listOf(PushVerifier.Response(200, row)))
             verifier(rec).verify(entry(type))
             assertTrue("$type must not be signed", rec.headers.single().isEmpty())
@@ -151,7 +151,6 @@ class PushVerifierTest {
         val text = org.json.JSONObject("""{"type":"text","text":"secret"}""")
         assertEquals("New message", PushVerifier.preview("gated", null))
         assertEquals("New message", PushVerifier.preview("gated", text))
-        assertEquals("New message", PushVerifier.preview("private", text))
     }
 
     @Test

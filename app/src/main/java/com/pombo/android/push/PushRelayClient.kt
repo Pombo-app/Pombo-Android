@@ -158,14 +158,16 @@ class PushRelayClient(
     }
 
     /**
-     * Per-channel opt-in. `native` selects the tag prefix: ONLY native
-     * channels use 'native:' — public, password and DM inboxes all use
-     * 'channel:' (web ChannelSettingsUI: isNative = type === 'native').
+     * Per-channel opt-in. `native` selects the tag prefix, which is a
+     * historical name for the one gated channels use: the tag is DERIVED from
+     * that prefix and is already baked into every registration the relay
+     * holds, so it cannot be renamed without those devices going silent.
+     * Public, password and DM inboxes use the 'channel:' prefix.
      */
     suspend fun subscribeChannel(streamId: String, type: String, name: String): Boolean {
         if (!enabled) return false
         rememberEndpoints(streamId)
-        val native = type == "native" || type == "gated"
+        val native = type == "gated"
         val tag = bridge.call(
             "pushTag",
             JSONObject().put("streamId", streamId).put("native", native)

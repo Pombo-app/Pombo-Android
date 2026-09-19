@@ -18,7 +18,7 @@ data class Channel(
      *  participate without publishing on -1 (read-only included). */
     val interactionsStreamId: String = "",
     val name: String,
-    val type: String,                 // 'public' | 'password' | 'native' | 'gated'
+    val type: String,                 // 'public' | 'password' | 'gated' | 'dm'
     /**
      * Gated channels (N-C): the PomboGate clone address (lowercase). The chain
      * is the system of record — this is a warm cache of the -1 metadata's `g`

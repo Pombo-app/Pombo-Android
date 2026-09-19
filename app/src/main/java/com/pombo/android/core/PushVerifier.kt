@@ -150,8 +150,8 @@ class PushVerifier(
          * and shows its text, like the app does when it is running.
          */
         fun preview(type: String, content: JSONObject?): String {
-            if (type == "private" || type == "gated") return "New message"
-            val direct = type == "dm" || type == "native" || type == "dm-inbox"
+            if (type == "gated") return "New message"
+            val direct = type == "dm" || type == "dm-inbox"
             // A sealed envelope that never opened: not ours, or no key yet.
             val sealed = content != null && content.optInt("v") == 2 && content.has("epk")
             if (content == null || sealed) return if (direct) "You have a new message" else "New message"
