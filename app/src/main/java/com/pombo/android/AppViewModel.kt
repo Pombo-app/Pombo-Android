@@ -382,9 +382,8 @@ class AppViewModel(app: Application) : AndroidViewModel(app), PomboBridge.Listen
      */
     private fun autoEnableChannelPush(channel: Channel) {
         viewModelScope.launch {
-            // Where its history lives is recorded even with push off: the
-            // answer is wanted the moment the toggle is flipped, and asking
-            // the chain then would race the first wake.
+            // Recorded even with push off: the answer has to be there before
+            // the toggle is flipped, not fetched while a wake is waiting.
             push.rememberEndpoints(channel.messageStreamId)
             if (!push.enabled) return@launch
             runCatching { push.subscribeChannel(channel.messageStreamId, channel.type, channel.name) }
@@ -1669,11 +1668,9 @@ class AppViewModel(app: Application) : AndroidViewModel(app), PomboBridge.Listen
         syncKeyResponderSchedule()
         startKeyResponderLoop()
         manager.onIncomingMessage = { channel, sender, preview, timestamp ->
-            // A live message is one the push path must not announce again: both
-            // write to the same notification tag, so without this the wake that
-            // follows replaces the message just shown with a generic line. The
-            // watermark only moves forward, so a message the app never saw
-            // still notifies.
+            // Both paths post under the same notification tag, so the watermark
+            // is what keeps them from overwriting each other. It only moves
+            // forward, so a message this path never saw still notifies.
             val watched = if (channel.type == "dm") myInboxStreamId() else channel.messageStreamId
             watched?.let { pushRegistry.updateLastSeen(it, timestamp) }
             // Nothing to notify about if the user is already looking at it —

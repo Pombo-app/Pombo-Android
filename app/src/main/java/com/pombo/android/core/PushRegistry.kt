@@ -52,11 +52,8 @@ class PushRegistry(context: Context) {
 
     /**
      * Tag lookup is the first filter: an unknown tag is noise, not our channel.
-     *
-     * Every match is returned, not the first: with 256 tags two of this user's
-     * own channels collide often enough to matter (about one chance in six at
-     * ten channels), and answering with one of them left the other permanently
-     * unnotified.
+     * EVERY match is returned: one byte of tag collides across this user's own
+     * channels by design, so a single answer is never the whole answer.
      */
     fun entriesByTag(tag: String): List<Entry> = all().filter { it.tag.equals(tag, ignoreCase = true) }
 

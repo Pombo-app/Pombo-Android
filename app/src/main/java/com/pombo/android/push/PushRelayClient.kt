@@ -145,7 +145,7 @@ class PushRelayClient(
      * verified against its own providers instead of an assumed address.
      * Called as early as the stream is known (inbox creation, channel
      * create/join), not only at opt-in: the answer is wanted before the
-     * user ever turns notifications on. Silent on failure — the periodic
+     * user ever turns notifications on. Silent on failure: the periodic
      * refresh asks again.
      */
     suspend fun rememberEndpoints(streamId: String) {

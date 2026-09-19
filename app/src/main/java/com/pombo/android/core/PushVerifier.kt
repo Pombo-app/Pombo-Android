@@ -90,11 +90,7 @@ class PushVerifier(
     companion object {
         private const val TAG = "PushVerifier"
 
-        /**
-         * Used only until a registration has its endpoints resolved on chain:
-         * an install that is upgraded mid-flight keeps notifying while the
-         * next registration refresh fills them in.
-         */
+        /** Fallback for a registration whose endpoints are not resolved yet. */
         private val LEGACY_ENDPOINTS = listOf(
             "https://blob-storage-streamr.online",
             "https://vps2.blob-storage-streamr.online"
@@ -145,9 +141,9 @@ class PushVerifier(
 
         /**
          * Notification body. A channel's own encryption is not undone here, so
-         * a closed channel says only that something arrived; a direct message
-         * arrives already opened (the sender is read from the same envelope)
-         * and shows its text, like the app does when it is running.
+         * a gated channel can only say that something arrived; a direct message
+         * reaches this already opened, since the sender comes from the same
+         * envelope.
          */
         fun preview(type: String, content: JSONObject?): String {
             if (type == "gated") return "New message"
