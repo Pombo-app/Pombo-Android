@@ -306,7 +306,10 @@ class AppViewModel(app: Application) : AndroidViewModel(app), PomboBridge.Listen
     // ==================== push notifications ====================
 
     private val pushRegistry = com.pombo.android.core.PushRegistry(app)
-    val push = com.pombo.android.push.PushRelayClient(app, bridge, pushRegistry)
+    val push = com.pombo.android.push.PushRelayClient(
+        app, bridge, pushRegistry,
+        resolveEndpoints = { streamId -> manager.storageEndpoints.rotation(streamId) }
+    )
 
     private val _pushEnabled = MutableStateFlow(push.enabled)
     val pushEnabled: StateFlow<Boolean> = _pushEnabled.asStateFlow()
@@ -378,8 +381,12 @@ class AppViewModel(app: Application) : AndroidViewModel(app), PomboBridge.Listen
      * next global enable.
      */
     private fun autoEnableChannelPush(channel: Channel) {
-        if (!push.enabled) return
         viewModelScope.launch {
+            // Where its history lives is recorded even with push off: the
+            // answer is wanted the moment the toggle is flipped, and asking
+            // the chain then would race the first wake.
+            push.rememberEndpoints(channel.messageStreamId)
+            if (!push.enabled) return@launch
             runCatching { push.subscribeChannel(channel.messageStreamId, channel.type, channel.name) }
             _pushRev.value++
         }
@@ -3190,6 +3197,7 @@ class AppViewModel(app: Application) : AndroidViewModel(app), PomboBridge.Listen
             }
             settingsStore.dmInboxKnown = true
             _hasDmInbox.value = true
+            myInboxStreamId()?.let { push.rememberEndpoints(it) }
             dismissToast(id)
             toast("DM inbox created!", com.pombo.android.ui.ToastKind.SUCCESS)
         } catch (e: Exception) {
