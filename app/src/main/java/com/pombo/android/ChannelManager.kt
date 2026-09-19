@@ -570,7 +570,7 @@ class ChannelManager(
      * transport. The bridge does the two SDK calls; the web-safe URL filter and
      * rotation/health live natively in [com.pombo.android.core.StorageEndpoints].
      */
-    private val storageEndpoints = com.pombo.android.core.StorageEndpoints(
+    internal val storageEndpoints = com.pombo.android.core.StorageEndpoints(
         fetcher = { streamId ->
             val res = bridge.call("resolveStorageEndpoints", JSONObject().put("streamId", streamId))
             val arr = res.optJSONArray("nodes") ?: org.json.JSONArray()
@@ -2411,6 +2411,9 @@ class ChannelManager(
     // ==================== moderation (ADMIN_STATE) ====================
 
     fun amOwner(channel: Channel): Boolean = admin.amOwner(channel)
+
+    /** The ADMIN_STATE publish of this channel storage has not confirmed yet, or null. */
+    internal fun pendingAdminConfirmation(channel: Channel): JSONObject? = admin.pendingConfirmationOf(channel)
 
     /**
      * Whether the current account may moderate the open channel: an on-chain
@@ -4563,6 +4566,9 @@ class ChannelManager(
                 // no live subscription, so after the on-open load this poller
                 // is what catches anything the admin_invalidate signal missed.
                 startAdminPoller(channel, generation)
+                // An ADMIN_STATE published here that storage never confirmed
+                // is waited for again, and republished, now that the owner is back.
+                admin.resumeConfirmation(channel, generation)
                 // A member's keys and messages need a raw sweep the owner
                 // does not — see [startMemberCatchUp].
                 startMemberCatchUp(channel, generation)
@@ -4940,6 +4946,12 @@ class ChannelManager(
 
     /** Shown when the gate quorum cannot resolve access (RPCs disagree). */
     @Volatile var onGateWarning: ((String) -> Unit)? = null
+
+    /** Shown when a moderation publish never reached storage, or was replaced from another device. */
+    @Volatile var onModerationWarning: ((String) -> Unit)? = null
+
+    /** The wait between read-backs of a published ADMIN_STATE; tests make it instant. */
+    internal var adminConfirmSleep: suspend (Long) -> Unit = { kotlinx.coroutines.delay(it) }
 
     /** Stamps a sync slice's mutation timestamp (ViewModel sliceTouched) —
      *  a slice never stamped always loses the latest-wins merge. */
@@ -5702,18 +5714,18 @@ class ChannelManager(
      *   password -> AES with the channel password
      *   public   -> plain
      */
+    /** @return the publish timestamp, 0 when the DM had no peer to publish to */
     internal suspend fun publishForChannel(
         channel: Channel,
         streamId: String,
         partition: Int,
         payload: JSONObject
-    ) {
+    ): Long {
         if (channel.type == "dm") {
-            val peer = channel.peerAddress ?: return
-            publishContent(streamId, partition, payload, password = null, dmPeer = peer)
-            return
+            val peer = channel.peerAddress ?: return 0L
+            return publishContent(streamId, partition, payload, password = null, dmPeer = peer)
         }
-        publishChannel(channel, streamId, partition, payload, channel.password)
+        return publishChannel(channel, streamId, partition, payload, channel.password)
     }
 
     /**

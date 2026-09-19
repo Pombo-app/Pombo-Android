@@ -28,4 +28,11 @@ class AdminFloorStore(context: Context) {
         map.put(key, value)
         try { file.writeText(map.toString()) } catch (e: Exception) { /* best effort */ }
     }
+
+    @Synchronized
+    fun remove(key: String) {
+        if (!map.has(key)) return
+        map.remove(key)
+        try { file.writeText(map.toString()) } catch (e: Exception) { /* best effort */ }
+    }
 }

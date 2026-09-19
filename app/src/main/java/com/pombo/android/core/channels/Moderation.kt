@@ -69,6 +69,9 @@ internal class Moderation(private val manager: ChannelManager) {
 
     private companion object {
         private const val TAG = "PomboChannels"
+        /** Delays before each read-back of a published ADMIN_STATE (web adminConfirmDelaysMs). */
+        private val CONFIRM_DELAYS_MS = longArrayOf(5_000L, 10_000L, 20_000L, 40_000L)
+        private const val CONFIRM_REPUBLISH_LIMIT = 3
     }
 
     internal val _pins = MutableStateFlow<List<Pin>>(emptyList())
@@ -792,56 +795,233 @@ internal class Moderation(private val manager: ChannelManager) {
     internal suspend fun loadAdminState(channel: Channel, generation: Int) {
         seedFloor(channel)
         try {
-            // Password channels seal ADMIN_STATE too, and applyAdminMessage's
-            // fallback opens it with PomboCrypto — Bouncy Castle PBKDF2, ~1s per
-            // message on a phone, up to 5 of them, all inside the render gate.
-            // Handing the password to the bridge moves that to BoringSSL and
-            // overlaps it with the resend.
-            val args = JSONObject()
-                .put("streamId", channel.adminStreamId)
-                .put("partition", StreamConstants.ADMIN_MODERATION)
-                .put("last", 5)
-            channel.password?.let { args.put("password", it) }
-            // Raw envelopes for gated, same as message history: authority on
-            // -3 is the recovered envelope signer, never the present gate.
-            if (channel.type == "gated") args.put("recoverSigner", true).put("raw", true)
-            val t0 = System.currentTimeMillis()
-            val res = bridge.call("resend", args, 30_000)
-            android.util.Log.d("PomboPerf",
-                "adminState ${channel.name}: call=${System.currentTimeMillis() - t0}ms " +
-                    "n=${res.optJSONArray("messages")?.length() ?: -1}")
+            val entries = readAdminEntries(channel) ?: return
             if (!stillCurrent(generation)) return
-            val arr = res.optJSONArray("messages") ?: return
-            for (i in 0 until arr.length()) {
-                val entry = arr.optJSONObject(i) ?: continue
-                var content = entry.opt("content")
-                val meta = entry.optJSONObject("meta") ?: JSONObject()
-                // Gated: -3 authority moved to ingest — the clone holds the
-                // publish grant for everyone, so only the envelope SIGNER
-                // proves the admin wrote this (gatedAuthor drops the rest).
-                if (channel.type == "gated" &&
-                    gatedAuthor(channel, channel.adminStreamId, meta) == null) continue
-                // ADMIN_STATE arrives as an epoch envelope. History context so
-                // entries sealed under an older epoch open in that epoch's
-                // validity window instead of skipping the freshness rule.
-                if (content is JSONObject &&
-                    com.pombo.android.core.EpochKeyCrypto.isEpochEnvelope(content) &&
-                    isEpochChannel(channel)
-                ) {
-                    val keysId = channel.keysStreamId.ifEmpty {
-                        StreamConstants.deriveKeysId(channel.messageStreamId)
-                    }
-                    content = epochKeys.tryDecrypt(
-                        channel.messageStreamId, keysId, content,
-                        gated = true, live = false, timestamp = com.pombo.android.core.StoredAt.judgeTime(meta)
-                    ) ?: continue
-                }
-                applyAdminMessage(channel, content, meta, generation)
-            }
+            for ((content, meta) in entries) applyAdminMessage(channel, content, meta, generation)
             // Even an empty history is an answer: the stream holds no
             // snapshot, so rev bookkeeping may start from zero.
             adminLoaded.add(channel.adminStreamId)
         } catch (e: Exception) { /* no admin history */ }
+    }
+
+    /**
+     * The retained -3/P0 entries the storage node serves, as (content, meta)
+     * pairs with epoch envelopes already opened and, on gated, only the
+     * owner-signed ones. Null when the read itself brought nothing back.
+     */
+    private suspend fun readAdminEntries(channel: Channel): List<Pair<Any?, JSONObject>>? {
+        // Password channels seal ADMIN_STATE too, and applyAdminMessage's
+        // fallback opens it with PomboCrypto — Bouncy Castle PBKDF2, ~1s per
+        // message on a phone, up to 5 of them, all inside the render gate.
+        // Handing the password to the bridge moves that to BoringSSL and
+        // overlaps it with the resend.
+        val args = JSONObject()
+            .put("streamId", channel.adminStreamId)
+            .put("partition", StreamConstants.ADMIN_MODERATION)
+            .put("last", 5)
+        channel.password?.let { args.put("password", it) }
+        // Raw envelopes for gated, same as message history: authority on
+        // -3 is the recovered envelope signer, never the present gate.
+        if (channel.type == "gated") args.put("recoverSigner", true).put("raw", true)
+        val t0 = System.currentTimeMillis()
+        val res = bridge.call("resend", args, 30_000)
+        android.util.Log.d("PomboPerf",
+            "adminState ${channel.name}: call=${System.currentTimeMillis() - t0}ms " +
+                "n=${res.optJSONArray("messages")?.length() ?: -1}")
+        val arr = res.optJSONArray("messages") ?: return null
+        val out = ArrayList<Pair<Any?, JSONObject>>()
+        for (i in 0 until arr.length()) {
+            val entry = arr.optJSONObject(i) ?: continue
+            var content = entry.opt("content")
+            val meta = entry.optJSONObject("meta") ?: JSONObject()
+            // Gated: -3 authority moved to ingest — the clone holds the
+            // publish grant for everyone, so only the envelope SIGNER
+            // proves the admin wrote this (gatedAuthor drops the rest).
+            if (channel.type == "gated" &&
+                gatedAuthor(channel, channel.adminStreamId, meta) == null) continue
+            // ADMIN_STATE arrives as an epoch envelope. History context so
+            // entries sealed under an older epoch open in that epoch's
+            // validity window instead of skipping the freshness rule.
+            if (content is JSONObject &&
+                com.pombo.android.core.EpochKeyCrypto.isEpochEnvelope(content) &&
+                isEpochChannel(channel)
+            ) {
+                val keysId = channel.keysStreamId.ifEmpty {
+                    StreamConstants.deriveKeysId(channel.messageStreamId)
+                }
+                content = epochKeys.tryDecrypt(
+                    channel.messageStreamId, keysId, content,
+                    gated = true, live = false, timestamp = com.pombo.android.core.StoredAt.judgeTime(meta)
+                ) ?: continue
+            }
+            out.add(content to meta)
+        }
+        return out
+    }
+
+    /** The plaintext of a -3 entry: a sealed one opens with the password. */
+    private fun openAdminContent(channel: Channel, contentAny: Any?): JSONObject? = when (contentAny) {
+        is JSONObject -> contentAny
+        is String -> {
+            val pwd = channel.password ?: return null
+            try { JSONObject(PomboCrypto.decryptString(contentAny, pwd)) } catch (e: Exception) { null }
+        }
+        else -> null
+    }
+
+    /** The newest owner-authored ADMIN_STATE the node serves, by (rev, ts), with its meta. */
+    private suspend fun readLatestAdminSnapshot(channel: Channel): Pair<JSONObject, JSONObject>? {
+        val owner = channelOwner(channel)
+        var best: Pair<JSONObject, JSONObject>? = null
+        for ((contentAny, meta) in readAdminEntries(channel) ?: return null) {
+            val data = openAdminContent(channel, contentAny) ?: continue
+            if (data.optString("type") != "ADMIN_STATE") continue
+            val sender = data.optString("account").ifEmpty { meta.optString("publisherId") }.lowercase()
+            if (owner != null && sender.isNotEmpty() && sender != owner) continue
+            val rev = data.optInt("rev", 0)
+            val ts = data.optLong("ts", 0L)
+            val b = best?.first
+            if (b == null || rev > b.optInt("rev") || (rev == b.optInt("rev") && ts > b.optLong("ts"))) {
+                best = data to meta
+            }
+        }
+        return best
+    }
+
+    // ---- confirmation that a published ADMIN_STATE reached storage ----
+    //
+    // The publish goes out over the overlay and the client reports it sent
+    // whether or not a storage node heard it: a snapshot published from a
+    // cold session can be lost with nothing to show for it, and every other
+    // client then keeps reading the previous one. After each publish the -3
+    // is read back until the snapshot is there; when it is not by the last
+    // delay the current snapshot is republished under the next rev (a
+    // snapshot is complete, so the one that lands cures all before it).
+    // After CONFIRM_REPUBLISH_LIMIT republishes the owner is told and the
+    // entry stays pending, picked up again when the channel is next opened.
+    // Only the open channel can republish: the snapshot lives in its flows.
+
+    /** Publishes storage has not confirmed, by admin stream; mirrored in the floor store. */
+    private val pendingConfirm = HashMap<String, JSONObject>()
+    private var confirmJob: Job? = null
+    private var confirmStream: String? = null
+
+    private fun pendingKey(channel: Channel) = "pending|" + floorKey(channel)
+
+    internal fun pendingConfirmationOf(channel: Channel): JSONObject? =
+        pendingConfirm[channel.adminStreamId]
+            ?: adminFloorStore.get(pendingKey(channel))?.also { pendingConfirm[channel.adminStreamId] = it }
+
+    private fun setPendingConfirmation(channel: Channel, entry: JSONObject?) {
+        if (entry == null) {
+            pendingConfirm.remove(channel.adminStreamId)
+            adminFloorStore.remove(pendingKey(channel))
+        } else {
+            pendingConfirm[channel.adminStreamId] = entry
+            adminFloorStore.put(pendingKey(channel), entry)
+        }
+    }
+
+    /** A publish just went out: remember it and see it to storage. */
+    private fun trackPublished(channel: Channel, rev: Int, ts: Long, envelopeTs: Long) {
+        val prev = pendingConfirmationOf(channel)
+        setPendingConfirmation(channel, JSONObject()
+            .put("rev", rev).put("ts", ts).put("envelopeTs", envelopeTs)
+            .put("republished", prev?.optInt("republished") ?: 0)
+            .put("since", prev?.optLong("since") ?: System.currentTimeMillis())
+            .put("stalled", false))
+        ensureConfirmLoop(channel, switchGeneration)
+    }
+
+    /**
+     * The owner opened a channel whose last publish storage never confirmed:
+     * wait for it again, with a fresh allowance of republishes.
+     */
+    internal fun resumeConfirmation(channel: Channel, generation: Int) {
+        if (!amOwner(channel)) return
+        val entry = pendingConfirmationOf(channel) ?: return
+        setPendingConfirmation(channel, JSONObject(entry.toString()).put("republished", 0).put("stalled", false))
+        ensureConfirmLoop(channel, generation)
+    }
+
+    private fun ensureConfirmLoop(channel: Channel, generation: Int) {
+        if (confirmJob?.isActive == true && confirmStream == channel.adminStreamId) return
+        confirmJob?.cancel()
+        confirmStream = channel.adminStreamId
+        confirmJob = scope.launch { confirmLoop(channel, generation) }
+    }
+
+    private enum class Landing { LANDED, SUPERSEDED, REPLACED, MISSING }
+
+    private suspend fun confirmLoop(channel: Channel, generation: Int) {
+        while (true) {
+            val pending = pendingConfirmationOf(channel) ?: return
+            if (pending.optBoolean("stalled")) return
+            when (awaitLanding(channel, pending, generation)) {
+                // A newer publish of ours took over: wait for that one instead.
+                Landing.REPLACED -> continue
+                Landing.MISSING -> Unit
+                else -> return
+            }
+            val label = "ADMIN_STATE rev ${pending.optInt("rev")} of ${channel.name}"
+            val republished = pending.optInt("republished")
+            if (republished >= CONFIRM_REPUBLISH_LIMIT) {
+                setPendingConfirmation(channel, JSONObject(pending.toString()).put("stalled", true))
+                Log.w(TAG, "$label never reached storage after $republished republishes")
+                manager.onModerationWarning?.invoke(
+                    "Moderation change not yet confirmed on storage. It will be retried when you open the channel again.")
+                return
+            }
+            // Republishing needs the open channel's snapshot; with another
+            // channel on screen this waits for the next open.
+            if (!stillCurrent(generation) || channel.adminStreamId != _current.value?.adminStreamId) return
+            setPendingConfirmation(channel, JSONObject(pending.toString()).put("republished", republished + 1))
+            Log.w(TAG, "$label not on storage, republishing")
+            try {
+                publishAdminState(channel)
+            } catch (e: Exception) {
+                Log.w(TAG, "$label republish failed, kept pending: ${e.message}")
+                return
+            }
+        }
+    }
+
+    private suspend fun awaitLanding(channel: Channel, pending: JSONObject, generation: Int): Landing {
+        val rev = pending.optInt("rev")
+        val ts = pending.optLong("ts")
+        val label = "ADMIN_STATE rev $rev of ${channel.name}"
+        // An admin stream without storage has no node to read back from:
+        // nothing to confirm, and nothing to republish.
+        val providers = runCatching { manager.storageEndpoints.resolve(channel.adminStreamId) }.getOrNull()
+        if (providers != null && providers.isEmpty()) {
+            setPendingConfirmation(channel, null)
+            Log.d(TAG, "$label: the admin stream has no storage, nothing to confirm")
+            return Landing.LANDED
+        }
+        for (delayMs in CONFIRM_DELAYS_MS) {
+            manager.adminConfirmSleep(delayMs)
+            val current = pendingConfirmationOf(channel) ?: return Landing.LANDED
+            if (current.optInt("rev") != rev) return Landing.REPLACED
+            val latest = try { readLatestAdminSnapshot(channel) } catch (e: Exception) { null } ?: continue
+            val storedRev = latest.first.optInt("rev")
+            val storedTs = latest.first.optLong("ts")
+            if (storedRev == rev && storedTs == ts) {
+                setPendingConfirmation(channel, null)
+                Log.i(TAG, "$label confirmed on storage")
+                return Landing.LANDED
+            }
+            if (storedRev > rev || (storedRev == rev && storedTs > ts)) {
+                // Published after ours, from another device of the owner:
+                // theirs is the channel's state now.
+                setPendingConfirmation(channel, null)
+                applyAdminMessage(channel, latest.first, latest.second, generation)
+                Log.w(TAG, "$label: storage holds rev $storedRev published later elsewhere, adopted")
+                manager.onModerationWarning?.invoke(
+                    "Moderation was changed from another device; the last change made here was replaced.")
+                return Landing.SUPERSEDED
+            }
+        }
+        return Landing.MISSING
     }
 
     /**
@@ -1051,12 +1231,15 @@ internal class Moderation(private val manager: ChannelManager) {
             .put("type", "ADMIN_STATE").put("rev", rev)
             .put("ts", System.currentTimeMillis()).put("createdBy", addr)
             .put("state", state)
-        publishForChannel(channel, channel.adminStreamId, StreamConstants.ADMIN_MODERATION, msg)
+        val envelopeTs = publishForChannel(channel, channel.adminStreamId, StreamConstants.ADMIN_MODERATION, msg)
         // Commit the revision only once it is on the wire. Incrementing up
         // front meant a failed publish — which [moderate] rolls back — still
         // burned a revision, so the next attempt skipped a number.
         adminRevs[channel.adminStreamId] = rev
         adminTs[channel.adminStreamId] = msg.optLong("ts")
+        // "Published" only means broadcast: the snapshot is read back from
+        // storage until it is there, and republished when it is not.
+        trackPublished(channel, rev, msg.optLong("ts"), envelopeTs)
         // Low-latency fan-out (web channels.js publishAdminState): nobody —
         // web or Android — subscribes -3 live, so this ephemeral signal with
         // the full snapshot is what makes a ban/pin/hide reach open channels
