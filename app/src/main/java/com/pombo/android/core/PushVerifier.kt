@@ -144,17 +144,22 @@ class PushVerifier(
         }
 
         /**
-         * Notification body, matching sw.js getMessagePreview: encrypted channels
-         * never leak content, public channels show the text.
+         * Notification body. A channel's own encryption is not undone here, so
+         * a closed channel says only that something arrived; a direct message
+         * arrives already opened (the sender is read from the same envelope)
+         * and shows its text, like the app does when it is running.
          */
         fun preview(type: String, content: JSONObject?): String {
-            if (type == "dm" || type == "native" || type == "dm-inbox") return "New direct message"
-            if (type == "private" || type == "gated") return "New encrypted message"
-            if (content == null) return "New message"
+            if (type == "private" || type == "gated") return "New message"
+            val direct = type == "dm" || type == "native" || type == "dm-inbox"
+            // A sealed envelope that never opened: not ours, or no key yet.
+            val sealed = content != null && content.optInt("v") == 2 && content.has("epk")
+            if (content == null || sealed) return if (direct) "You have a new message" else "New message"
             return when (content.optString("type")) {
                 "text" -> {
                     val text = content.optString("text")
-                    if (text.length > 100) text.take(100) + "..." else text.ifEmpty { "New message" }
+                    if (text.length > 100) text.take(100) + "..."
+                    else text.ifEmpty { if (direct) "You have a new message" else "New message" }
                 }
                 "image" -> "📷 Image"
                 // sw.js:318-336 covers the remaining content types too.

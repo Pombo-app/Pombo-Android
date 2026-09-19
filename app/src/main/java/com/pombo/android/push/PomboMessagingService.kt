@@ -88,6 +88,9 @@ class PomboMessagingService : FirebaseMessagingService() {
         var conversationId = entry.streamId
         var title = entry.name
         var avatar: android.graphics.Bitmap? = null
+        // What the notification body is built from: the envelope as stored,
+        // replaced by the message itself once it opens.
+        var body = result.content
         if (entry.type == "dm-inbox") {
             // One relay row covers the whole inbox, so the per-peer mute
             // has to happen here, and the title comes from the sender —
@@ -108,7 +111,9 @@ class PomboMessagingService : FirebaseMessagingService() {
                 if (content != null && content.optInt("v") == 2 && content.has("epk")) {
                     if (privateKey.isNullOrEmpty() || myAddress.isNullOrEmpty()) null
                     else com.pombo.android.core.SealedSenderCrypto
-                        .open(content, privateKey, myAddress)?.first
+                        .open(content, privateKey, myAddress)
+                        ?.also { body = it.second }
+                        ?.first
                 } else {
                     result.publisherId?.lowercase()
                 }
@@ -153,7 +158,7 @@ class PomboMessagingService : FirebaseMessagingService() {
         Notifier(applicationContext).postMessage(
             conversationId = conversationId,
             title = title,
-            body = PushVerifier.preview(entry.type, result.content),
+            body = PushVerifier.preview(entry.type, body),
             largeIcon = avatar
         )
     }

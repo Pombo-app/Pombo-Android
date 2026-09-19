@@ -147,9 +147,32 @@ class PushVerifierTest {
     }
 
     @Test
-    fun `a closed channel does not call itself a direct message`() {
-        assertEquals("New encrypted message", PushVerifier.preview("gated", null))
-        assertEquals("New direct message", PushVerifier.preview("dm-inbox", null))
-        assertEquals("New direct message", PushVerifier.preview("dm", null))
+    fun `a closed channel says a message arrived and nothing more`() {
+        val text = org.json.JSONObject("""{"type":"text","text":"secret"}""")
+        assertEquals("New message", PushVerifier.preview("gated", null))
+        assertEquals("New message", PushVerifier.preview("gated", text))
+        assertEquals("New message", PushVerifier.preview("private", text))
+    }
+
+    @Test
+    fun `an opened direct message shows its text`() {
+        val text = org.json.JSONObject("""{"type":"text","text":"are you around?"}""")
+        assertEquals("are you around?", PushVerifier.preview("dm-inbox", text))
+        assertEquals("📷 Image", PushVerifier.preview("dm-inbox", org.json.JSONObject("""{"type":"image"}""")))
+    }
+
+    @Test
+    fun `a direct message that never opened stays generic`() {
+        val envelope = org.json.JSONObject("""{"v":2,"epk":"0x02ab","e":"aes-256-gcm","ct":"dead"}""")
+        assertEquals("You have a new message", PushVerifier.preview("dm-inbox", envelope))
+        assertEquals("You have a new message", PushVerifier.preview("dm-inbox", null))
+        assertEquals("You have a new message", PushVerifier.preview("dm", null))
+    }
+
+    @Test
+    fun `a public channel still shows what was said`() {
+        val text = org.json.JSONObject("""{"type":"text","text":"hello everyone"}""")
+        assertEquals("hello everyone", PushVerifier.preview("public", text))
+        assertEquals("New message", PushVerifier.preview("public", null))
     }
 }

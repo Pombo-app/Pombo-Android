@@ -1668,7 +1668,14 @@ class AppViewModel(app: Application) : AndroidViewModel(app), PomboBridge.Listen
         }
         syncKeyResponderSchedule()
         startKeyResponderLoop()
-        manager.onIncomingMessage = { channel, sender, preview ->
+        manager.onIncomingMessage = { channel, sender, preview, timestamp ->
+            // A live message is one the push path must not announce again: both
+            // write to the same notification tag, so without this the wake that
+            // follows replaces the message just shown with a generic line. The
+            // watermark only moves forward, so a message the app never saw
+            // still notifies.
+            val watched = if (channel.type == "dm") myInboxStreamId() else channel.messageStreamId
+            watched?.let { pushRegistry.updateLastSeen(it, timestamp) }
             // Nothing to notify about if the user is already looking at it —
             // and a muted DM peer stays silent on the in-app path too.
             val looking = appInForeground && current.value?.messageStreamId == channel.messageStreamId
