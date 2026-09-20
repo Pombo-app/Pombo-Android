@@ -2287,7 +2287,13 @@ const api = {
     _gateRpcIndex: 0,
     _gateProviderUrl: null,
     _gateProviderInst: null,
-    _gateAccessCache: new Map(), // "gate|user" -> { value, at }; TTL 10 min
+    _gateAccessCache: new Map(), // "gate|user" -> { value, at }
+    // Refusals expire far sooner: nothing outside this app can drop one
+    _GATE_GRANT_TTL_MS: 10 * 60 * 1000,
+    _GATE_DENIAL_TTL_MS: 30 * 1000,
+    _gateAccessTtl(value) {
+        return value ? api._GATE_GRANT_TTL_MS : api._GATE_DENIAL_TTL_MS;
+    },
 
     _gateRpcUrl() {
         // RPCS is the settings-derived list injected at page build — entries
@@ -2318,7 +2324,7 @@ const api = {
         let lastError = null;
         for (let attempt = 0; attempt < RPCS.length; attempt++) {
             try {
-                return await op(api._gateProvider());
+                return await api._gateDeadline(op(api._gateProvider()));
             } catch (e) {
                 if (e && e.code === 'CALL_EXCEPTION') throw e;
                 lastError = e;
@@ -2334,15 +2340,43 @@ const api = {
         return new window.ethers.Contract(gateAddress, api._GATE_ABI, api._gateProvider());
     },
 
+    // A read that outlives this is a stalled endpoint, not a slow one.
+    _GATE_READ_TIMEOUT_MS: 20 * 1000,
+    _gateDeadline(promise) {
+        let timer;
+        return Promise.race([
+            Promise.resolve(promise).finally(function () { clearTimeout(timer); }),
+            new Promise(function (_, reject) {
+                timer = setTimeout(function () {
+                    const err = new Error('The network timed out');
+                    err.code = 'RPC_TIMEOUT';
+                    reject(err);
+                }, api._GATE_READ_TIMEOUT_MS);
+            })
+        ]);
+    },
+
     _gateSigner() {
         if (!wallet) throw new Error('no identity');
         return new NativeSigner(api._gateProvider());
     },
 
+    // The transaction outlives the deadline, so a timeout is not a failure.
+    async _gateConfirm(tx) {
+        try {
+            return await tx.wait(1, 120000);
+        } catch (e) {
+            if (!e || e.code !== 'TIMEOUT') throw e;
+            const err = new Error('Transaction sent but still unconfirmed — check your wallet before trying again');
+            err.code = 'TX_UNCONFIRMED';
+            throw err;
+        }
+    },
+
     async _gateTx(gateAddress, method, args) {
         const gate = new window.ethers.Contract(gateAddress, api._GATE_ABI, api._gateSigner());
         const tx = await gate[method].apply(gate, args);
-        await tx.wait();
+        await api._gateConfirm(tx);
         // Drop cached access for this gate — membership just changed.
         const prefix = String(gateAddress).toLowerCase();
         Array.from(api._gateAccessCache.keys()).forEach(function (k) {
@@ -2365,7 +2399,7 @@ const api = {
             a.wireIdentity || 0,
             !!a.readOnly
         );
-        const receipt = await tx.wait();
+        const receipt = await api._gateConfirm(tx);
         var gateAddress = null;
         for (var i = 0; i < receipt.logs.length; i++) {
             try {
@@ -2384,7 +2418,7 @@ const api = {
     async gateCheckAccess(a) {
         const cacheKey = String(a.gate).toLowerCase() + '|' + String(a.user).toLowerCase();
         const cached = api._gateAccessCache.get(cacheKey);
-        if (cached && Date.now() - cached.at < 10 * 60 * 1000) return { access: cached.value };
+        if (cached && Date.now() - cached.at < api._gateAccessTtl(cached.value)) return { access: cached.value };
         var value;
         try {
             value = await api._gateWithProvider(function () {
@@ -2419,7 +2453,7 @@ const api = {
     async gateCheckAccessQuorum(a) {
         const cacheKey = String(a.gate).toLowerCase() + '|' + String(a.user).toLowerCase();
         const cached = api._gateAccessCache.get(cacheKey);
-        if (cached && Date.now() - cached.at < 10 * 60 * 1000) return { access: cached.value };
+        if (cached && Date.now() - cached.at < api._gateAccessTtl(cached.value)) return { access: cached.value };
         const list = (typeof RPCS !== 'undefined' && RPCS && RPCS.length) ? RPCS : [{ url: 'https://polygon-bor-rpc.publicnode.com' }];
         const urls = list.map(function (e) { return typeof e === 'string' ? e : e.url; }).filter(Boolean);
         if (!urls.length) return { access: false, failed: true };
@@ -2565,16 +2599,19 @@ const api = {
     // gate, paged through membersAt. Completes the loss-of-access candidate
     // set there instead of limiting it to what this client happened to see.
     async gateListMembers(a) {
-        return api._gateWithProvider(async function () {
-            const gate = api._gateRead(a.gate);
-            const total = Number(await gate.membersCount());
-            const out = [];
-            for (let offset = 0; offset < total; offset += 500) {
-                const page = await gate.membersAt(offset, 500);
-                for (let i = 0; i < page.length; i++) out.push(String(page[i]).toLowerCase());
-            }
-            return { members: out };
-        });
+        // A page at a time: the read deadline is per call, so a long allowlist
+        // is not mistaken for a stalled endpoint.
+        const total = Number(await api._gateWithProvider(function () {
+            return api._gateRead(a.gate).membersCount();
+        }));
+        const out = [];
+        for (let offset = 0; offset < total; offset += 500) {
+            const page = await api._gateWithProvider(function () {
+                return api._gateRead(a.gate).membersAt(offset, 500);
+            });
+            for (let i = 0; i < page.length; i++) out.push(String(page[i]).toLowerCase());
+        }
+        return { members: out };
     },
 
     // { gate, user } -> { moderator } — asked per signer of a moderation
@@ -2686,7 +2723,7 @@ const api = {
                 progress('wrap');
                 const wrapper = new window.ethers.Contract(info.token, api._WRAPPED_NATIVE_ABI, signer);
                 const wrapTx = await wrapper.deposit({ value: shortfall });
-                await wrapTx.wait();
+                await api._gateConfirm(wrapTx);
                 wrapped = true;
             }
         }
@@ -2696,10 +2733,10 @@ const api = {
             progress('approve');
             if (allowance > 0n) {
                 const resetTx = await token.approve(a.gate, 0n);
-                await resetTx.wait();
+                await api._gateConfirm(resetTx);
             }
             const approveTx = await token.approve(a.gate, price);
-            await approveTx.wait();
+            await api._gateConfirm(approveTx);
             approved = true;
         }
 

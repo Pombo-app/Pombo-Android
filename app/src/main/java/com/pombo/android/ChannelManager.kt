@@ -777,20 +777,37 @@ class ChannelManager(
     val waitingForKeys: StateFlow<Boolean> = _waitingForKeys.asStateFlow()
 
     /**
-     * The CURRENT user's standing on the CURRENT channel's PAID gate (N-F).
-     * Null = not a paid gate, gate owner, or unresolved. `accessNow` false
-     * with an elapsed `paidUntil` is the "subscription expired" state — the
-     * key layer cannot signal it (refusals are silent), only the chain can.
+     * The CURRENT user's standing on the CURRENT channel's PAID gate.
+     * Null = not a paid gate, or unresolved. The key layer cannot signal a
+     * lapsed subscription (refusals are silent), only the chain can.
      */
     data class PaidStatus(
         /** Subscription end, unix seconds (0 = never paid). */
         val paidUntil: Long,
-        /** checkAccess for us — true without a live subscription = moderator. */
-        val accessNow: Boolean
-    )
+        val isOwner: Boolean = false,
+        /** Moderators hold access without ever paying. */
+        val moderator: Boolean = false,
+        val banned: Boolean = false
+    ) {
+        /** The order is the contract's: owner above all, a ban above both the
+         *  moderator role and the clock. */
+        val state: SubscriptionState
+            get() = when {
+                isOwner -> SubscriptionState.NONE
+                banned -> SubscriptionState.BANNED
+                moderator -> SubscriptionState.NONE
+                paidUntil == 0L -> SubscriptionState.UNSUBSCRIBED
+                paidUntil * 1000 > System.currentTimeMillis() -> SubscriptionState.ACTIVE
+                else -> SubscriptionState.EXPIRED
+            }
+    }
+
+    /** NONE = nothing to say: the viewer owes this channel no subscription. */
+    enum class SubscriptionState { NONE, ACTIVE, EXPIRED, UNSUBSCRIBED, BANNED }
 
     private val _paidStatus = MutableStateFlow<PaidStatus?>(null)
     val paidStatus: StateFlow<PaidStatus?> = _paidStatus.asStateFlow()
+    private var paidExpiryJob: kotlinx.coroutines.Job? = null
 
     private suspend fun resolvePaidStatus(channel: Channel): PaidStatus? {
         val gate = channel.takeIf { it.type == "gated" }?.gateAddress ?: return null
@@ -798,14 +815,23 @@ class ChannelManager(
             val info = bridge.call("gateInfo", JSONObject().put("gate", gate))
             if (info.optInt("mode", GATE_MODE_NONE) != GATE_MODE_PAID) return null
             val me = myAddress() ?: return null
-            if (info.optString("owner").equals(me, ignoreCase = true)) return null
-            val until = bridge.call("gatePaidUntil", JSONObject()
-                .put("gate", gate).put("user", me))
-                .optString("paidUntil", "0").toLongOrNull() ?: 0L
-            val accessNow = until * 1000 > System.currentTimeMillis() ||
-                bridge.call("gateCheckAccess", JSONObject()
-                    .put("gate", gate).put("user", me)).optBoolean("access", false)
-            PaidStatus(until, accessNow)
+            // One states() read answers every flag at the same block
+            val res = bridge.call("gateMembers", JSONObject()
+                .put("gate", gate)
+                .put("candidates", org.json.JSONArray(listOf(me.lowercase()))), 30_000)
+            val arr = res.optJSONArray("members") ?: return null
+            var mine: JSONObject? = null
+            for (i in 0 until arr.length()) {
+                val m = arr.optJSONObject(i) ?: continue
+                if (m.optString("address").equals(me, ignoreCase = true)) { mine = m; break }
+            }
+            val row = mine ?: return null
+            PaidStatus(
+                paidUntil = row.optLong("paidUntil", 0L),
+                isOwner = row.optBoolean("isOwner"),
+                moderator = row.optBoolean("moderator"),
+                banned = row.optBoolean("banned")
+            )
         } catch (e: Exception) {
             Log.w(TAG, "paid status read failed: ${e.message}")
             null
@@ -814,10 +840,23 @@ class ChannelManager(
 
     /** Re-read the paid standing for the current channel (after a renewal). */
     suspend fun refreshPaidStatus() {
-        val channel = _current.value ?: run { _paidStatus.value = null; return }
+        val channel = _current.value ?: run { setPaidStatus(null); return }
         val status = resolvePaidStatus(channel)
         if (_current.value?.messageStreamId == channel.messageStreamId) {
-            _paidStatus.value = status
+            setPaidStatus(status)
+        }
+    }
+
+    /** Publish the standing and wake up at the cutoff: a channel left open
+     *  renders once. */
+    private fun setPaidStatus(status: PaidStatus?) {
+        _paidStatus.value = status
+        paidExpiryJob?.cancel()
+        if (status?.state != SubscriptionState.ACTIVE) return
+        val msLeft = status.paidUntil * 1000 - System.currentTimeMillis()
+        paidExpiryJob = scope.launch {
+            kotlinx.coroutines.delay(minOf(msLeft + 1_000, PAID_EXPIRY_CEILING_MS))
+            refreshPaidStatus()
         }
     }
 
@@ -4306,6 +4345,9 @@ class ChannelManager(
      */
     suspend fun joinPreview(): Channel? {
         val preview = _current.value?.takeIf { _isPreview.value } ?: return null
+        // Access can lapse between browsing and joining, and the join reads a
+        // cached verdict that predates the preview.
+        preview.gateAddress?.let { gateInvalidateAccess(it) }
         val joined = joinChannel(preview.messageStreamId)
         // The streams are already subscribed — just swap in the stored channel.
         _current.value = joined
@@ -4408,7 +4450,7 @@ class ChannelManager(
                 if (channel.type == "gated") {
                     launch {
                         val status = resolvePaidStatus(channel)
-                        if (stillCurrent(generation)) _paidStatus.value = status
+                        if (stillCurrent(generation)) setPaidStatus(status)
                     }
                 }
                 // History: content + overrides
@@ -4650,7 +4692,7 @@ class ChannelManager(
             // Both are per-channel verdicts — carrying them across a switch
             // shows the previous room's key/subscription state on this one.
             _waitingForKeys.value = false
-            _paidStatus.value = null
+            setPaidStatus(null)
             channelImageRev = 0
             synchronized(online) { online.clear(); onlineNames.clear() }
             clearTyping()   // whoever was typing was typing in the OTHER room
@@ -6898,6 +6940,8 @@ class ChannelManager(
         private val STREAM_ABSENT = Regex("not found|does not exist|NOT_FOUND", RegexOption.IGNORE_CASE)
         /** Canonical wrapped-native on Polygon (WPOL) — bridge `_WRAPPED_NATIVE`. */
         const val WRAPPED_NATIVE = "0x0d500b1d8e8ef31e21c99d1db9a6444d3adf1270"
+        /** Ceiling for the subscription wake-up, which re-arms until the cutoff. */
+        private const val PAID_EXPIRY_CEILING_MS = 30 * 60 * 1000L
         /** PomboGate.Mode — ABI order, never reorder (NONE=0, TOKEN=1, NFT=2, PAID=3). */
         const val GATE_MODE_NONE = 0
         const val GATE_MODE_TOKEN = 1

@@ -77,6 +77,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.graphics.Color
 import com.pombo.android.AppViewModel
+import com.pombo.android.ChannelManager
 import com.pombo.android.data.Channel
 import com.pombo.android.ui.Avatar
 import com.pombo.android.ui.theme.PomboColors
@@ -420,18 +421,21 @@ private fun ChannelDetailsMain(
                 com.pombo.android.ui.ToastKind.SUCCESS
             )
         }
-        // PAID member view: the subscription clock (N-F). paidUntil 0 is a
-        // moderator on a paid gate, who never pays and has no clock.
-        detailsPaidStatus?.takeIf { it.paidUntil > 0 }?.let { ps ->
+        // PAID member view: the subscription clock. An owner or moderator
+        // never pays, so they have no clock to show.
+        detailsPaidStatus?.takeIf { it.state != ChannelManager.SubscriptionState.NONE }?.let { ps ->
             val msLeft = ps.paidUntil * 1000L - System.currentTimeMillis()
             Spacer(Modifier.height(10.dp))
             FactRow(
                 label = "Subscription",
-                value = if (msLeft > 0)
-                    com.pombo.android.core.GateFormat.formatRemaining(msLeft) + " left"
-                else "Expired",
+                value = when (ps.state) {
+                    ChannelManager.SubscriptionState.UNSUBSCRIBED -> "None"
+                    ChannelManager.SubscriptionState.BANNED -> "Access removed"
+                    else -> java.text.SimpleDateFormat("dd/MM/yy, HH:mm", java.util.Locale.getDefault())
+                        .format(java.util.Date(ps.paidUntil * 1000L))
+                },
                 valueColor = when {
-                    msLeft <= 0 -> Color(0xFFF87171).copy(alpha = 0.80f)
+                    ps.state != ChannelManager.SubscriptionState.ACTIVE -> Color(0xFFF87171).copy(alpha = 0.80f)
                     msLeft < com.pombo.android.core.GateFormat.WARNING_MS -> Color(0xFFFBBF24)
                     else -> Color.White.copy(alpha = 0.70f)
                 }

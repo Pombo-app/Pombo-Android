@@ -332,7 +332,7 @@ internal fun GateEntryDialog(vm: AppViewModel, entry: AppViewModel.GateEntry) {
             if (subscribed) {
                 val until = java.text.SimpleDateFormat("dd/MM/yy, HH:mm", java.util.Locale.getDefault())
                     .format(java.util.Date(info.paidUntil * 1000L))
-                "Active until $until · ${com.pombo.android.core.GateFormat.formatRemaining(paidMsLeft)} left" to okTone
+                "Active until $until" to okTone
             } else if (info.paidUntil > 0) "Subscription expired" to badTone
             else "No active subscription" to dimTone
         else -> null
@@ -389,21 +389,6 @@ internal fun GateEntryDialog(vm: AppViewModel, entry: AppViewModel.GateEntry) {
                     textAlign = androidx.compose.ui.text.style.TextAlign.Center)
             }
 
-            // Author visibility is a privacy promise the user must see before
-            // paying or entering (web: gate-entry-authors).
-            entry.wireIdentity?.let { mode ->
-                Spacer(Modifier.height(10.dp))
-                val members = mode == "sealed"
-                Text(
-                    if (members) "Sealed identity — authors readable by members only"
-                    else "Every message is signed by its author on the wire",
-                    color = if (members) Color.White.copy(alpha = 0.40f)
-                    else Color(0xFFFBBF24).copy(alpha = 0.70f),
-                    fontSize = 12.sp,
-                    textAlign = androidx.compose.ui.text.style.TextAlign.Center
-                )
-            }
-
             if (notes.isNotEmpty()) {
                 Spacer(Modifier.height(12.dp))
                 Text(
@@ -445,14 +430,31 @@ internal fun GateEntryDialog(vm: AppViewModel, entry: AppViewModel.GateEntry) {
                     contentAlignment = Alignment.Center
                 ) { Text("Cancel", color = Color.White.copy(alpha = 0.50f), fontSize = 13.sp, fontWeight = FontWeight.Medium) }
 
+                val checking by vm.gateEntryChecking.collectAsState()
                 Box(
                     Modifier.weight(1f)
                         .background(Color.White.copy(alpha = 0.05f), RoundedCornerShape(12.dp))
                         .border(1.dp, Color.White.copy(alpha = 0.08f), RoundedCornerShape(12.dp))
-                        .clickableNoRipple { vm.gateEntryRecheck() }
+                        .clickableNoRipple { if (!checking) vm.gateEntryRecheck() }
                         .padding(vertical = 10.dp),
                     contentAlignment = Alignment.Center
-                ) { Text("Check Again", color = Color.White.copy(alpha = 0.70f), fontSize = 13.sp, fontWeight = FontWeight.Medium) }
+                ) {
+                    if (checking) {
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            CircularProgressIndicator(
+                                modifier = Modifier.size(13.dp),
+                                color = Color.White.copy(alpha = 0.70f),
+                                strokeWidth = 2.dp
+                            )
+                            Spacer(Modifier.width(8.dp))
+                            Text("Checking…", color = Color.White.copy(alpha = 0.70f),
+                                fontSize = 13.sp, fontWeight = FontWeight.Medium)
+                        }
+                    } else {
+                        Text("Check Again", color = Color.White.copy(alpha = 0.70f),
+                            fontSize = 13.sp, fontWeight = FontWeight.Medium)
+                    }
+                }
             }
         }
     }

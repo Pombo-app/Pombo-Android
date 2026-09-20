@@ -27,6 +27,7 @@ import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
@@ -49,7 +50,9 @@ import androidx.compose.material.icons.automirrored.filled.Send
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.AttachFile
 import androidx.compose.material.icons.outlined.SentimentSatisfied
+import androidx.compose.material.icons.filled.Gavel
 import androidx.compose.material.icons.filled.Lock
+import androidx.compose.material.icons.filled.Tag
 import androidx.compose.material.icons.filled.MoreVert
 import androidx.compose.material.icons.filled.PushPin
 import androidx.compose.material.icons.filled.Close
@@ -96,10 +99,12 @@ import androidx.compose.ui.unit.Dp
 import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.zIndex
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import com.pombo.android.AppViewModel
+import com.pombo.android.ChannelManager
 import com.pombo.android.NetStatus
 import com.pombo.android.UiMessage
 import com.pombo.android.data.Channel
@@ -160,6 +165,7 @@ fun ChatScreen(vm: AppViewModel) {
     val loadingInitial by vm.initialLoad.collectAsState()
     val waitingForKeys by vm.waitingForKeys.collectAsState()
     val paidStatus by vm.paidStatus.collectAsState()
+    val bannedMembers by vm.bannedMembers.collectAsState()
 
     // NATIVE reverse-layout chat (deliberate divergence from the web's
     // top-down DOM): the LazyColumn runs with reverseLayout, so index 0 is the
@@ -319,10 +325,23 @@ fun ChatScreen(vm: AppViewModel) {
         var dismissedPins by remember(ch.messageStreamId) { mutableStateOf(emptySet<String>()) }
         val livePinIds = pins.map { it.targetId }.toSet()
         LaunchedEffect(livePinIds) { dismissedPins = dismissedPins intersect livePinIds }
+        // A ban the moderators keep in ADMIN_STATE rather than on the gate:
+        // it hides the author's messages for everyone, so writing here reaches
+        // nobody. The reader is told the same thing either way.
+        val clientBanned = bannedMembers.any { it.equals(myAddr, ignoreCase = true) }
+        val accessLost = clientBanned || paidStatus?.state.let {
+            it == ChannelManager.SubscriptionState.EXPIRED
+                || it == ChannelManager.SubscriptionState.UNSUBSCRIBED
+                || it == ChannelManager.SubscriptionState.BANNED
+        }
         // NEWEST first: `pins` arrives in pin order (oldest first), so the banner
         // used to sit on the stalest pin forever. Reversed, it opens on the most
         // recent one and each dismissal walks back one pin through history.
-        val shownPins = pins.filter { it.targetId !in dismissedPins }.asReversed()
+        // Pins ride the open admin stream: they resolve long before the
+        // messages they float over, and after the gate has stopped granting
+        // access. Neither is a moment to draw them in.
+        val shownPins = if (accessLost || loadingInitial) emptyList()
+        else pins.filter { it.targetId !in dismissedPins }.asReversed()
 
         // Channel header
         Row(
@@ -493,14 +512,15 @@ fun ChatScreen(vm: AppViewModel) {
                     // Web DropdownManager copy-stream-id: the id was only
                     // reachable by opening Channel Details and selecting it.
                     com.pombo.android.ui.ContextMenuItem(
-                        "Copy Channel ID", Icons.Outlined.ContentCopy
+                        "Copy Channel ID", Icons.Filled.Tag
                     ) {
                         chMenu = false
                         headerClipboard.setText(androidx.compose.ui.text.AnnotatedString(ch.messageStreamId))
                         vm.toast("Channel ID copied", com.pombo.android.ui.ToastKind.SUCCESS)
                     }
-                    // Web shows this entry only when the channel has pins.
-                    if (shownPins.isNotEmpty()) com.pombo.android.ui.ContextMenuItem(
+                    // The channel's pins, not the ones on screen: dismissing
+                    // the banner is how the reader gets here to bring it back.
+                    if (pins.isNotEmpty() && !accessLost) com.pombo.android.ui.ContextMenuItem(
                         "Pinned", Icons.Filled.PushPin,
                         iconTint = Color(0xFFFBBF24)
                     ) {
@@ -528,35 +548,65 @@ fun ChatScreen(vm: AppViewModel) {
         // float over content or scroll away. Amber warning is dismissible per
         // viewing session; the expired strip is not.
         var subWarnDismissed by remember(ch.messageStreamId) { mutableStateOf(false) }
-        paidStatus?.let { ps ->
-            val msLeft = ps.paidUntil * 1000L - System.currentTimeMillis()
-            val expired = msLeft <= 0 && !ps.accessNow
-            val warning = msLeft in 1 until com.pombo.android.core.GateFormat.WARNING_MS
-            if (expired || (warning && !subWarnDismissed)) {
-                val tint = if (expired) Color(0xFFF87171) else Color(0xFFFBBF24)
+        val accessActive = !clientBanned
+            && paidStatus?.state == ChannelManager.SubscriptionState.ACTIVE
+        // A client ban applies to channels with no gate, which have no standing
+        val subState = if (clientBanned) ChannelManager.SubscriptionState.BANNED
+        else paidStatus?.state ?: ChannelManager.SubscriptionState.NONE
+        if (subState != ChannelManager.SubscriptionState.NONE) {
+            val state = subState
+            val msLeft = (paidStatus?.paidUntil ?: 0L) * 1000L - System.currentTimeMillis()
+            val lapsed = accessLost
+            val warning = state == ChannelManager.SubscriptionState.ACTIVE
+                && msLeft < com.pombo.android.core.GateFormat.WARNING_MS
+            if (lapsed || (warning && !subWarnDismissed)) {
+                val tint = if (lapsed) Color(0xFFF87171) else Color(0xFFFBBF24)
+                Box(Modifier.fillMaxWidth().height(1.dp).background(tint.copy(alpha = 0.15f)))
                 Row(
                     Modifier.fillMaxWidth()
                         .background(tint.copy(alpha = 0.08f))
+                        // One line or two, the strip keeps the height the
+                        // Renew button gives it
+                        .heightIn(min = 44.dp)
                         .padding(horizontal = 12.dp, vertical = 7.dp),
                     verticalAlignment = Alignment.CenterVertically
                 ) {
+                    if (state == ChannelManager.SubscriptionState.BANNED) {
+                        Icon(
+                            Icons.Filled.Gavel, contentDescription = null,
+                            tint = tint, modifier = Modifier.size(15.dp)
+                        )
+                        Spacer(Modifier.width(7.dp))
+                    }
                     Text(
-                        if (expired) "Subscription expired — new messages stay locked until you renew"
-                        else "Subscription ends in ${com.pombo.android.core.GateFormat.formatRemaining(msLeft)}",
+                        when (state) {
+                            ChannelManager.SubscriptionState.EXPIRED -> "Subscription expired"
+                            ChannelManager.SubscriptionState.UNSUBSCRIBED -> "No active subscription"
+                            ChannelManager.SubscriptionState.BANNED ->
+                                "A moderator removed your access to this channel"
+                            else ->
+                                "Subscription ends in ${com.pombo.android.core.GateFormat.formatRemaining(msLeft)}"
+                        },
                         color = tint, fontSize = 13.sp, lineHeight = 16.sp,
                         modifier = Modifier.weight(1f)
                     )
-                    Spacer(Modifier.width(8.dp))
-                    Box(
-                        Modifier
-                            .background(PomboColors.Accent.copy(alpha = 0.20f), RoundedCornerShape(10.dp))
-                            .border(1.dp, PomboColors.Accent.copy(alpha = 0.35f), RoundedCornerShape(10.dp))
-                            .clickableNoRipple { vm.renewSubscription() }
-                            .padding(horizontal = 12.dp, vertical = 4.dp)
-                    ) {
-                        Text("Renew", color = Color.White, fontSize = 12.sp, fontWeight = FontWeight.SemiBold)
+                    // Paying again buys a banned account nothing
+                    if (state != ChannelManager.SubscriptionState.BANNED) {
+                        Spacer(Modifier.width(8.dp))
+                        Box(
+                            Modifier
+                                .background(PomboColors.Accent.copy(alpha = 0.20f), RoundedCornerShape(10.dp))
+                                .border(1.dp, PomboColors.Accent.copy(alpha = 0.35f), RoundedCornerShape(10.dp))
+                                .clickableNoRipple { vm.renewSubscription() }
+                                .padding(horizontal = 12.dp, vertical = 4.dp)
+                        ) {
+                            Text(
+                                if (state == ChannelManager.SubscriptionState.UNSUBSCRIBED) "Subscribe" else "Renew",
+                                color = Color.White, fontSize = 12.sp, fontWeight = FontWeight.SemiBold
+                            )
+                        }
                     }
-                    if (!expired) {
+                    if (!lapsed) {
                         Spacer(Modifier.width(8.dp))
                         Icon(
                             Icons.Filled.Close, contentDescription = "Dismiss subscription warning",
@@ -570,19 +620,15 @@ fun ChatScreen(vm: AppViewModel) {
         }
 
         // What is on screen came from the local cache; the storage node
-        // refused to serve more, and the reader should know why.
-        historyError?.takeIf { visible.isNotEmpty() }?.let { refusal ->
-            val (title, detail) = historyErrorText(refusal, isPreview)
-            Column(
-                Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 8.dp),
-                horizontalAlignment = Alignment.CenterHorizontally
-            ) {
-                Text(title, color = Color.White.copy(alpha = 0.40f), fontSize = 13.sp)
-                Text(
-                    detail, color = Color.White.copy(alpha = 0.25f), fontSize = 11.sp,
-                    textAlign = androidx.compose.ui.text.style.TextAlign.Center
-                )
-            }
+        // refused to serve more. The strip above already says why when the
+        // subscription is the reason.
+        historyError?.takeIf { visible.isNotEmpty() && !accessLost }?.let { refusal ->
+            Text(
+                historyErrorText(refusal, isPreview, accessActive).first,
+                color = Color.White.copy(alpha = 0.40f), fontSize = 13.sp,
+                textAlign = androidx.compose.ui.text.style.TextAlign.Center,
+                modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 8.dp)
+            )
         }
 
         Box(Modifier.weight(1f).fillMaxWidth()) {
@@ -592,19 +638,33 @@ fun ChatScreen(vm: AppViewModel) {
             if (visible.isEmpty()) {
                 val terminalEmpty = !loadingInitial && !loadingHistory && !hasMoreHistory
                 Column(
-                    Modifier.fillMaxSize(),
+                    // The list below is declared after this and would otherwise
+                    // sit on top, swallowing taps meant for the button here.
+                    Modifier.fillMaxSize().zIndex(1f),
                     horizontalAlignment = Alignment.CenterHorizontally,
                     verticalArrangement = Arrangement.Center
                 ) {
                     // A lapsed subscription and "admin offline" are identical
                     // at the key layer (refusals are silent) — the chain-read
-                    // paid status decides which empty state this is.
-                    val subExpired = paidStatus?.let {
-                        it.paidUntil * 1000L <= System.currentTimeMillis() && !it.accessNow
-                    } == true
-                    val refusal = historyError
-                    if (terminalEmpty && refusal != null) {
-                        val (title, detail) = historyErrorText(refusal, isPreview)
+                    // paid status decides which empty state this is, and it
+                    // outranks the node's refusal: the same lapse, no way out.
+                    val subLapsed = subState == ChannelManager.SubscriptionState.EXPIRED
+                        || subState == ChannelManager.SubscriptionState.UNSUBSCRIBED
+                    val refusal = historyError.takeIf { !accessLost }
+                    if (terminalEmpty && subState == ChannelManager.SubscriptionState.BANNED) {
+                        Text(
+                            "You no longer have access to this channel",
+                            color = Color.White.copy(alpha = 0.40f), fontSize = 14.sp
+                        )
+                        Spacer(Modifier.height(4.dp))
+                        Text(
+                            "A moderator removed you",
+                            color = Color.White.copy(alpha = 0.25f), fontSize = 12.sp,
+                            textAlign = androidx.compose.ui.text.style.TextAlign.Center,
+                            modifier = Modifier.padding(horizontal = 32.dp)
+                        )
+                    } else if (terminalEmpty && refusal != null) {
+                        val (title, detail) = historyErrorText(refusal, isPreview, accessActive)
                         Text(title, color = Color.White.copy(alpha = 0.40f), fontSize = 14.sp)
                         Spacer(Modifier.height(4.dp))
                         Text(
@@ -613,14 +673,16 @@ fun ChatScreen(vm: AppViewModel) {
                             textAlign = androidx.compose.ui.text.style.TextAlign.Center,
                             modifier = Modifier.padding(horizontal = 32.dp)
                         )
-                    } else if (terminalEmpty && waitingForKeys && subExpired) {
+                    } else if (terminalEmpty && subLapsed) {
+                        val expired = subState == ChannelManager.SubscriptionState.EXPIRED
                         Text(
-                            "Your subscription has expired",
+                            if (expired) "Your subscription has expired" else "No active subscription",
                             color = Color.White.copy(alpha = 0.40f), fontSize = 14.sp
                         )
                         Spacer(Modifier.height(4.dp))
                         Text(
-                            "Messages stay locked until you renew — renewing extends from the current end",
+                            if (expired) "Messages stay locked until you renew"
+                            else "Messages stay locked until you subscribe",
                             color = Color.White.copy(alpha = 0.25f), fontSize = 12.sp,
                             textAlign = androidx.compose.ui.text.style.TextAlign.Center,
                             modifier = Modifier.padding(horizontal = 32.dp)
@@ -633,7 +695,10 @@ fun ChatScreen(vm: AppViewModel) {
                                 .clickableNoRipple { vm.renewSubscription() }
                                 .padding(horizontal = 16.dp, vertical = 8.dp)
                         ) {
-                            Text("Renew subscription", color = Color.White, fontSize = 13.sp, fontWeight = FontWeight.SemiBold)
+                            Text(
+                                if (expired) "Renew subscription" else "Subscribe",
+                                color = Color.White, fontSize = 13.sp, fontWeight = FontWeight.SemiBold
+                            )
                         }
                     } else if (terminalEmpty && waitingForKeys) {
                         CircularProgressIndicator(
@@ -1026,20 +1091,25 @@ fun ChatScreen(vm: AppViewModel) {
             }
         }
 
-        // Expired subscription cuts the composer too: honest receivers drop
+        // A lapsed subscription cuts the composer too: honest receivers drop
         // the message at ingest — writing into that void is a trap.
-        val subExpired = paidStatus?.let {
-            it.paidUntil * 1000L <= System.currentTimeMillis() && !it.accessNow
-        } == true
+        val composerState = subState
+        val composerLapsed = composerState == ChannelManager.SubscriptionState.EXPIRED
+            || composerState == ChannelManager.SubscriptionState.UNSUBSCRIBED
+            || composerState == ChannelManager.SubscriptionState.BANNED
         // Whoever the network would refuse gets no composer at all: a disabled
-        // field is furniture that only says "not for you". An expired
+        // field is furniture that only says "not for you". A lapsed
         // subscription keeps its field, because there the placeholder is the
         // instruction for getting it back.
         if (mayWriteHere) {
             ChatComposer(
                 input = composerInput,
-                canPost = !subExpired,
-                disabledPlaceholder = "Subscription expired — renew to write",
+                canPost = !composerLapsed,
+                disabledPlaceholder = when (composerState) {
+                    ChannelManager.SubscriptionState.UNSUBSCRIBED -> "Subscribe to write"
+                    ChannelManager.SubscriptionState.BANNED -> "You can no longer write here"
+                    else -> "Renew to write"
+                },
                 onTyping = { vm.notifyTyping() },
                 onPickImage = { vm.sendImage(it) },
                 onPickVideo = { vm.sendVideo(it) },
@@ -1483,13 +1553,21 @@ private fun ChannelTypeIcon(type: String, readOnly: Boolean, tint: Color, size: 
 }
 
 /** Empty-state copy for a history read the storage node refused (web ChatAreaUI._historyErrorText). */
-private fun historyErrorText(error: com.pombo.android.ChannelManager.HistoryError, isPreview: Boolean): Pair<String, String> =
+private fun historyErrorText(
+    error: com.pombo.android.ChannelManager.HistoryError,
+    isPreview: Boolean,
+    hasAccess: Boolean = false
+): Pair<String, String> =
     if (error.reason == "storedAt")
         "Channel history is temporarily unavailable" to
             "The storage node did not say when these messages were stored. Reopen the channel to retry"
     else when (error.status) {
         403 -> if (isPreview)
             "History is available to members" to "Join the channel to read past messages"
+        // The chain grants access and this node refuses: it is behind
+        else if (hasAccess)
+            "Channel history is temporarily unavailable" to
+                "The storage node has not caught up with your access. Reopen the channel to retry"
         else
             "Your access to this channel has ended" to "The storage node no longer serves its history to you"
         401 -> if (error.signed)

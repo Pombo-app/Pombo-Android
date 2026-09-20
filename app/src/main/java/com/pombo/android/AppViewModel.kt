@@ -2836,8 +2836,6 @@ class AppViewModel(app: Application) : AndroidViewModel(app), PomboBridge.Listen
         val channelName: String?,
         /** Renewing from inside the channel: pay is always offered, no "Enter". */
         val renewal: Boolean = false,
-        /** Author visibility ('members' | 'everyone'), when locally known. */
-        val wireIdentity: String? = null,
         val retry: suspend () -> Unit
     )
 
@@ -2865,25 +2863,32 @@ class AppViewModel(app: Application) : AndroidViewModel(app), PomboBridge.Listen
         renewal: Boolean = false, retry: suspend () -> Unit
     ) {
         try {
-            // Author visibility comes from stream metadata, which the gate
-            // contract knows nothing about — resolve it from local caches.
-            val wireIdentity = manager.channels.value
-                .firstOrNull { it.gateAddress.equals(gateAddress, ignoreCase = true) }?.wireIdentity
-                ?: _explore.value.firstOrNull { it.gateAddress.equals(gateAddress, ignoreCase = true) }?.wireIdentity
-            _gateEntry.value = GateEntry(manager.gateEntryInfo(gateAddress), channelName, renewal, wireIdentity, retry)
+            _gateEntry.value = GateEntry(manager.gateEntryInfo(gateAddress), channelName, renewal, retry)
         } catch (e: Exception) {
             toast(
-                "Could not read the gate contract: ${com.pombo.android.core.ChainErrors.friendly(e)}",
+                com.pombo.android.core.ChainErrors.friendly(e),
                 com.pombo.android.ui.ToastKind.ERROR, 5000L
             )
         }
     }
 
     /** Re-read the on-chain standing (balance / paidUntil are never cached). */
+    private val _gateEntryChecking = MutableStateFlow(false)
+    val gateEntryChecking: StateFlow<Boolean> = _gateEntryChecking.asStateFlow()
+
     fun gateEntryRecheck() = viewModelScope.launch {
         val entry = _gateEntry.value ?: return@launch
-        manager.gateInvalidateAccess(entry.info.gateAddress)
-        openGateEntry(entry.info.gateAddress, entry.channelName, entry.renewal, entry.retry)
+        _gateEntryChecking.value = true
+        try {
+            manager.gateInvalidateAccess(entry.info.gateAddress)
+            // A chain read can answer in tens of ms, and a spinner that brief
+            // reads as a dead button
+            val floor = launch { kotlinx.coroutines.delay(450) }
+            openGateEntry(entry.info.gateAddress, entry.channelName, entry.renewal, entry.retry)
+            floor.join()
+        } finally {
+            _gateEntryChecking.value = false
+        }
     }
 
     /** The current user's PAID standing on the open channel (null = not paid-gated). */
