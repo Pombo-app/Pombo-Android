@@ -4345,6 +4345,9 @@ class ChannelManager(
      */
     suspend fun joinPreview(): Channel? {
         val preview = _current.value?.takeIf { _isPreview.value } ?: return null
+        // Access can lapse between browsing and joining, and the join reads a
+        // cached verdict that predates the preview.
+        preview.gateAddress?.let { gateInvalidateAccess(it) }
         val joined = joinChannel(preview.messageStreamId)
         // The streams are already subscribed — just swap in the stored channel.
         _current.value = joined
