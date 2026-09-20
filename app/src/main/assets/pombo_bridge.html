@@ -2287,7 +2287,15 @@ const api = {
     _gateRpcIndex: 0,
     _gateProviderUrl: null,
     _gateProviderInst: null,
-    _gateAccessCache: new Map(), // "gate|user" -> { value, at }; TTL 10 min
+    _gateAccessCache: new Map(), // "gate|user" -> { value, at }
+    // A grant keeps the full window; a refusal is worth seconds. Whoever just
+    // paid, was unbanned or was made a moderator is the one holding a cached
+    // "no", and nothing outside this app can drop it for them.
+    _GATE_GRANT_TTL_MS: 10 * 60 * 1000,
+    _GATE_DENIAL_TTL_MS: 30 * 1000,
+    _gateAccessTtl(value) {
+        return value ? api._GATE_GRANT_TTL_MS : api._GATE_DENIAL_TTL_MS;
+    },
 
     _gateRpcUrl() {
         // RPCS is the settings-derived list injected at page build — entries
@@ -2339,10 +2347,24 @@ const api = {
         return new NativeSigner(api._gateProvider());
     },
 
+    // A hung wait leaves the caller's toast spinning with nothing to say. The
+    // transaction is alive either way, so a deadline here must not be
+    // reported as a failed payment.
+    async _gateConfirm(tx) {
+        try {
+            return await tx.wait(1, 120000);
+        } catch (e) {
+            if (!e || e.code !== 'TIMEOUT') throw e;
+            const err = new Error('Transaction sent but still unconfirmed — check your wallet before trying again');
+            err.code = 'TX_UNCONFIRMED';
+            throw err;
+        }
+    },
+
     async _gateTx(gateAddress, method, args) {
         const gate = new window.ethers.Contract(gateAddress, api._GATE_ABI, api._gateSigner());
         const tx = await gate[method].apply(gate, args);
-        await tx.wait();
+        await api._gateConfirm(tx);
         // Drop cached access for this gate — membership just changed.
         const prefix = String(gateAddress).toLowerCase();
         Array.from(api._gateAccessCache.keys()).forEach(function (k) {
@@ -2365,7 +2387,7 @@ const api = {
             a.wireIdentity || 0,
             !!a.readOnly
         );
-        const receipt = await tx.wait();
+        const receipt = await api._gateConfirm(tx);
         var gateAddress = null;
         for (var i = 0; i < receipt.logs.length; i++) {
             try {
@@ -2384,7 +2406,7 @@ const api = {
     async gateCheckAccess(a) {
         const cacheKey = String(a.gate).toLowerCase() + '|' + String(a.user).toLowerCase();
         const cached = api._gateAccessCache.get(cacheKey);
-        if (cached && Date.now() - cached.at < 10 * 60 * 1000) return { access: cached.value };
+        if (cached && Date.now() - cached.at < api._gateAccessTtl(cached.value)) return { access: cached.value };
         var value;
         try {
             value = await api._gateWithProvider(function () {
@@ -2419,7 +2441,7 @@ const api = {
     async gateCheckAccessQuorum(a) {
         const cacheKey = String(a.gate).toLowerCase() + '|' + String(a.user).toLowerCase();
         const cached = api._gateAccessCache.get(cacheKey);
-        if (cached && Date.now() - cached.at < 10 * 60 * 1000) return { access: cached.value };
+        if (cached && Date.now() - cached.at < api._gateAccessTtl(cached.value)) return { access: cached.value };
         const list = (typeof RPCS !== 'undefined' && RPCS && RPCS.length) ? RPCS : [{ url: 'https://polygon-bor-rpc.publicnode.com' }];
         const urls = list.map(function (e) { return typeof e === 'string' ? e : e.url; }).filter(Boolean);
         if (!urls.length) return { access: false, failed: true };
@@ -2686,7 +2708,7 @@ const api = {
                 progress('wrap');
                 const wrapper = new window.ethers.Contract(info.token, api._WRAPPED_NATIVE_ABI, signer);
                 const wrapTx = await wrapper.deposit({ value: shortfall });
-                await wrapTx.wait();
+                await api._gateConfirm(wrapTx);
                 wrapped = true;
             }
         }
@@ -2696,10 +2718,10 @@ const api = {
             progress('approve');
             if (allowance > 0n) {
                 const resetTx = await token.approve(a.gate, 0n);
-                await resetTx.wait();
+                await api._gateConfirm(resetTx);
             }
             const approveTx = await token.approve(a.gate, price);
-            await approveTx.wait();
+            await api._gateConfirm(approveTx);
             approved = true;
         }
 
