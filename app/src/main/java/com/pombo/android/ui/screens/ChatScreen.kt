@@ -100,6 +100,7 @@ import androidx.compose.ui.unit.sp
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import com.pombo.android.AppViewModel
+import com.pombo.android.ChannelManager
 import com.pombo.android.NetStatus
 import com.pombo.android.UiMessage
 import com.pombo.android.data.Channel
@@ -529,11 +530,14 @@ fun ChatScreen(vm: AppViewModel) {
         // viewing session; the expired strip is not.
         var subWarnDismissed by remember(ch.messageStreamId) { mutableStateOf(false) }
         paidStatus?.let { ps ->
+            val state = ps.state
             val msLeft = ps.paidUntil * 1000L - System.currentTimeMillis()
-            val expired = msLeft <= 0 && !ps.accessNow
-            val warning = msLeft in 1 until com.pombo.android.core.GateFormat.WARNING_MS
-            if (expired || (warning && !subWarnDismissed)) {
-                val tint = if (expired) Color(0xFFF87171) else Color(0xFFFBBF24)
+            val lapsed = state == ChannelManager.SubscriptionState.EXPIRED
+                || state == ChannelManager.SubscriptionState.UNSUBSCRIBED
+            val warning = state == ChannelManager.SubscriptionState.ACTIVE
+                && msLeft < com.pombo.android.core.GateFormat.WARNING_MS
+            if (lapsed || (warning && !subWarnDismissed)) {
+                val tint = if (lapsed) Color(0xFFF87171) else Color(0xFFFBBF24)
                 Row(
                     Modifier.fillMaxWidth()
                         .background(tint.copy(alpha = 0.08f))
@@ -541,8 +545,14 @@ fun ChatScreen(vm: AppViewModel) {
                     verticalAlignment = Alignment.CenterVertically
                 ) {
                     Text(
-                        if (expired) "Subscription expired — new messages stay locked until you renew"
-                        else "Subscription ends in ${com.pombo.android.core.GateFormat.formatRemaining(msLeft)}",
+                        when (state) {
+                            ChannelManager.SubscriptionState.EXPIRED ->
+                                "Subscription expired — new messages stay locked until you renew"
+                            ChannelManager.SubscriptionState.UNSUBSCRIBED ->
+                                "No active subscription. New messages stay locked until you subscribe."
+                            else ->
+                                "Subscription ends in ${com.pombo.android.core.GateFormat.formatRemaining(msLeft)}"
+                        },
                         color = tint, fontSize = 13.sp, lineHeight = 16.sp,
                         modifier = Modifier.weight(1f)
                     )
@@ -554,9 +564,12 @@ fun ChatScreen(vm: AppViewModel) {
                             .clickableNoRipple { vm.renewSubscription() }
                             .padding(horizontal = 12.dp, vertical = 4.dp)
                     ) {
-                        Text("Renew", color = Color.White, fontSize = 12.sp, fontWeight = FontWeight.SemiBold)
+                        Text(
+                            if (state == ChannelManager.SubscriptionState.UNSUBSCRIBED) "Subscribe" else "Renew",
+                            color = Color.White, fontSize = 12.sp, fontWeight = FontWeight.SemiBold
+                        )
                     }
-                    if (!expired) {
+                    if (!lapsed) {
                         Spacer(Modifier.width(8.dp))
                         Icon(
                             Icons.Filled.Close, contentDescription = "Dismiss subscription warning",
@@ -599,9 +612,9 @@ fun ChatScreen(vm: AppViewModel) {
                     // A lapsed subscription and "admin offline" are identical
                     // at the key layer (refusals are silent) — the chain-read
                     // paid status decides which empty state this is.
-                    val subExpired = paidStatus?.let {
-                        it.paidUntil * 1000L <= System.currentTimeMillis() && !it.accessNow
-                    } == true
+                    val subState = paidStatus?.state ?: ChannelManager.SubscriptionState.NONE
+                    val subLapsed = subState == ChannelManager.SubscriptionState.EXPIRED
+                        || subState == ChannelManager.SubscriptionState.UNSUBSCRIBED
                     val refusal = historyError
                     if (terminalEmpty && refusal != null) {
                         val (title, detail) = historyErrorText(refusal, isPreview)
@@ -613,14 +626,16 @@ fun ChatScreen(vm: AppViewModel) {
                             textAlign = androidx.compose.ui.text.style.TextAlign.Center,
                             modifier = Modifier.padding(horizontal = 32.dp)
                         )
-                    } else if (terminalEmpty && waitingForKeys && subExpired) {
+                    } else if (terminalEmpty && waitingForKeys && subLapsed) {
+                        val expired = subState == ChannelManager.SubscriptionState.EXPIRED
                         Text(
-                            "Your subscription has expired",
+                            if (expired) "Your subscription has expired" else "No active subscription",
                             color = Color.White.copy(alpha = 0.40f), fontSize = 14.sp
                         )
                         Spacer(Modifier.height(4.dp))
                         Text(
-                            "Messages stay locked until you renew — renewing extends from the current end",
+                            if (expired) "Messages stay locked until you renew — renewing extends from the current end"
+                            else "Messages stay locked until you subscribe",
                             color = Color.White.copy(alpha = 0.25f), fontSize = 12.sp,
                             textAlign = androidx.compose.ui.text.style.TextAlign.Center,
                             modifier = Modifier.padding(horizontal = 32.dp)
@@ -633,7 +648,10 @@ fun ChatScreen(vm: AppViewModel) {
                                 .clickableNoRipple { vm.renewSubscription() }
                                 .padding(horizontal = 16.dp, vertical = 8.dp)
                         ) {
-                            Text("Renew subscription", color = Color.White, fontSize = 13.sp, fontWeight = FontWeight.SemiBold)
+                            Text(
+                                if (expired) "Renew subscription" else "Subscribe",
+                                color = Color.White, fontSize = 13.sp, fontWeight = FontWeight.SemiBold
+                            )
                         }
                     } else if (terminalEmpty && waitingForKeys) {
                         CircularProgressIndicator(
@@ -1026,20 +1044,21 @@ fun ChatScreen(vm: AppViewModel) {
             }
         }
 
-        // Expired subscription cuts the composer too: honest receivers drop
+        // A lapsed subscription cuts the composer too: honest receivers drop
         // the message at ingest — writing into that void is a trap.
-        val subExpired = paidStatus?.let {
-            it.paidUntil * 1000L <= System.currentTimeMillis() && !it.accessNow
-        } == true
+        val composerState = paidStatus?.state ?: ChannelManager.SubscriptionState.NONE
+        val composerLapsed = composerState == ChannelManager.SubscriptionState.EXPIRED
+            || composerState == ChannelManager.SubscriptionState.UNSUBSCRIBED
         // Whoever the network would refuse gets no composer at all: a disabled
-        // field is furniture that only says "not for you". An expired
+        // field is furniture that only says "not for you". A lapsed
         // subscription keeps its field, because there the placeholder is the
         // instruction for getting it back.
         if (mayWriteHere) {
             ChatComposer(
                 input = composerInput,
-                canPost = !subExpired,
-                disabledPlaceholder = "Subscription expired — renew to write",
+                canPost = !composerLapsed,
+                disabledPlaceholder = if (composerState == ChannelManager.SubscriptionState.UNSUBSCRIBED)
+                    "Subscribe to write here" else "Subscription expired — renew to write",
                 onTyping = { vm.notifyTyping() },
                 onPickImage = { vm.sendImage(it) },
                 onPickVideo = { vm.sendVideo(it) },
