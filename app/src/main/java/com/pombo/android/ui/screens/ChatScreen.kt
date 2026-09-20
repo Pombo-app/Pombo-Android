@@ -534,6 +534,7 @@ fun ChatScreen(vm: AppViewModel) {
                 || it == ChannelManager.SubscriptionState.UNSUBSCRIBED
                 || it == ChannelManager.SubscriptionState.BANNED
         }
+        val accessActive = paidStatus?.state == ChannelManager.SubscriptionState.ACTIVE
         paidStatus?.let { ps ->
             val state = ps.state
             val msLeft = ps.paidUntil * 1000L - System.currentTimeMillis()
@@ -596,7 +597,7 @@ fun ChatScreen(vm: AppViewModel) {
         // subscription is the reason.
         historyError?.takeIf { visible.isNotEmpty() && !accessLost }?.let { refusal ->
             Text(
-                historyErrorText(refusal, isPreview).first,
+                historyErrorText(refusal, isPreview, accessActive).first,
                 color = Color.White.copy(alpha = 0.40f), fontSize = 13.sp,
                 textAlign = androidx.compose.ui.text.style.TextAlign.Center,
                 modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 8.dp)
@@ -635,7 +636,7 @@ fun ChatScreen(vm: AppViewModel) {
                             modifier = Modifier.padding(horizontal = 32.dp)
                         )
                     } else if (terminalEmpty && refusal != null) {
-                        val (title, detail) = historyErrorText(refusal, isPreview)
+                        val (title, detail) = historyErrorText(refusal, isPreview, accessActive)
                         Text(title, color = Color.White.copy(alpha = 0.40f), fontSize = 14.sp)
                         Spacer(Modifier.height(4.dp))
                         Text(
@@ -1524,13 +1525,22 @@ private fun ChannelTypeIcon(type: String, readOnly: Boolean, tint: Color, size: 
 }
 
 /** Empty-state copy for a history read the storage node refused (web ChatAreaUI._historyErrorText). */
-private fun historyErrorText(error: com.pombo.android.ChannelManager.HistoryError, isPreview: Boolean): Pair<String, String> =
+private fun historyErrorText(
+    error: com.pombo.android.ChannelManager.HistoryError,
+    isPreview: Boolean,
+    hasAccess: Boolean = false
+): Pair<String, String> =
     if (error.reason == "storedAt")
         "Channel history is temporarily unavailable" to
             "The storage node did not say when these messages were stored. Reopen the channel to retry"
     else when (error.status) {
         403 -> if (isPreview)
             "History is available to members" to "Join the channel to read past messages"
+        // The chain says yes and this node says no: it is behind, and telling
+        // the reader their access ended would be a lie.
+        else if (hasAccess)
+            "Channel history is temporarily unavailable" to
+                "The storage node has not caught up with your access. Reopen the channel to retry"
         else
             "Your access to this channel has ended" to "The storage node no longer serves its history to you"
         401 -> if (error.signed)
