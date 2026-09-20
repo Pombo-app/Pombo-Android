@@ -2866,7 +2866,7 @@ class AppViewModel(app: Application) : AndroidViewModel(app), PomboBridge.Listen
             _gateEntry.value = GateEntry(manager.gateEntryInfo(gateAddress), channelName, renewal, retry)
         } catch (e: Exception) {
             toast(
-                "Could not read the gate contract: ${com.pombo.android.core.ChainErrors.friendly(e)}",
+                com.pombo.android.core.ChainErrors.friendly(e),
                 com.pombo.android.ui.ToastKind.ERROR, 5000L
             )
         }

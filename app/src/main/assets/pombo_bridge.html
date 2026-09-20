@@ -2324,7 +2324,7 @@ const api = {
         let lastError = null;
         for (let attempt = 0; attempt < RPCS.length; attempt++) {
             try {
-                return await op(api._gateProvider());
+                return await api._gateDeadline(op(api._gateProvider()));
             } catch (e) {
                 if (e && e.code === 'CALL_EXCEPTION') throw e;
                 lastError = e;
@@ -2338,6 +2338,22 @@ const api = {
 
     _gateRead(gateAddress) {
         return new window.ethers.Contract(gateAddress, api._GATE_ABI, api._gateProvider());
+    },
+
+    // A read that outlives this is a stalled endpoint, not a slow one.
+    _GATE_READ_TIMEOUT_MS: 20 * 1000,
+    _gateDeadline(promise) {
+        let timer;
+        return Promise.race([
+            Promise.resolve(promise).finally(function () { clearTimeout(timer); }),
+            new Promise(function (_, reject) {
+                timer = setTimeout(function () {
+                    const err = new Error('The network timed out');
+                    err.code = 'RPC_TIMEOUT';
+                    reject(err);
+                }, api._GATE_READ_TIMEOUT_MS);
+            })
+        ]);
     },
 
     _gateSigner() {
@@ -2583,16 +2599,19 @@ const api = {
     // gate, paged through membersAt. Completes the loss-of-access candidate
     // set there instead of limiting it to what this client happened to see.
     async gateListMembers(a) {
-        return api._gateWithProvider(async function () {
-            const gate = api._gateRead(a.gate);
-            const total = Number(await gate.membersCount());
-            const out = [];
-            for (let offset = 0; offset < total; offset += 500) {
-                const page = await gate.membersAt(offset, 500);
-                for (let i = 0; i < page.length; i++) out.push(String(page[i]).toLowerCase());
-            }
-            return { members: out };
-        });
+        // A page at a time: the read deadline is per call, so a long allowlist
+        // is not mistaken for a stalled endpoint.
+        const total = Number(await api._gateWithProvider(function () {
+            return api._gateRead(a.gate).membersCount();
+        }));
+        const out = [];
+        for (let offset = 0; offset < total; offset += 500) {
+            const page = await api._gateWithProvider(function () {
+                return api._gateRead(a.gate).membersAt(offset, 500);
+            });
+            for (let i = 0; i < page.length; i++) out.push(String(page[i]).toLowerCase());
+        }
+        return { members: out };
     },
 
     // { gate, user } -> { moderator } — asked per signer of a moderation
