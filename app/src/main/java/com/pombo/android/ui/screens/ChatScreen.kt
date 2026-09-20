@@ -96,6 +96,7 @@ import androidx.compose.ui.unit.Dp
 import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.zIndex
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
@@ -610,7 +611,9 @@ fun ChatScreen(vm: AppViewModel) {
             if (visible.isEmpty()) {
                 val terminalEmpty = !loadingInitial && !loadingHistory && !hasMoreHistory
                 Column(
-                    Modifier.fillMaxSize(),
+                    // The list below is declared after this and would otherwise
+                    // sit on top, swallowing taps meant for the button here.
+                    Modifier.fillMaxSize().zIndex(1f),
                     horizontalAlignment = Alignment.CenterHorizontally,
                     verticalArrangement = Arrangement.Center
                 ) {
