@@ -2288,9 +2288,8 @@ const api = {
     _gateProviderUrl: null,
     _gateProviderInst: null,
     _gateAccessCache: new Map(), // "gate|user" -> { value, at }
-    // A grant keeps the full window; a refusal is worth seconds. Whoever just
-    // paid, was unbanned or was made a moderator is the one holding a cached
-    // "no", and nothing outside this app can drop it for them.
+    // A refusal is kept only for seconds: nothing outside this app can drop
+    // it, and the account holding one is the one gaining access.
     _GATE_GRANT_TTL_MS: 10 * 60 * 1000,
     _GATE_DENIAL_TTL_MS: 30 * 1000,
     _gateAccessTtl(value) {
@@ -2347,9 +2346,7 @@ const api = {
         return new NativeSigner(api._gateProvider());
     },
 
-    // A hung wait leaves the caller's toast spinning with nothing to say. The
-    // transaction is alive either way, so a deadline here must not be
-    // reported as a failed payment.
+    // The transaction outlives the deadline, so a timeout is not a failure.
     async _gateConfirm(tx) {
         try {
             return await tx.wait(1, 120000);

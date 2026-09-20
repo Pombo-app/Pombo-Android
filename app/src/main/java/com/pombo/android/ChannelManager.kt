@@ -784,12 +784,18 @@ class ChannelManager(
     data class PaidStatus(
         /** Subscription end, unix seconds (0 = never paid). */
         val paidUntil: Long,
-        /** Owner or moderator: they hold access without ever paying. */
-        val exempt: Boolean
+        val isOwner: Boolean = false,
+        /** Moderators hold access without ever paying. */
+        val moderator: Boolean = false,
+        val banned: Boolean = false
     ) {
+        /** The order is the contract's: owner above all, a ban above both the
+         *  moderator role and the clock. */
         val state: SubscriptionState
             get() = when {
-                exempt -> SubscriptionState.NONE
+                isOwner -> SubscriptionState.NONE
+                banned -> SubscriptionState.BANNED
+                moderator -> SubscriptionState.NONE
                 paidUntil == 0L -> SubscriptionState.UNSUBSCRIBED
                 paidUntil * 1000 > System.currentTimeMillis() -> SubscriptionState.ACTIVE
                 else -> SubscriptionState.EXPIRED
@@ -797,7 +803,7 @@ class ChannelManager(
     }
 
     /** NONE = nothing to say: the viewer owes this channel no subscription. */
-    enum class SubscriptionState { NONE, ACTIVE, EXPIRED, UNSUBSCRIBED }
+    enum class SubscriptionState { NONE, ACTIVE, EXPIRED, UNSUBSCRIBED, BANNED }
 
     private val _paidStatus = MutableStateFlow<PaidStatus?>(null)
     val paidStatus: StateFlow<PaidStatus?> = _paidStatus.asStateFlow()
@@ -809,9 +815,7 @@ class ChannelManager(
             val info = bridge.call("gateInfo", JSONObject().put("gate", gate))
             if (info.optInt("mode", GATE_MODE_NONE) != GATE_MODE_PAID) return null
             val me = myAddress() ?: return null
-            // One states() read answers owner, moderator and paidUntil at the
-            // same block. A cached access verdict cannot: it keeps saying yes
-            // for its TTL after a subscription lapses.
+            // One states() read answers every flag at the same block
             val res = bridge.call("gateMembers", JSONObject()
                 .put("gate", gate)
                 .put("candidates", org.json.JSONArray(listOf(me.lowercase()))), 30_000)
@@ -824,7 +828,9 @@ class ChannelManager(
             val row = mine ?: return null
             PaidStatus(
                 paidUntil = row.optLong("paidUntil", 0L),
-                exempt = row.optBoolean("isOwner") || row.optBoolean("moderator")
+                isOwner = row.optBoolean("isOwner"),
+                moderator = row.optBoolean("moderator"),
+                banned = row.optBoolean("banned")
             )
         } catch (e: Exception) {
             Log.w(TAG, "paid status read failed: ${e.message}")
@@ -841,12 +847,8 @@ class ChannelManager(
         }
     }
 
-    /**
-     * Publish the standing and wake up when it stops being true. A channel
-     * left open renders once: without this the strip keeps showing the
-     * warning it drew before the cutoff, and the composer stays open on a
-     * subscription the network has already stopped accepting.
-     */
+    /** Publish the standing and wake up at the cutoff: a channel left open
+     *  renders once. */
     private fun setPaidStatus(status: PaidStatus?) {
         _paidStatus.value = status
         paidExpiryJob?.cancel()

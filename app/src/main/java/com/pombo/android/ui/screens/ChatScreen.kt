@@ -529,11 +529,15 @@ fun ChatScreen(vm: AppViewModel) {
         // float over content or scroll away. Amber warning is dismissible per
         // viewing session; the expired strip is not.
         var subWarnDismissed by remember(ch.messageStreamId) { mutableStateOf(false) }
+        val accessLost = paidStatus?.state.let {
+            it == ChannelManager.SubscriptionState.EXPIRED
+                || it == ChannelManager.SubscriptionState.UNSUBSCRIBED
+                || it == ChannelManager.SubscriptionState.BANNED
+        }
         paidStatus?.let { ps ->
             val state = ps.state
             val msLeft = ps.paidUntil * 1000L - System.currentTimeMillis()
-            val lapsed = state == ChannelManager.SubscriptionState.EXPIRED
-                || state == ChannelManager.SubscriptionState.UNSUBSCRIBED
+            val lapsed = accessLost
             val warning = state == ChannelManager.SubscriptionState.ACTIVE
                 && msLeft < com.pombo.android.core.GateFormat.WARNING_MS
             if (lapsed || (warning && !subWarnDismissed)) {
@@ -550,24 +554,29 @@ fun ChatScreen(vm: AppViewModel) {
                                 "Subscription expired — new messages stay locked until you renew"
                             ChannelManager.SubscriptionState.UNSUBSCRIBED ->
                                 "No active subscription. New messages stay locked until you subscribe."
+                            ChannelManager.SubscriptionState.BANNED ->
+                                "A moderator removed your access to this channel."
                             else ->
                                 "Subscription ends in ${com.pombo.android.core.GateFormat.formatRemaining(msLeft)}"
                         },
                         color = tint, fontSize = 13.sp, lineHeight = 16.sp,
                         modifier = Modifier.weight(1f)
                     )
-                    Spacer(Modifier.width(8.dp))
-                    Box(
-                        Modifier
-                            .background(PomboColors.Accent.copy(alpha = 0.20f), RoundedCornerShape(10.dp))
-                            .border(1.dp, PomboColors.Accent.copy(alpha = 0.35f), RoundedCornerShape(10.dp))
-                            .clickableNoRipple { vm.renewSubscription() }
-                            .padding(horizontal = 12.dp, vertical = 4.dp)
-                    ) {
-                        Text(
-                            if (state == ChannelManager.SubscriptionState.UNSUBSCRIBED) "Subscribe" else "Renew",
-                            color = Color.White, fontSize = 12.sp, fontWeight = FontWeight.SemiBold
-                        )
+                    // Paying again buys a banned account nothing, so it is not offered.
+                    if (state != ChannelManager.SubscriptionState.BANNED) {
+                        Spacer(Modifier.width(8.dp))
+                        Box(
+                            Modifier
+                                .background(PomboColors.Accent.copy(alpha = 0.20f), RoundedCornerShape(10.dp))
+                                .border(1.dp, PomboColors.Accent.copy(alpha = 0.35f), RoundedCornerShape(10.dp))
+                                .clickableNoRipple { vm.renewSubscription() }
+                                .padding(horizontal = 12.dp, vertical = 4.dp)
+                        ) {
+                            Text(
+                                if (state == ChannelManager.SubscriptionState.UNSUBSCRIBED) "Subscribe" else "Renew",
+                                color = Color.White, fontSize = 12.sp, fontWeight = FontWeight.SemiBold
+                            )
+                        }
                     }
                     if (!lapsed) {
                         Spacer(Modifier.width(8.dp))
@@ -583,19 +592,15 @@ fun ChatScreen(vm: AppViewModel) {
         }
 
         // What is on screen came from the local cache; the storage node
-        // refused to serve more, and the reader should know why.
-        historyError?.takeIf { visible.isNotEmpty() }?.let { refusal ->
-            val (title, detail) = historyErrorText(refusal, isPreview)
-            Column(
-                Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 8.dp),
-                horizontalAlignment = Alignment.CenterHorizontally
-            ) {
-                Text(title, color = Color.White.copy(alpha = 0.40f), fontSize = 13.sp)
-                Text(
-                    detail, color = Color.White.copy(alpha = 0.25f), fontSize = 11.sp,
-                    textAlign = androidx.compose.ui.text.style.TextAlign.Center
-                )
-            }
+        // refused to serve more. The strip above already says why when the
+        // subscription is the reason.
+        historyError?.takeIf { visible.isNotEmpty() && !accessLost }?.let { refusal ->
+            Text(
+                historyErrorText(refusal, isPreview).first,
+                color = Color.White.copy(alpha = 0.40f), fontSize = 13.sp,
+                textAlign = androidx.compose.ui.text.style.TextAlign.Center,
+                modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 8.dp)
+            )
         }
 
         Box(Modifier.weight(1f).fillMaxWidth()) {
@@ -611,12 +616,25 @@ fun ChatScreen(vm: AppViewModel) {
                 ) {
                     // A lapsed subscription and "admin offline" are identical
                     // at the key layer (refusals are silent) — the chain-read
-                    // paid status decides which empty state this is.
+                    // paid status decides which empty state this is, and it
+                    // outranks the node's refusal: the same lapse, no way out.
                     val subState = paidStatus?.state ?: ChannelManager.SubscriptionState.NONE
                     val subLapsed = subState == ChannelManager.SubscriptionState.EXPIRED
                         || subState == ChannelManager.SubscriptionState.UNSUBSCRIBED
-                    val refusal = historyError
-                    if (terminalEmpty && refusal != null) {
+                    val refusal = historyError.takeIf { !accessLost }
+                    if (terminalEmpty && subState == ChannelManager.SubscriptionState.BANNED) {
+                        Text(
+                            "You no longer have access to this channel",
+                            color = Color.White.copy(alpha = 0.40f), fontSize = 14.sp
+                        )
+                        Spacer(Modifier.height(4.dp))
+                        Text(
+                            "A moderator removed it, and paying again would not restore it",
+                            color = Color.White.copy(alpha = 0.25f), fontSize = 12.sp,
+                            textAlign = androidx.compose.ui.text.style.TextAlign.Center,
+                            modifier = Modifier.padding(horizontal = 32.dp)
+                        )
+                    } else if (terminalEmpty && refusal != null) {
                         val (title, detail) = historyErrorText(refusal, isPreview)
                         Text(title, color = Color.White.copy(alpha = 0.40f), fontSize = 14.sp)
                         Spacer(Modifier.height(4.dp))
@@ -626,7 +644,7 @@ fun ChatScreen(vm: AppViewModel) {
                             textAlign = androidx.compose.ui.text.style.TextAlign.Center,
                             modifier = Modifier.padding(horizontal = 32.dp)
                         )
-                    } else if (terminalEmpty && waitingForKeys && subLapsed) {
+                    } else if (terminalEmpty && subLapsed) {
                         val expired = subState == ChannelManager.SubscriptionState.EXPIRED
                         Text(
                             if (expired) "Your subscription has expired" else "No active subscription",
@@ -1049,6 +1067,7 @@ fun ChatScreen(vm: AppViewModel) {
         val composerState = paidStatus?.state ?: ChannelManager.SubscriptionState.NONE
         val composerLapsed = composerState == ChannelManager.SubscriptionState.EXPIRED
             || composerState == ChannelManager.SubscriptionState.UNSUBSCRIBED
+            || composerState == ChannelManager.SubscriptionState.BANNED
         // Whoever the network would refuse gets no composer at all: a disabled
         // field is furniture that only says "not for you". A lapsed
         // subscription keeps its field, because there the placeholder is the
@@ -1057,8 +1076,11 @@ fun ChatScreen(vm: AppViewModel) {
             ChatComposer(
                 input = composerInput,
                 canPost = !composerLapsed,
-                disabledPlaceholder = if (composerState == ChannelManager.SubscriptionState.UNSUBSCRIBED)
-                    "Subscribe to write here" else "Subscription expired — renew to write",
+                disabledPlaceholder = when (composerState) {
+                    ChannelManager.SubscriptionState.UNSUBSCRIBED -> "Subscribe to write here"
+                    ChannelManager.SubscriptionState.BANNED -> "You can no longer write in this channel"
+                    else -> "Subscription expired — renew to write"
+                },
                 onTyping = { vm.notifyTyping() },
                 onPickImage = { vm.sendImage(it) },
                 onPickVideo = { vm.sendVideo(it) },

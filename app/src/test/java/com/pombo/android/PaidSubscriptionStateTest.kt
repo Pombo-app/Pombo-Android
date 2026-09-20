@@ -25,7 +25,12 @@ class PaidSubscriptionStateTest {
 
     private fun secondsFromNow(seconds: Long) = System.currentTimeMillis() / 1000 + seconds
 
-    private fun gateSays(paidUntil: Long, owner: Boolean = false, moderator: Boolean = false) {
+    private fun gateSays(
+        paidUntil: Long,
+        owner: Boolean = false,
+        moderator: Boolean = false,
+        banned: Boolean = false
+    ) {
         coEvery { h.bridge.call("gateInfo", any()) } returns
             JSONObject().put("mode", 3).put("owner", GATE_OWNER)
         coEvery { h.bridge.call("gateMembers", any(), any()) } returns JSONObject()
@@ -33,6 +38,7 @@ class PaidSubscriptionStateTest {
                 .put("address", h.me)
                 .put("isOwner", owner)
                 .put("moderator", moderator)
+                .put("banned", banned)
                 .put("paidUntil", paidUntil)))
     }
 
@@ -67,9 +73,19 @@ class PaidSubscriptionStateTest {
         assertEquals(SubscriptionState.NONE, stateNow())
     }
 
+    @Test fun `a ban outranks a live subscription`() = runBlocking {
+        gateSays(paidUntil = secondsFromNow(3600), banned = true)
+        assertEquals(SubscriptionState.BANNED, stateNow())
+    }
+
+    @Test fun `a ban outranks the moderator role, as the contract does`() = runBlocking {
+        gateSays(paidUntil = 0, moderator = true, banned = true)
+        assertEquals(SubscriptionState.BANNED, stateNow())
+    }
+
     @Test fun `the state is read from the clock, not from a stale access verdict`() {
         assertEquals(SubscriptionState.EXPIRED,
-            PaidStatus(paidUntil = System.currentTimeMillis() / 1000 - 1, exempt = false).state)
+            PaidStatus(paidUntil = System.currentTimeMillis() / 1000 - 1).state)
     }
 
     companion object {

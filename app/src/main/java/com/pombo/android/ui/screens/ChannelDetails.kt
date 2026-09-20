@@ -432,6 +432,7 @@ private fun ChannelDetailsMain(
                     ChannelManager.SubscriptionState.ACTIVE ->
                         com.pombo.android.core.GateFormat.formatRemaining(msLeft) + " left"
                     ChannelManager.SubscriptionState.UNSUBSCRIBED -> "None"
+                    ChannelManager.SubscriptionState.BANNED -> "Access removed"
                     else -> "Expired"
                 },
                 valueColor = when {
