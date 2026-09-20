@@ -2873,10 +2873,22 @@ class AppViewModel(app: Application) : AndroidViewModel(app), PomboBridge.Listen
     }
 
     /** Re-read the on-chain standing (balance / paidUntil are never cached). */
+    private val _gateEntryChecking = MutableStateFlow(false)
+    val gateEntryChecking: StateFlow<Boolean> = _gateEntryChecking.asStateFlow()
+
     fun gateEntryRecheck() = viewModelScope.launch {
         val entry = _gateEntry.value ?: return@launch
-        manager.gateInvalidateAccess(entry.info.gateAddress)
-        openGateEntry(entry.info.gateAddress, entry.channelName, entry.renewal, entry.retry)
+        _gateEntryChecking.value = true
+        try {
+            manager.gateInvalidateAccess(entry.info.gateAddress)
+            // A chain read can answer in tens of ms, and a spinner that brief
+            // reads as a dead button
+            val floor = launch { kotlinx.coroutines.delay(450) }
+            openGateEntry(entry.info.gateAddress, entry.channelName, entry.renewal, entry.retry)
+            floor.join()
+        } finally {
+            _gateEntryChecking.value = false
+        }
     }
 
     /** The current user's PAID standing on the open channel (null = not paid-gated). */

@@ -430,14 +430,31 @@ internal fun GateEntryDialog(vm: AppViewModel, entry: AppViewModel.GateEntry) {
                     contentAlignment = Alignment.Center
                 ) { Text("Cancel", color = Color.White.copy(alpha = 0.50f), fontSize = 13.sp, fontWeight = FontWeight.Medium) }
 
+                val checking by vm.gateEntryChecking.collectAsState()
                 Box(
                     Modifier.weight(1f)
                         .background(Color.White.copy(alpha = 0.05f), RoundedCornerShape(12.dp))
                         .border(1.dp, Color.White.copy(alpha = 0.08f), RoundedCornerShape(12.dp))
-                        .clickableNoRipple { vm.gateEntryRecheck() }
+                        .clickableNoRipple { if (!checking) vm.gateEntryRecheck() }
                         .padding(vertical = 10.dp),
                     contentAlignment = Alignment.Center
-                ) { Text("Check Again", color = Color.White.copy(alpha = 0.70f), fontSize = 13.sp, fontWeight = FontWeight.Medium) }
+                ) {
+                    if (checking) {
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            CircularProgressIndicator(
+                                modifier = Modifier.size(13.dp),
+                                color = Color.White.copy(alpha = 0.70f),
+                                strokeWidth = 2.dp
+                            )
+                            Spacer(Modifier.width(8.dp))
+                            Text("Checking…", color = Color.White.copy(alpha = 0.70f),
+                                fontSize = 13.sp, fontWeight = FontWeight.Medium)
+                        }
+                    } else {
+                        Text("Check Again", color = Color.White.copy(alpha = 0.70f),
+                            fontSize = 13.sp, fontWeight = FontWeight.Medium)
+                    }
+                }
             }
         }
     }
