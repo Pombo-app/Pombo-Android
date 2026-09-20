@@ -18,24 +18,24 @@ object ChainErrors {
     private val KINDS = listOf(
         Kind(
             false,
-            "Insufficient POL for gas fees. Please add POL to your wallet on Polygon network.",
+            "Not enough POL for the network fee",
             "INSUFFICIENT_FUNDS", "insufficient\\s*funds", "not\\s*enough\\s*balance",
             "balance\\s*too\\s*low", "sender\\s*doesn.*have\\s*enough\\s*funds"
         ),
         Kind(
             false,
-            "Transaction failed. This usually means insufficient POL for gas fees or the transaction was rejected.",
+            "The transaction was rejected on chain",
             "CALL_EXCEPTION", "execution\\s*reverted", "transaction\\s*reverted", "revert"
         ),
         // NONCE before NETWORK: "nonce too low" must not fall through.
         Kind(
             true,
-            "Transaction nonce conflict. Please wait and try again.",
+            "Transaction conflict, try again",
             "nonce\\s*too\\s*(low|high)", "NONCE_EXPIRED", "REPLACEMENT_UNDERPRICED", "already\\s*known"
         ),
         Kind(
             true,
-            "Network error. Please check your connection and try again.",
+            "Network error, try again",
             "NETWORK_ERROR", "SERVER_ERROR", "network\\s*error", "timeout", "timed?\\s*out",
             "ECONNREFUSED", "ETIMEDOUT", "fetch\\s*failed", "connection\\s*refused",
             // Bridge-specific transient states the ethers list cannot know.
@@ -43,7 +43,7 @@ object ChainErrors {
         ),
         Kind(
             false,
-            "Gas limit error. The transaction requires more gas than expected.",
+            "The transaction ran out of gas",
             "gas\\s*limit", "out\\s*of\\s*gas", "intrinsic\\s*gas\\s*too\\s*low"
         )
     )
