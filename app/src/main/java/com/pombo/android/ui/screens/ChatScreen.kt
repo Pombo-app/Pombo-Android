@@ -321,10 +321,18 @@ fun ChatScreen(vm: AppViewModel) {
         var dismissedPins by remember(ch.messageStreamId) { mutableStateOf(emptySet<String>()) }
         val livePinIds = pins.map { it.targetId }.toSet()
         LaunchedEffect(livePinIds) { dismissedPins = dismissedPins intersect livePinIds }
+        // Pins ride the open admin stream, so they keep arriving after the
+        // gate stops granting access — the channel's content must not.
+        val accessLost = paidStatus?.state.let {
+            it == ChannelManager.SubscriptionState.EXPIRED
+                || it == ChannelManager.SubscriptionState.UNSUBSCRIBED
+                || it == ChannelManager.SubscriptionState.BANNED
+        }
         // NEWEST first: `pins` arrives in pin order (oldest first), so the banner
         // used to sit on the stalest pin forever. Reversed, it opens on the most
         // recent one and each dismissal walks back one pin through history.
-        val shownPins = pins.filter { it.targetId !in dismissedPins }.asReversed()
+        val shownPins = if (accessLost) emptyList()
+        else pins.filter { it.targetId !in dismissedPins }.asReversed()
 
         // Channel header
         Row(
@@ -501,8 +509,9 @@ fun ChatScreen(vm: AppViewModel) {
                         headerClipboard.setText(androidx.compose.ui.text.AnnotatedString(ch.messageStreamId))
                         vm.toast("Channel ID copied", com.pombo.android.ui.ToastKind.SUCCESS)
                     }
-                    // Web shows this entry only when the channel has pins.
-                    if (shownPins.isNotEmpty()) com.pombo.android.ui.ContextMenuItem(
+                    // The channel's pins, not the ones on screen: dismissing
+                    // the banner is how the reader gets here to bring it back.
+                    if (pins.isNotEmpty() && !accessLost) com.pombo.android.ui.ContextMenuItem(
                         "Pinned", Icons.Filled.PushPin,
                         iconTint = Color(0xFFFBBF24)
                     ) {
@@ -530,11 +539,6 @@ fun ChatScreen(vm: AppViewModel) {
         // float over content or scroll away. Amber warning is dismissible per
         // viewing session; the expired strip is not.
         var subWarnDismissed by remember(ch.messageStreamId) { mutableStateOf(false) }
-        val accessLost = paidStatus?.state.let {
-            it == ChannelManager.SubscriptionState.EXPIRED
-                || it == ChannelManager.SubscriptionState.UNSUBSCRIBED
-                || it == ChannelManager.SubscriptionState.BANNED
-        }
         val accessActive = paidStatus?.state == ChannelManager.SubscriptionState.ACTIVE
         paidStatus?.let { ps ->
             val state = ps.state
