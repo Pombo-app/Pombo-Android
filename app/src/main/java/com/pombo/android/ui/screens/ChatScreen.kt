@@ -27,6 +27,7 @@ import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
@@ -49,6 +50,7 @@ import androidx.compose.material.icons.automirrored.filled.Send
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.AttachFile
 import androidx.compose.material.icons.outlined.SentimentSatisfied
+import androidx.compose.material.icons.filled.Gavel
 import androidx.compose.material.icons.filled.Lock
 import androidx.compose.material.icons.filled.Tag
 import androidx.compose.material.icons.filled.MoreVert
@@ -163,6 +165,7 @@ fun ChatScreen(vm: AppViewModel) {
     val loadingInitial by vm.initialLoad.collectAsState()
     val waitingForKeys by vm.waitingForKeys.collectAsState()
     val paidStatus by vm.paidStatus.collectAsState()
+    val bannedMembers by vm.bannedMembers.collectAsState()
 
     // NATIVE reverse-layout chat (deliberate divergence from the web's
     // top-down DOM): the LazyColumn runs with reverseLayout, so index 0 is the
@@ -322,7 +325,11 @@ fun ChatScreen(vm: AppViewModel) {
         var dismissedPins by remember(ch.messageStreamId) { mutableStateOf(emptySet<String>()) }
         val livePinIds = pins.map { it.targetId }.toSet()
         LaunchedEffect(livePinIds) { dismissedPins = dismissedPins intersect livePinIds }
-        val accessLost = paidStatus?.state.let {
+        // A ban the moderators keep in ADMIN_STATE rather than on the gate:
+        // it hides the author's messages for everyone, so writing here reaches
+        // nobody. The reader is told the same thing either way.
+        val clientBanned = bannedMembers.any { it.equals(myAddr, ignoreCase = true) }
+        val accessLost = clientBanned || paidStatus?.state.let {
             it == ChannelManager.SubscriptionState.EXPIRED
                 || it == ChannelManager.SubscriptionState.UNSUBSCRIBED
                 || it == ChannelManager.SubscriptionState.BANNED
@@ -541,10 +548,14 @@ fun ChatScreen(vm: AppViewModel) {
         // float over content or scroll away. Amber warning is dismissible per
         // viewing session; the expired strip is not.
         var subWarnDismissed by remember(ch.messageStreamId) { mutableStateOf(false) }
-        val accessActive = paidStatus?.state == ChannelManager.SubscriptionState.ACTIVE
-        paidStatus?.let { ps ->
-            val state = ps.state
-            val msLeft = ps.paidUntil * 1000L - System.currentTimeMillis()
+        val accessActive = !clientBanned
+            && paidStatus?.state == ChannelManager.SubscriptionState.ACTIVE
+        // A client ban applies to channels with no gate, which have no standing
+        val subState = if (clientBanned) ChannelManager.SubscriptionState.BANNED
+        else paidStatus?.state ?: ChannelManager.SubscriptionState.NONE
+        if (subState != ChannelManager.SubscriptionState.NONE) {
+            val state = subState
+            val msLeft = (paidStatus?.paidUntil ?: 0L) * 1000L - System.currentTimeMillis()
             val lapsed = accessLost
             val warning = state == ChannelManager.SubscriptionState.ACTIVE
                 && msLeft < com.pombo.android.core.GateFormat.WARNING_MS
@@ -554,9 +565,19 @@ fun ChatScreen(vm: AppViewModel) {
                 Row(
                     Modifier.fillMaxWidth()
                         .background(tint.copy(alpha = 0.08f))
+                        // One line or two, the strip keeps the height the
+                        // Renew button gives it
+                        .heightIn(min = 44.dp)
                         .padding(horizontal = 12.dp, vertical = 7.dp),
                     verticalAlignment = Alignment.CenterVertically
                 ) {
+                    if (state == ChannelManager.SubscriptionState.BANNED) {
+                        Icon(
+                            Icons.Filled.Gavel, contentDescription = null,
+                            tint = tint, modifier = Modifier.size(15.dp)
+                        )
+                        Spacer(Modifier.width(7.dp))
+                    }
                     Text(
                         when (state) {
                             ChannelManager.SubscriptionState.EXPIRED -> "Subscription expired"
@@ -627,7 +648,6 @@ fun ChatScreen(vm: AppViewModel) {
                     // at the key layer (refusals are silent) — the chain-read
                     // paid status decides which empty state this is, and it
                     // outranks the node's refusal: the same lapse, no way out.
-                    val subState = paidStatus?.state ?: ChannelManager.SubscriptionState.NONE
                     val subLapsed = subState == ChannelManager.SubscriptionState.EXPIRED
                         || subState == ChannelManager.SubscriptionState.UNSUBSCRIBED
                     val refusal = historyError.takeIf { !accessLost }
@@ -638,7 +658,7 @@ fun ChatScreen(vm: AppViewModel) {
                         )
                         Spacer(Modifier.height(4.dp))
                         Text(
-                            "A moderator removed it, and paying again would not restore it",
+                            "A moderator removed you",
                             color = Color.White.copy(alpha = 0.25f), fontSize = 12.sp,
                             textAlign = androidx.compose.ui.text.style.TextAlign.Center,
                             modifier = Modifier.padding(horizontal = 32.dp)
@@ -1073,7 +1093,7 @@ fun ChatScreen(vm: AppViewModel) {
 
         // A lapsed subscription cuts the composer too: honest receivers drop
         // the message at ingest — writing into that void is a trap.
-        val composerState = paidStatus?.state ?: ChannelManager.SubscriptionState.NONE
+        val composerState = subState
         val composerLapsed = composerState == ChannelManager.SubscriptionState.EXPIRED
             || composerState == ChannelManager.SubscriptionState.UNSUBSCRIBED
             || composerState == ChannelManager.SubscriptionState.BANNED
