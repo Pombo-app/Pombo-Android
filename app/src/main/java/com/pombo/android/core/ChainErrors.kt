@@ -38,6 +38,8 @@ object ChainErrors {
             "Network error, try again",
             "NETWORK_ERROR", "SERVER_ERROR", "network\\s*error", "timeout", "timed?\\s*out",
             "ECONNREFUSED", "ETIMEDOUT", "fetch\\s*failed", "connection\\s*refused",
+            // What the WebView itself says when a request cannot leave.
+            "failed\\s*to\\s*fetch", "load\\s*failed",
             // Bridge-specific transient states the ethers list cannot know.
             "client\\s*not\\s*connected", "bridge\\s*reloaded", "Could not reach"
         ),
