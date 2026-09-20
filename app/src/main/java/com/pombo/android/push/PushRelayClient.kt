@@ -25,7 +25,9 @@ import kotlin.coroutines.resumeWithException
 class PushRelayClient(
     private val context: Context,
     private val bridge: PomboBridge,
-    private val registry: PushRegistry
+    private val registry: PushRegistry,
+    /** On-chain storage endpoints of a stream (the providers that hold it). */
+    private val resolveEndpoints: suspend (streamId: String) -> List<String> = { emptyList() }
 ) {
 
     private val prefs = context.applicationContext
@@ -139,13 +141,33 @@ class PushRelayClient(
     }
 
     /**
-     * Per-channel opt-in. `native` selects the tag prefix: ONLY native
-     * channels use 'native:' — public, password and DM inboxes all use
-     * 'channel:' (web ChannelSettingsUI: isNative = type === 'native').
+     * Records where a stream's history actually lives, so a wake can be
+     * verified against its own providers instead of an assumed address.
+     * Called as early as the stream is known (inbox creation, channel
+     * create/join), not only at opt-in: the answer is wanted before the
+     * user ever turns notifications on. Silent on failure: the periodic
+     * refresh asks again.
+     */
+    suspend fun rememberEndpoints(streamId: String) {
+        val urls = runCatching { resolveEndpoints(streamId) }.getOrDefault(emptyList())
+        if (urls.isEmpty()) {
+            android.util.Log.d("PomboPush", "no storage endpoints yet for …${streamId.takeLast(20)}")
+            return
+        }
+        registry.rememberEndpoints(streamId, urls)
+    }
+
+    /**
+     * Per-channel opt-in. `native` selects the tag prefix, which is a
+     * historical name for the one gated channels use: the tag is DERIVED from
+     * that prefix and is already baked into every registration the relay
+     * holds, so it cannot be renamed without those devices going silent.
+     * Public, password and DM inboxes use the 'channel:' prefix.
      */
     suspend fun subscribeChannel(streamId: String, type: String, name: String): Boolean {
         if (!enabled) return false
-        val native = type == "native" || type == "gated"
+        rememberEndpoints(streamId)
+        val native = type == "gated"
         val tag = bridge.call(
             "pushTag",
             JSONObject().put("streamId", streamId).put("native", native)
@@ -174,6 +196,7 @@ class PushRelayClient(
      */
     suspend fun subscribeDmInbox(inboxStreamId: String): Boolean {
         if (!enabled) return false
+        rememberEndpoints(inboxStreamId)
         val tag = bridge.call(
             "pushTag",
             JSONObject().put("streamId", inboxStreamId).put("native", false)
@@ -250,6 +273,9 @@ class PushRelayClient(
             token()  // rotation → fetches the fresh token (and clears the flag)
             val tags = ((if (enabled) registry.all().map { it.tag } else emptyList()) + wake).distinct()
             tags.forEach { publishRegistration(it) }
+            // The owner of a channel can move it to another provider at any
+            // time, and this is the one place that runs often enough to notice.
+            if (enabled) registry.all().forEach { rememberEndpoints(it.streamId) }
             wakeTagsDirty = false
             prefs.edit().putLong("last_reregister_ts", System.currentTimeMillis()).apply()
             android.util.Log.d(

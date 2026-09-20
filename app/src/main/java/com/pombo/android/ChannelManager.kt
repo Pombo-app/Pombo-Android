@@ -4962,8 +4962,8 @@ class ChannelManager(
      * post a system notification — it knows whether the app is in front and
      * which conversation is open, which this layer does not.
      */
-    @Volatile var onIncomingMessage: (channel: Channel, sender: String, preview: String) -> Unit =
-        { _, _, _ -> }
+    @Volatile var onIncomingMessage: (channel: Channel, sender: String, preview: String, timestamp: Long) -> Unit =
+        { _, _, _, _ -> }
 
     /**
      * True while the initial resend is still running. The web gates rendering
@@ -6684,7 +6684,7 @@ class ChannelManager(
         // Only live messages from other people are worth a notification —
         // replaying history on open must not fire a burst of them.
         if (!mine && !historical) {
-            onIncomingMessage(channel, sender, msg.text)
+            onIncomingMessage(channel, sender, msg.text, msg.timestamp)
             // No unread badge here: reaching this point means the channel IS
             // open, and the web treats the open channel as read on every render.
             // Messages that arrive for a channel the user just left are badged

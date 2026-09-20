@@ -50,8 +50,12 @@ class PushRegistry(context: Context) {
         emptyList()
     }
 
-    /** Tag lookup is the first filter: an unknown tag is noise, not our channel. */
-    fun byTag(tag: String): Entry? = all().firstOrNull { it.tag.equals(tag, ignoreCase = true) }
+    /**
+     * Tag lookup is the first filter: an unknown tag is noise, not our channel.
+     * EVERY match is returned: one byte of tag collides across this user's own
+     * channels by design, so a single answer is never the whole answer.
+     */
+    fun entriesByTag(tag: String): List<Entry> = all().filter { it.tag.equals(tag, ignoreCase = true) }
 
     fun isSubscribed(streamId: String): Boolean = all().any { it.streamId == streamId }
 
@@ -78,6 +82,33 @@ class PushRegistry(context: Context) {
         save(all().filterNot { it.streamId == streamId })
     }
 
+    /**
+     * Storage endpoints of a stream, resolved on chain (the providers that
+     * actually hold it) rather than assumed. Kept apart from [Entry] because
+     * they are learned EARLIER than the registration: the DM inbox resolves
+     * them when it is created, long before the user turns notifications on.
+     */
+    fun rememberEndpoints(streamId: String, urls: List<String>) {
+        if (streamId.isEmpty() || urls.isEmpty()) return
+        val map = endpointMap()
+        map.put(streamId, JSONArray(urls))
+        prefs.edit().putString(endpointsKey(), map.toString()).apply()
+    }
+
+    fun endpointsFor(streamId: String): List<String> {
+        val arr = endpointMap().optJSONArray(streamId) ?: return emptyList()
+        return (0 until arr.length()).map { arr.optString(it) }.filter { it.isNotEmpty() }
+    }
+
+    private fun endpointMap(): JSONObject = try {
+        JSONObject(prefs.getString(endpointsKey(), null) ?: "{}")
+    } catch (e: Exception) {
+        JSONObject()
+    }
+
+    private fun endpointsKey(): String =
+        if (scopeAddress.isNullOrEmpty()) ENDPOINTS_KEY else "${ENDPOINTS_KEY}_${scopeAddress!!.lowercase()}"
+
     /** Advances the watermark so the same message never notifies twice. */
     fun updateLastSeen(streamId: String, timestamp: Long) {
         val entries = all().map {
@@ -90,5 +121,6 @@ class PushRegistry(context: Context) {
 
     private companion object {
         const val KEY = "push_channels"
+        const val ENDPOINTS_KEY = "push_endpoints"
     }
 }

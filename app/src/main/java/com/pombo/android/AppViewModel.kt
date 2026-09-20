@@ -306,7 +306,10 @@ class AppViewModel(app: Application) : AndroidViewModel(app), PomboBridge.Listen
     // ==================== push notifications ====================
 
     private val pushRegistry = com.pombo.android.core.PushRegistry(app)
-    val push = com.pombo.android.push.PushRelayClient(app, bridge, pushRegistry)
+    val push = com.pombo.android.push.PushRelayClient(
+        app, bridge, pushRegistry,
+        resolveEndpoints = { streamId -> manager.storageEndpoints.rotation(streamId) }
+    )
 
     private val _pushEnabled = MutableStateFlow(push.enabled)
     val pushEnabled: StateFlow<Boolean> = _pushEnabled.asStateFlow()
@@ -378,8 +381,11 @@ class AppViewModel(app: Application) : AndroidViewModel(app), PomboBridge.Listen
      * next global enable.
      */
     private fun autoEnableChannelPush(channel: Channel) {
-        if (!push.enabled) return
         viewModelScope.launch {
+            // Recorded even with push off: the answer has to be there before
+            // the toggle is flipped, not fetched while a wake is waiting.
+            push.rememberEndpoints(channel.messageStreamId)
+            if (!push.enabled) return@launch
             runCatching { push.subscribeChannel(channel.messageStreamId, channel.type, channel.name) }
             _pushRev.value++
         }
@@ -1661,7 +1667,12 @@ class AppViewModel(app: Application) : AndroidViewModel(app), PomboBridge.Listen
         }
         syncKeyResponderSchedule()
         startKeyResponderLoop()
-        manager.onIncomingMessage = { channel, sender, preview ->
+        manager.onIncomingMessage = { channel, sender, preview, timestamp ->
+            // Both paths post under the same notification tag, so the watermark
+            // is what keeps them from overwriting each other. It only moves
+            // forward, so a message this path never saw still notifies.
+            val watched = if (channel.type == "dm") myInboxStreamId() else channel.messageStreamId
+            watched?.let { pushRegistry.updateLastSeen(it, timestamp) }
             // Nothing to notify about if the user is already looking at it —
             // and a muted DM peer stays silent on the in-app path too.
             val looking = appInForeground && current.value?.messageStreamId == channel.messageStreamId
@@ -3190,6 +3201,7 @@ class AppViewModel(app: Application) : AndroidViewModel(app), PomboBridge.Listen
             }
             settingsStore.dmInboxKnown = true
             _hasDmInbox.value = true
+            myInboxStreamId()?.let { push.rememberEndpoints(it) }
             dismissToast(id)
             toast("DM inbox created!", com.pombo.android.ui.ToastKind.SUCCESS)
         } catch (e: Exception) {

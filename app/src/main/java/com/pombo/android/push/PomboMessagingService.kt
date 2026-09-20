@@ -5,6 +5,7 @@ import com.google.firebase.messaging.RemoteMessage
 import com.pombo.android.core.Notifier
 import com.pombo.android.core.PushRegistry
 import com.pombo.android.core.PushVerifier
+import com.pombo.android.core.StorageReadSigner
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
@@ -51,89 +52,115 @@ class PomboMessagingService : FirebaseMessagingService() {
         }
 
         val registry = PushRegistry(applicationContext).apply { scopeAddress = myAddress }
-        val entry = registry.byTag(tag) ?: return
+        val entries = registry.entriesByTag(tag)
+        if (entries.isEmpty()) return
 
         scope.launch {
-            val result = PushVerifier.verify(entry)
-            if (!result.hasNew) return@launch
+            // Read once for the whole wake: the same key signs the storage
+            // reads and opens the sealed envelopes below. Absent before the
+            // first unlock (Direct Boot), where neither is possible.
+            val privateKey = try {
+                com.pombo.android.identity.WalletStore(applicationContext).privateKey
+            } catch (e: Exception) { null }
 
-            registry.updateLastSeen(entry.streamId, result.timestamp)
-
-            var conversationId = entry.streamId
-            var title = entry.name
-            var avatar: android.graphics.Bitmap? = null
-            if (entry.type == "dm-inbox") {
-                // One relay row covers the whole inbox, so the per-peer mute
-                // has to happen here, and the title comes from the sender —
-                // same precedence the UI uses: contact nickname → ENS → the
-                // DM room's local name → short address. Plus the face: ENS
-                // avatar when cached, the generated one otherwise.
-                //
-                // Under sealed sender the row's publisherId is a throwaway
-                // key, so the sender is only knowable by OPENING the envelope
-                // — natively (SealedSenderCrypto): the bridge WebView does
-                // not exist in a dead process. Failure paths fall back to a
-                // generic notification rather than a wrong one: envelope that
-                // is not ours, or the key still locked before the first
-                // unlock (Direct Boot). Legacy plaintext rows keep the
-                // publisherId attribution — it was the wallet in that era.
-                val sender: String? = run {
-                    val content = result.content
-                    if (content != null && content.optInt("v") == 2 && content.has("epk")) {
-                        val pk = try {
-                            com.pombo.android.identity.WalletStore(applicationContext).privateKey
-                        } catch (e: Exception) { null }
-                        if (pk.isNullOrEmpty() || myAddress.isNullOrEmpty()) null
-                        else com.pombo.android.core.SealedSenderCrypto
-                            .open(content, pk, myAddress)?.first
-                    } else {
-                        result.publisherId?.lowercase()
-                    }
+            val verifier = PushVerifier(
+                endpointsFor = { registry.endpointsFor(it) },
+                signHeaders = { url ->
+                    StorageReadSigner.parse(url)?.let { StorageReadSigner.headers(it, privateKey) }
                 }
-                if (sender != null) {
-                    val settings = com.pombo.android.data.SettingsStore(applicationContext)
-                        .apply { scopeAddress = myAddress }
-                    if (sender in settings.mutedDmPeers) return@launch
-                    // Group under the conversation the app opens for this peer
-                    // (its channel id IS the peer's inbox).
-                    conversationId = "$sender/Pombo-DM-1"
-                    val nickname = com.pombo.android.data.ContactsStore(applicationContext)
-                        .apply { scopeAddress = myAddress }
-                        .load().firstOrNull { it.address.equals(sender, ignoreCase = true) }?.nickname
-                    // cachedName/cachedAvatar read memory only, and nothing else fills
-                    // it in this process. Already on IO, and only on the notify branch.
-                    val ens = com.pombo.android.core.EnsStore(applicationContext)
-                        .apply { warmUp() }
-                    val roomName = com.pombo.android.data.ChannelStore(applicationContext)
-                        .apply { scopeAddress = myAddress }
-                        .load().firstOrNull {
-                            it.type == "dm" && it.peerAddress?.equals(sender, ignoreCase = true) == true
-                        }?.name
-                    title = nickname
-                        ?: ens.cachedName(sender)
-                        ?: roomName
-                        ?: (sender.take(6) + "…" + sender.takeLast(4))
-                    avatar = com.pombo.android.core.NotificationAvatar.bitmapFor(
-                        applicationContext, sender,
-                        if (settings.ensAvatars) ens.cachedAvatar(sender) else null
-                    )
+            )
+
+            for (entry in entries) {
+                val result = verifier.verify(entry)
+                if (!result.hasNew) continue
+                registry.updateLastSeen(entry.streamId, result.timestamp)
+                notify(entry, result, myAddress, privateKey)
+            }
+        }
+    }
+
+    private suspend fun notify(
+        entry: PushRegistry.Entry,
+        result: PushVerifier.Result,
+        myAddress: String?,
+        privateKey: String?
+    ) {
+        var conversationId = entry.streamId
+        var title = entry.name
+        var avatar: android.graphics.Bitmap? = null
+        // What the notification body is built from: the envelope as stored,
+        // replaced by the message itself once it opens.
+        var body = result.content
+        if (entry.type == "dm-inbox") {
+            // One relay row covers the whole inbox, so the per-peer mute
+            // has to happen here, and the title comes from the sender —
+            // same precedence the UI uses: contact nickname → ENS → the
+            // DM room's local name → short address. Plus the face: ENS
+            // avatar when cached, the generated one otherwise.
+            //
+            // Under sealed sender the row's publisherId is a throwaway
+            // key, so the sender is only knowable by OPENING the envelope
+            // — natively (SealedSenderCrypto): the bridge WebView does
+            // not exist in a dead process. Failure paths fall back to a
+            // generic notification rather than a wrong one: envelope that
+            // is not ours, or the key still locked before the first
+            // unlock (Direct Boot). Legacy plaintext rows keep the
+            // publisherId attribution — it was the wallet in that era.
+            val sender: String? = run {
+                val content = result.content
+                if (content != null && content.optInt("v") == 2 && content.has("epk")) {
+                    if (privateKey.isNullOrEmpty() || myAddress.isNullOrEmpty()) null
+                    else com.pombo.android.core.SealedSenderCrypto
+                        .open(content, privateKey, myAddress)
+                        ?.also { body = it.second }
+                        ?.first
+                } else {
+                    result.publisherId?.lowercase()
                 }
             }
-
-            // sw.js never notifies while a client is focused — it hands the
-            // event to the app instead. Same here: with the app on screen the
-            // wake becomes an unread update (or nothing, if that conversation
-            // is the one being looked at); the system notification is for a
-            // user who is NOT in the app.
-            if (ForegroundGate.tryHandle(entry.type, conversationId, result.timestamp)) return@launch
-
-            Notifier(applicationContext).postMessage(
-                conversationId = conversationId,
-                title = title,
-                body = PushVerifier.preview(entry.type, result.content),
-                largeIcon = avatar
-            )
+            if (sender != null) {
+                val settings = com.pombo.android.data.SettingsStore(applicationContext)
+                    .apply { scopeAddress = myAddress }
+                if (sender in settings.mutedDmPeers) return
+                // Group under the conversation the app opens for this peer
+                // (its channel id IS the peer's inbox).
+                conversationId = "$sender/Pombo-DM-1"
+                val nickname = com.pombo.android.data.ContactsStore(applicationContext)
+                    .apply { scopeAddress = myAddress }
+                    .load().firstOrNull { it.address.equals(sender, ignoreCase = true) }?.nickname
+                // cachedName/cachedAvatar read memory only, and nothing else fills
+                // it in this process. Already on IO, and only on the notify branch.
+                val ens = com.pombo.android.core.EnsStore(applicationContext)
+                    .apply { warmUp() }
+                val roomName = com.pombo.android.data.ChannelStore(applicationContext)
+                    .apply { scopeAddress = myAddress }
+                    .load().firstOrNull {
+                        it.type == "dm" && it.peerAddress?.equals(sender, ignoreCase = true) == true
+                    }?.name
+                title = nickname
+                    ?: ens.cachedName(sender)
+                    ?: roomName
+                    ?: (sender.take(6) + "…" + sender.takeLast(4))
+                avatar = com.pombo.android.core.NotificationAvatar.bitmapFor(
+                    applicationContext, sender,
+                    if (settings.ensAvatars) ens.cachedAvatar(sender) else null
+                )
+            }
         }
+
+        // sw.js never notifies while a client is focused — it hands the
+        // event to the app instead. Same here: with the app on screen the
+        // wake becomes an unread update (or nothing, if that conversation
+        // is the one being looked at); the system notification is for a
+        // user who is NOT in the app.
+        if (ForegroundGate.tryHandle(entry.type, conversationId, result.timestamp)) return
+
+        Notifier(applicationContext).postMessage(
+            conversationId = conversationId,
+            title = title,
+            body = PushVerifier.preview(entry.type, body),
+            largeIcon = avatar
+        )
     }
 
     /**
