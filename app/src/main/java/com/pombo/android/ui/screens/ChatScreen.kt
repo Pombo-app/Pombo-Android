@@ -543,6 +543,7 @@ fun ChatScreen(vm: AppViewModel) {
                 && msLeft < com.pombo.android.core.GateFormat.WARNING_MS
             if (lapsed || (warning && !subWarnDismissed)) {
                 val tint = if (lapsed) Color(0xFFF87171) else Color(0xFFFBBF24)
+                Box(Modifier.fillMaxWidth().height(1.dp).background(tint.copy(alpha = 0.15f)))
                 Row(
                     Modifier.fillMaxWidth()
                         .background(tint.copy(alpha = 0.08f))
