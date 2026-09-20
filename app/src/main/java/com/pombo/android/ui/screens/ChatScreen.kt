@@ -50,6 +50,7 @@ import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.AttachFile
 import androidx.compose.material.icons.outlined.SentimentSatisfied
 import androidx.compose.material.icons.filled.Lock
+import androidx.compose.material.icons.filled.Tag
 import androidx.compose.material.icons.filled.MoreVert
 import androidx.compose.material.icons.filled.PushPin
 import androidx.compose.material.icons.filled.Close
@@ -321,8 +322,6 @@ fun ChatScreen(vm: AppViewModel) {
         var dismissedPins by remember(ch.messageStreamId) { mutableStateOf(emptySet<String>()) }
         val livePinIds = pins.map { it.targetId }.toSet()
         LaunchedEffect(livePinIds) { dismissedPins = dismissedPins intersect livePinIds }
-        // Pins ride the open admin stream, so they keep arriving after the
-        // gate stops granting access — the channel's content must not.
         val accessLost = paidStatus?.state.let {
             it == ChannelManager.SubscriptionState.EXPIRED
                 || it == ChannelManager.SubscriptionState.UNSUBSCRIBED
@@ -331,7 +330,10 @@ fun ChatScreen(vm: AppViewModel) {
         // NEWEST first: `pins` arrives in pin order (oldest first), so the banner
         // used to sit on the stalest pin forever. Reversed, it opens on the most
         // recent one and each dismissal walks back one pin through history.
-        val shownPins = if (accessLost) emptyList()
+        // Pins ride the open admin stream: they resolve long before the
+        // messages they float over, and after the gate has stopped granting
+        // access. Neither is a moment to draw them in.
+        val shownPins = if (accessLost || loadingInitial) emptyList()
         else pins.filter { it.targetId !in dismissedPins }.asReversed()
 
         // Channel header
@@ -503,7 +505,7 @@ fun ChatScreen(vm: AppViewModel) {
                     // Web DropdownManager copy-stream-id: the id was only
                     // reachable by opening Channel Details and selecting it.
                     com.pombo.android.ui.ContextMenuItem(
-                        "Copy Channel ID", Icons.Outlined.ContentCopy
+                        "Copy Channel ID", Icons.Filled.Tag
                     ) {
                         chMenu = false
                         headerClipboard.setText(androidx.compose.ui.text.AnnotatedString(ch.messageStreamId))
