@@ -2836,8 +2836,6 @@ class AppViewModel(app: Application) : AndroidViewModel(app), PomboBridge.Listen
         val channelName: String?,
         /** Renewing from inside the channel: pay is always offered, no "Enter". */
         val renewal: Boolean = false,
-        /** Author visibility ('members' | 'everyone'), when locally known. */
-        val wireIdentity: String? = null,
         val retry: suspend () -> Unit
     )
 
@@ -2865,12 +2863,7 @@ class AppViewModel(app: Application) : AndroidViewModel(app), PomboBridge.Listen
         renewal: Boolean = false, retry: suspend () -> Unit
     ) {
         try {
-            // Author visibility comes from stream metadata, which the gate
-            // contract knows nothing about — resolve it from local caches.
-            val wireIdentity = manager.channels.value
-                .firstOrNull { it.gateAddress.equals(gateAddress, ignoreCase = true) }?.wireIdentity
-                ?: _explore.value.firstOrNull { it.gateAddress.equals(gateAddress, ignoreCase = true) }?.wireIdentity
-            _gateEntry.value = GateEntry(manager.gateEntryInfo(gateAddress), channelName, renewal, wireIdentity, retry)
+            _gateEntry.value = GateEntry(manager.gateEntryInfo(gateAddress), channelName, renewal, retry)
         } catch (e: Exception) {
             toast(
                 "Could not read the gate contract: ${com.pombo.android.core.ChainErrors.friendly(e)}",

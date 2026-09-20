@@ -2288,8 +2288,7 @@ const api = {
     _gateProviderUrl: null,
     _gateProviderInst: null,
     _gateAccessCache: new Map(), // "gate|user" -> { value, at }
-    // A refusal is kept only for seconds: nothing outside this app can drop
-    // it, and the account holding one is the one gaining access.
+    // Refusals expire far sooner: nothing outside this app can drop one
     _GATE_GRANT_TTL_MS: 10 * 60 * 1000,
     _GATE_DENIAL_TTL_MS: 30 * 1000,
     _gateAccessTtl(value) {

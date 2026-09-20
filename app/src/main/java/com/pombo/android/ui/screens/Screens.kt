@@ -332,7 +332,7 @@ internal fun GateEntryDialog(vm: AppViewModel, entry: AppViewModel.GateEntry) {
             if (subscribed) {
                 val until = java.text.SimpleDateFormat("dd/MM/yy, HH:mm", java.util.Locale.getDefault())
                     .format(java.util.Date(info.paidUntil * 1000L))
-                "Active until $until · ${com.pombo.android.core.GateFormat.formatRemaining(paidMsLeft)} left" to okTone
+                "Active until $until" to okTone
             } else if (info.paidUntil > 0) "Subscription expired" to badTone
             else "No active subscription" to dimTone
         else -> null
@@ -387,21 +387,6 @@ internal fun GateEntryDialog(vm: AppViewModel, entry: AppViewModel.GateEntry) {
                 Spacer(Modifier.height(16.dp))
                 Text(text, color = tone, fontSize = 14.sp,
                     textAlign = androidx.compose.ui.text.style.TextAlign.Center)
-            }
-
-            // Author visibility is a privacy promise the user must see before
-            // paying or entering (web: gate-entry-authors).
-            entry.wireIdentity?.let { mode ->
-                Spacer(Modifier.height(10.dp))
-                val members = mode == "sealed"
-                Text(
-                    if (members) "Sealed identity — authors readable by members only"
-                    else "Every message is signed by its author on the wire",
-                    color = if (members) Color.White.copy(alpha = 0.40f)
-                    else Color(0xFFFBBF24).copy(alpha = 0.70f),
-                    fontSize = 12.sp,
-                    textAlign = androidx.compose.ui.text.style.TextAlign.Center
-                )
             }
 
             if (notes.isNotEmpty()) {

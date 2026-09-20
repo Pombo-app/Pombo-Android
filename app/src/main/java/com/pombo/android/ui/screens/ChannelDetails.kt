@@ -429,11 +429,10 @@ private fun ChannelDetailsMain(
             FactRow(
                 label = "Subscription",
                 value = when (ps.state) {
-                    ChannelManager.SubscriptionState.ACTIVE ->
-                        com.pombo.android.core.GateFormat.formatRemaining(msLeft) + " left"
                     ChannelManager.SubscriptionState.UNSUBSCRIBED -> "None"
                     ChannelManager.SubscriptionState.BANNED -> "Access removed"
-                    else -> "Expired"
+                    else -> java.text.SimpleDateFormat("dd/MM/yy, HH:mm", java.util.Locale.getDefault())
+                        .format(java.util.Date(ps.paidUntil * 1000L))
                 },
                 valueColor = when {
                     ps.state != ChannelManager.SubscriptionState.ACTIVE -> Color(0xFFF87171).copy(alpha = 0.80f)

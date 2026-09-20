@@ -552,19 +552,17 @@ fun ChatScreen(vm: AppViewModel) {
                 ) {
                     Text(
                         when (state) {
-                            ChannelManager.SubscriptionState.EXPIRED ->
-                                "Subscription expired — new messages stay locked until you renew"
-                            ChannelManager.SubscriptionState.UNSUBSCRIBED ->
-                                "No active subscription. New messages stay locked until you subscribe."
+                            ChannelManager.SubscriptionState.EXPIRED -> "Subscription expired"
+                            ChannelManager.SubscriptionState.UNSUBSCRIBED -> "No active subscription"
                             ChannelManager.SubscriptionState.BANNED ->
-                                "A moderator removed your access to this channel."
+                                "A moderator removed your access to this channel"
                             else ->
                                 "Subscription ends in ${com.pombo.android.core.GateFormat.formatRemaining(msLeft)}"
                         },
                         color = tint, fontSize = 13.sp, lineHeight = 16.sp,
                         modifier = Modifier.weight(1f)
                     )
-                    // Paying again buys a banned account nothing, so it is not offered.
+                    // Paying again buys a banned account nothing
                     if (state != ChannelManager.SubscriptionState.BANNED) {
                         Spacer(Modifier.width(8.dp))
                         Box(
@@ -654,7 +652,7 @@ fun ChatScreen(vm: AppViewModel) {
                         )
                         Spacer(Modifier.height(4.dp))
                         Text(
-                            if (expired) "Messages stay locked until you renew — renewing extends from the current end"
+                            if (expired) "Messages stay locked until you renew"
                             else "Messages stay locked until you subscribe",
                             color = Color.White.copy(alpha = 0.25f), fontSize = 12.sp,
                             textAlign = androidx.compose.ui.text.style.TextAlign.Center,
@@ -1537,8 +1535,7 @@ private fun historyErrorText(
     else when (error.status) {
         403 -> if (isPreview)
             "History is available to members" to "Join the channel to read past messages"
-        // The chain says yes and this node says no: it is behind, and telling
-        // the reader their access ended would be a lie.
+        // The chain grants access and this node refuses: it is behind
         else if (hasAccess)
             "Channel history is temporarily unavailable" to
                 "The storage node has not caught up with your access. Reopen the channel to retry"
