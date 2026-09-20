@@ -1077,9 +1077,9 @@ fun ChatScreen(vm: AppViewModel) {
                 input = composerInput,
                 canPost = !composerLapsed,
                 disabledPlaceholder = when (composerState) {
-                    ChannelManager.SubscriptionState.UNSUBSCRIBED -> "Subscribe to write here"
-                    ChannelManager.SubscriptionState.BANNED -> "You can no longer write in this channel"
-                    else -> "Subscription expired — renew to write"
+                    ChannelManager.SubscriptionState.UNSUBSCRIBED -> "Subscribe to write"
+                    ChannelManager.SubscriptionState.BANNED -> "You can no longer write here"
+                    else -> "Renew to write"
                 },
                 onTyping = { vm.notifyTyping() },
                 onPickImage = { vm.sendImage(it) },
