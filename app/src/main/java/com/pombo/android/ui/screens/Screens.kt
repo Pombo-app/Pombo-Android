@@ -2589,7 +2589,7 @@ internal fun PrimaryButton(text: String, enabled: Boolean = true, onClick: () ->
 
 /**
  * The Ethereum logo (two stacked triangles), the glyph the web uses for a
- * gated channel's "Verified Membership" access line (HeaderUI.js). Material
+ * gated channel's access line (HeaderUI.js). Material
  * has no Ethereum icon and Icons.Diamond is a gemstone, not this mark, so it is
  * drawn straight from the web's SVG path (24x24 viewport).
  */
