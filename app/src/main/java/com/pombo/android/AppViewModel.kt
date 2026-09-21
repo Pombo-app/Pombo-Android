@@ -2264,6 +2264,7 @@ class AppViewModel(app: Application) : AndroidViewModel(app), PomboBridge.Listen
             }
             epochKeyStore.save(streamId, local)
         }
+        viewModelScope.launch { manager.epochKeys.refreshPersisted() }
     }
 
     fun dismissMnemonic() { _newMnemonic.value = null }

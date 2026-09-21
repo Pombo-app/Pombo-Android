@@ -1659,6 +1659,17 @@ class EpochKeyManager(
         if (!s.loaded) { loadPersisted(messageStreamId, s); s.loaded = true }
     }
 
+    /**
+     * Re-read the store into every already-hydrated state: [loadPersistedState]
+     * runs once per channel, so a sync pull that lands after it would otherwise
+     * wait for a restart. [loadPersisted] unions, so adopted keys are untouched.
+     */
+    suspend fun refreshPersisted() = mutex.withLock {
+        for ((messageStreamId, s) in state) {
+            if (s.loaded) loadPersisted(messageStreamId, s)
+        }
+    }
+
     // ---- Shared publish key (Sealed) ----
 
     /**
