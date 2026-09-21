@@ -909,8 +909,12 @@ const api = {
     // Drops from a drained resend whatever the registry says may not be there.
     // Applied after the drain because that callback is synchronous; one cache
     // lookup per row, and at most one registry read per stream.
-    async _keepOnlyWriters(streamId, rows) {
-        if (!rows.length) return;
+    //
+    // Never on a gated channel: the registry answers about NOW, so a rotated
+    // publish key takes its whole history with it. There the epoch key and
+    // the kid-freshness rule decide, judged by the clock the message carries.
+    async _keepOnlyWriters(streamId, rows, gated) {
+        if (gated || !rows.length) return;
         const verdicts = await Promise.all(rows.map(function (r) {
             return api._mayWriteHere(streamId, { publisherId: r.meta && r.meta.publisherId });
         }));
@@ -1471,7 +1475,7 @@ const api = {
         }, Date.now() + (a.budgetMs || 40000), { streamId: a.streamId, partition: a.partition });
         const tDrain = Date.now();
         await opener.done();
-        await api._keepOnlyWriters(a.streamId, out);
+        await api._keepOnlyWriters(a.streamId, out, a.gated);
         // drainMs = network. decryptMs = the crypto TAIL only, i.e. the part
         // that found no network wait left to hide behind. A large tail means
         // PBKDF2 is the wall, not the storage node.
@@ -1516,7 +1520,7 @@ const api = {
         // permission filter: a page made only of refused rows still means there
         // is older history behind it.
         const fetched = all.length;
-        await api._keepOnlyWriters(a.streamId, all);
+        await api._keepOnlyWriters(a.streamId, all, a.gated);
         // The resend iterator order is not guaranteed; sort ASC before slicing.
         all.sort((x, y) => (x.meta.timestamp || 0) - (y.meta.timestamp || 0));
         const count = a.last || 50;

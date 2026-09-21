@@ -5140,7 +5140,11 @@ class ChannelManager(
         // every stored message against the PRESENT gate state, which erases
         // ex-members' history. Authorship comes from the recovered envelope
         // signer (gatedAuthor) and stale keys are cut by kid freshness.
-        if (channel.type == "gated") args.put("recoverSigner", true).put("raw", true)
+        // `gated` also spares the page the bridge's writer filter, which asks
+        // the same present-tense question.
+        if (channel.type == "gated") {
+            args.put("recoverSigner", true).put("raw", true).put("gated", true)
+        }
         val res = bridge.call("resend", args, timeoutMs)
         val tResend = System.currentTimeMillis()
         val arr = res.optJSONArray("messages")
@@ -5435,7 +5439,7 @@ class ChannelManager(
      */
     private fun withSignerRecovery(args: JSONObject, streamId: String): JSONObject {
         if (channelByStream(streamId)?.type == "gated") {
-            args.put("recoverSigner", true).put("raw", true)
+            args.put("recoverSigner", true).put("raw", true).put("gated", true)
         }
         return args
     }
