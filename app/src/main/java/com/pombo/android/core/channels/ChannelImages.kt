@@ -349,9 +349,12 @@ internal class ChannelImages(private val manager: ChannelManager) {
         // The heaviest single operation in the app: bitmap decode, then a
         // resolution × quality ladder that re-compresses until the output fits,
         // then SHA-256 per chunk and over the whole image. Never on main.
-        // Sealed transports (DM envelope, password) double the base64 cost, so
-        // their chunks are cut smaller to stay under the 220KB wire ceiling.
+        // Sealed transports double the base64 cost, so their chunks are cut
+        // smaller to stay under the wire ceiling. A gated channel counts as
+        // one: its epoch envelope carries the ciphertext base64 just as the
+        // DM one does.
         val sealed = channel.type == "dm" || channel.password != null
+            || channel.type == "gated" || !channel.gateAddress.isNullOrEmpty()
         val enc = withContext(Dispatchers.Default) {
             com.pombo.android.core.MediaEncoder.encode(
                 input, originalMime,

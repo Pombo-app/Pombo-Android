@@ -216,29 +216,6 @@ fun PomboApp(vm: AppViewModel) {
                 vm.clearError()
             }
         }
-        // Invites arriving over DM stack with the toasts, in the same slot and
-        // the same 380dp column the web uses.
-        val invites by vm.pendingInvites.collectAsState()
-        // Toast expiry hides the card but keeps the invite pending — it stays
-        // reachable from the bell in the Chats header until answered.
-        var expiredInvites by remember { mutableStateOf(setOf<String>()) }
-        Column(
-            Modifier.align(Alignment.TopCenter).padding(top = 29.dp).padding(horizontal = 16.dp),
-            verticalArrangement = Arrangement.spacedBy(12.dp)
-        ) {
-            com.pombo.android.ui.ToastHost(toasts = toasts, onDismiss = vm::dismissToast)
-            invites.filter { it.inviteId !in expiredInvites }.forEach { invite ->
-                androidx.compose.runtime.key(invite.inviteId) {
-                    com.pombo.android.ui.InviteToastCard(
-                        invite = invite,
-                        onAccept = { vm.acceptInvite(invite) },
-                        onDismiss = { vm.dismissInvite(invite.inviteId) },
-                        onExpire = { expiredInvites = expiredInvites + invite.inviteId }
-                    )
-                }
-            }
-        }
-
         val incoming by vm.incomingInvite.collectAsState()
         incoming?.let { inv ->
             com.pombo.android.ui.IncomingInviteDialog(
@@ -277,6 +254,28 @@ fun PomboApp(vm: AppViewModel) {
                 onDismiss = vm::dismissLocalIdentity,
                 onSave = { name, cls -> vm.saveLocalIdentity(ch, name, cls) }
             )
+        }
+
+        // Last in the box: above the gate entry screen's scrim. The dialogs
+        // own a window each and this order does not reach them.
+        val invites by vm.pendingInvites.collectAsState()
+        // Expiry hides the card, never the invite: the bell keeps it.
+        var expiredInvites by remember { mutableStateOf(setOf<String>()) }
+        Column(
+            Modifier.align(Alignment.TopCenter).padding(top = 29.dp).padding(horizontal = 16.dp),
+            verticalArrangement = Arrangement.spacedBy(12.dp)
+        ) {
+            com.pombo.android.ui.ToastHost(toasts = toasts, onDismiss = vm::dismissToast)
+            invites.filter { it.inviteId !in expiredInvites }.forEach { invite ->
+                androidx.compose.runtime.key(invite.inviteId) {
+                    com.pombo.android.ui.InviteToastCard(
+                        invite = invite,
+                        onAccept = { vm.acceptInvite(invite) },
+                        onDismiss = { vm.dismissInvite(invite.inviteId) },
+                        onExpire = { expiredInvites = expiredInvites + invite.inviteId }
+                    )
+                }
+            }
         }
     }
 }
@@ -410,14 +409,34 @@ internal fun GateEntryDialog(vm: AppViewModel, entry: AppViewModel.GateEntry) {
                 subscribed || holds -> "Enter Channel" to { vm.gateEntryEnter(); Unit }
                 else -> null
             }
+            val paying by vm.gateEntryPaying.collectAsState()
             primary?.let { (label, action) ->
                 Box(
                     Modifier.fillMaxWidth()
-                        .background(Color.White, RoundedCornerShape(12.dp))
-                        .clickableNoRipple(action)
+                        .background(
+                            if (paying) Color.White.copy(alpha = 0.40f) else Color.White,
+                            RoundedCornerShape(12.dp)
+                        )
+                        .clickableNoRipple { if (!paying) action() }
                         .padding(vertical = 11.dp),
                     contentAlignment = Alignment.Center
-                ) { Text(label, color = Color.Black, fontSize = 13.sp, fontWeight = FontWeight.Medium, maxLines = 1) }
+                ) {
+                    if (paying) {
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            CircularProgressIndicator(
+                                modifier = Modifier.size(13.dp),
+                                color = Color.Black.copy(alpha = 0.60f),
+                                strokeWidth = 2.dp
+                            )
+                            Spacer(Modifier.width(8.dp))
+                            Text("Paying…", color = Color.Black.copy(alpha = 0.60f),
+                                fontSize = 13.sp, fontWeight = FontWeight.Medium)
+                        }
+                    } else {
+                        Text(label, color = Color.Black, fontSize = 13.sp,
+                            fontWeight = FontWeight.Medium, maxLines = 1)
+                    }
+                }
                 Spacer(Modifier.height(8.dp))
             }
             Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
@@ -2570,7 +2589,7 @@ internal fun PrimaryButton(text: String, enabled: Boolean = true, onClick: () ->
 
 /**
  * The Ethereum logo (two stacked triangles), the glyph the web uses for a
- * gated channel's "Verified Membership" access line (HeaderUI.js). Material
+ * gated channel's access line (HeaderUI.js). Material
  * has no Ethereum icon and Icons.Diamond is a gemstone, not this mark, so it is
  * drawn straight from the web's SVG path (24x24 viewport).
  */

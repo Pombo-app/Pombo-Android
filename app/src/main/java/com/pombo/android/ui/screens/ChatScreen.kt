@@ -712,7 +712,7 @@ fun ChatScreen(vm: AppViewModel) {
                         )
                         Spacer(Modifier.height(4.dp))
                         Text(
-                            "Another member needs to be online to share them",
+                            "Requested from the channel, this can take a moment",
                             color = Color.White.copy(alpha = 0.25f), fontSize = 12.sp
                         )
                     } else if (terminalEmpty) {
@@ -917,7 +917,9 @@ fun ChatScreen(vm: AppViewModel) {
                                 fontSize = 14.sp
                             )
                         }
-                        !hasMoreHistory && visible.isNotEmpty() -> Box(
+                        // A refused read also clears hasMoreHistory, and there
+                        // the start is unknown, not reached.
+                        !hasMoreHistory && historyError == null && visible.isNotEmpty() -> Box(
                             Modifier.fillMaxWidth().padding(vertical = 16.dp),
                             contentAlignment = Alignment.Center
                         ) {

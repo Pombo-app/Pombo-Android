@@ -568,7 +568,9 @@ private fun ChannelAttributeChips(channel: Channel, gateAccess: String?) {
     ) {
         val tint = Color.White.copy(alpha = 0.55f)
         if (channel.type == "gated") {
-            AttributeChip(gateAccess ?: "Verified Membership") {
+            // "Gated" until the gate itself is read: naming a mode here would
+            // state one of the four as fact whenever the read fails.
+            AttributeChip(gateAccess ?: "Gated") {
                 EthereumIcon(tint, Modifier.size(12.dp))
             }
         } else {

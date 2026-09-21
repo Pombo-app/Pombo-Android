@@ -54,7 +54,9 @@ class SyncManager(
 
     /** Web default: 15s of quiet before an auto-push. */
     private val autoPushDelayMs = 15_000L
-    private val maxPayloads = 10
+
+    /** A snapshot is a RUN of messages, so the window must hold several. */
+    private val maxPayloads = 60
 
     /** Floor between lifecycle-triggered syncs (foreground churn is the enemy). */
     private val autoSyncMinIntervalMs = 5 * 60_000L
@@ -122,7 +124,12 @@ class SyncManager(
             // Sealed-to-self v2 under a throwaway publisher (web pushSync):
             // only this account's static key opens it, and the proof inside
             // recovers to this wallet — which the pull verifies.
-            sealPublishToSelf(inbox, StreamConstants.P_SYNC, payload)
+            val messages = com.pombo.android.core.SyncChunks.split(
+                payload, com.pombo.android.core.PomboCrypto.randomHex(8))
+            Log.d(TAG, "push: ${payload.toString().length} B, " +
+                "${payload.optJSONObject("data")?.optJSONArray("channels")?.length() ?: 0} channel(s), " +
+                "${messages.size} message(s)")
+            for (message in messages) sealPublishToSelf(inbox, StreamConstants.P_SYNC, message)
 
             // Our own snapshot is by definition already applied locally.
             store.recordApplied(listOf(ts))
@@ -259,11 +266,7 @@ class SyncManager(
 
     // ==================== image blobs (partition 2) ====================
 
-    /**
-     * Chunk budget mirrors the chat-image protocol so each encrypted envelope
-     * stays under the media payload limit (web: imageChunkInitialRawBytes).
-     */
-    private val blobChunkChars = 150 * 1024
+    private val blobChunkChars = com.pombo.android.core.SyncChunks.CHUNK_CHARS
 
     /** Publishes locally-held images that no device has synced yet. */
     suspend fun pushImageBlobs() {
@@ -419,14 +422,16 @@ class SyncManager(
         // wallet, or a stranger could inject state into our merge. (The web
         // currently skips that second check — flagged to be fixed there.)
         val opened = openAllSealed(arr)
-        val out = mutableListOf<JSONObject>()
+        val mine = mutableListOf<JSONObject>()
         for (i in 0 until arr.length()) {
             val o = opened?.takeIf { !it.isNull(i) }?.optJSONObject(i) ?: continue
             if (!o.optString("sender").equals(me, ignoreCase = true)) continue
-            val payload = o.optJSONObject("message") ?: continue
-            if (payload.optString("type") == "sync" && payload.optInt("v") == 1) out.add(payload)
+            o.optJSONObject("message")?.let { mine.add(it) }
         }
-        return out
+        return com.pombo.android.core.SyncChunks.reassemble(mine) { dropped ->
+            Log.w(TAG, "sync run ${dropped.syncId} dropped " +
+                "(${dropped.have}/${dropped.want}, ${dropped.reason})")
+        }
     }
 
     /** Native sealed open over a resend page; null-per-entry for anything not v2-sealed or not ours. */
@@ -462,6 +467,11 @@ class SyncManager(
         val (envelope, ephemeralPk) = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.Default) {
             com.pombo.android.core.SealedSenderCrypto.seal(payload, myPk, me, recipientPub)
         }
+        // The ceiling applies to the envelope, not the payload: JSON-escaping
+        // the slice and base64 of the ciphertext both inflate it. Measured, a
+        // 150 KB slice lands near 227 KB.
+        val wire = envelope.toString().length
+        if (wire > WIRE_WARN_BYTES) Log.w(TAG, "wire message $wire B — near the network ceiling")
         bridge.call("publishAs", JSONObject()
             .put("streamId", streamId)
             .put("partition", partition)
@@ -475,5 +485,11 @@ class SyncManager(
             .optString("publicKey").let { it.isNotEmpty() && it != "null" }
     } catch (e: Exception) {
         false
+    }
+
+    companion object {
+
+        /** Above this an envelope is close enough to the ceiling to say so. */
+        const val WIRE_WARN_BYTES = 235 * 1024
     }
 }

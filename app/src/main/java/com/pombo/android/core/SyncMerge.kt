@@ -249,6 +249,43 @@ object SyncMerge {
         return result
     }
 
+    /**
+     * Fold one channel's synced key slice into the stored one. A channel holds
+     * more than its epoch keys: on a Sealed channel the shared publish key is
+     * what opens authorship, so a field dropped here leaves history unreadable
+     * on any device that already had state. Content keys union with local
+     * winning (an adopted key never regresses); the keyed ones take the higher
+     * rev, matching [mergeEpochKeys].
+     */
+    fun foldEpochKeySlice(local: JSONObject, incoming: JSONObject): JSONObject {
+        for (field in listOf("epochs", "announces", "pendingRequests")) {
+            val target = local.optJSONObject(field) ?: JSONObject().also { local.put(field, it) }
+            incoming.optJSONObject(field)?.let { inc ->
+                inc.keys().forEach { k -> if (!target.has(k)) target.put(k, inc.get(k)) }
+            }
+        }
+        if (incoming.optInt("currentEpoch") > local.optInt("currentEpoch")) {
+            local.put("currentEpoch", incoming.optInt("currentEpoch"))
+        }
+        for (field in listOf("pubKey", "pubAnnounce", "intKey", "intAnnounce")) {
+            val inc = incoming.optJSONObject(field) ?: continue
+            val cur = local.optJSONObject(field)
+            if (cur == null || inc.optInt("rev") > cur.optInt("rev")) local.put(field, inc)
+        }
+        val helloEpochs = sortedSetOf<Int>()
+        for (src in listOfNotNull(local.optJSONArray("helloEpochs"), incoming.optJSONArray("helloEpochs"))) {
+            for (k in 0 until src.length()) src.optInt(k).takeIf { it > 0 }?.let { helloEpochs.add(it) }
+        }
+        if (helloEpochs.isNotEmpty()) local.put("helloEpochs", JSONArray(helloEpochs.toList()))
+        if (local.optString("helloName").isEmpty()) {
+            incoming.optString("helloName").ifEmpty { null }?.let { local.put("helloName", it) }
+        }
+        if (local.optLong("helloTs") <= 0L && incoming.optLong("helloTs") > 0L) {
+            local.put("helloTs", incoming.optLong("helloTs"))
+        }
+        return local
+    }
+
     /** Exposed for seeding SentReactionsStore from the stored sync base. */
     fun mergeSentReactions(local: JSONObject?, remote: JSONObject?): JSONObject {
         val result = JSONObject()
