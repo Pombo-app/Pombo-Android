@@ -4355,6 +4355,19 @@ class ChannelManager(
         return joined
     }
 
+    private val gateRepairJobs =
+        java.util.concurrent.ConcurrentHashMap<String, kotlinx.coroutines.Job>()
+
+    /**
+     * Blocks until a pending gate repair for this channel has landed. Every
+     * gated key publish resolves the gate from the live record, so the epoch
+     * flow started mid-repair only buys a failure and its retry backoff.
+     */
+    private suspend fun awaitGateRepair(messageStreamId: String) {
+        val job = gateRepairJobs[messageStreamId] ?: return
+        withTimeoutOrNull(GATE_REPAIR_WAIT_MS) { job.join() }
+    }
+
     /**
      * Fills in stream ids a stored channel is missing. Entries persisted by
      * older builds can carry an empty adminStreamId, and every admin read is
@@ -4379,10 +4392,11 @@ class ChannelManager(
             healed = healed.copy(keysStreamId = StreamConstants.deriveKeysId(healed.messageStreamId))
         }
         if (healed.type == "gated" && healed.gateAddress == null) {
-            // Fire-and-forget repair from the stream's on-chain metadata (g).
-            // Publishes on this channel fail loudly until it lands.
+            // Repair from the stream's on-chain metadata (g). Publishes on
+            // this channel fail loudly until it lands; [awaitGateRepair] is
+            // how a caller that cannot work without the gate waits for it.
             val sid = healed.messageStreamId
-            scope.launch {
+            val repair = scope.launch {
                 try {
                     val info = bridge.call("getStreamInfo", JSONObject().put("streamId", sid))
                     val desc = info.optJSONObject("metadata")?.optString("description") ?: ""
@@ -4404,6 +4418,8 @@ class ChannelManager(
                     Log.w(TAG, "Gate repair failed: ${e.message}")
                 }
             }
+            gateRepairJobs[sid] = repair
+            repair.invokeOnCompletion { gateRepairJobs.remove(sid, repair) }
         }
         if (healed !== channel) {
             _channels.value = _channels.value.map {
@@ -4482,6 +4498,7 @@ class ChannelManager(
                 // open's critical path and becomes a background reconcile
                 // (measured: it added ~0.5-2s to every warm open for nothing).
                 if (isEpochChannel(channel) && channel.keysStreamId.isNotEmpty()) {
+                    awaitGateRepair(channel.messageStreamId)
                     epochKeys.loadPersistedState(channel.messageStreamId)
                     if (epochKeys.hasCurrentKey(channel.messageStreamId)) {
                         android.util.Log.d("PomboPerf", "epochKeys ${channel.name}: warm (persisted), reconcile in background")
@@ -5018,6 +5035,8 @@ class ChannelManager(
 
     /** Web: INITIAL_HISTORY_SAFETY_MS in channels.js. */
     private val INITIAL_HISTORY_SAFETY_MS = 30_000L
+
+    private val GATE_REPAIR_WAIT_MS = 10_000L
 
     /**
      * Decrypts a password page's sealed payloads before the ordered merge.
