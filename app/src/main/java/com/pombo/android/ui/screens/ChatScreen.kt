@@ -917,7 +917,9 @@ fun ChatScreen(vm: AppViewModel) {
                                 fontSize = 14.sp
                             )
                         }
-                        !hasMoreHistory && visible.isNotEmpty() -> Box(
+                        // A refused read also clears hasMoreHistory, and there
+                        // the start is unknown, not reached.
+                        !hasMoreHistory && historyError == null && visible.isNotEmpty() -> Box(
                             Modifier.fillMaxWidth().padding(vertical = 16.dp),
                             contentAlignment = Alignment.Center
                         ) {
