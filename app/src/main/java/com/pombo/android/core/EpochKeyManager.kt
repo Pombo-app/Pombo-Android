@@ -143,6 +143,12 @@ class EpochKeyManager(
         var pendingRequest: PendingRequest? = null         // memory only (D12)
         var loaded = false
         var lastMissingRefresh = 0L
+        /**
+         * Kids seen on the wire that no held key opens. [missingEpochsLocked]
+         * is announced-minus-adopted, so an epoch whose announce never arrived
+         * has no other evidence than these. Memory only.
+         */
+        val missingKids = LinkedHashSet<String>()
         /** Consecutive unanswered requests — drives the retry backoff. */
         var requestAttempts = 0
         /**
@@ -335,6 +341,7 @@ class EpochKeyManager(
         // request this old answers a question nobody is asking any more.
         private const val PENDING_REQUEST_MAX_AGE_MS = 30L * 24 * 60 * 60 * 1000
         private const val PENDING_REQUESTS_MAX = 8
+        private const val MISSING_KIDS_MAX = 32
         // Roster (-4/P1) read cache: the members panel refreshes freely; the
         // resend behind it should not.
         private const val ROSTER_CACHE_TTL_MS = 60_000L
@@ -600,7 +607,7 @@ class EpochKeyManager(
             toBootstrap = s.announces.isEmpty() && isOwnAdmin(messageStreamId)
             toRequest = s.announces.isNotEmpty()
                 && (missingEpochsLocked(s).isNotEmpty() || needsPubKeyLocked(messageStreamId, s)
-                    || needsInteractionsKeyLocked(s))
+                    || needsInteractionsKeyLocked(s) || s.missingKids.isNotEmpty())
             if (!toBootstrap && isOwnAdmin(messageStreamId)) {
                 val cur = s.announces[s.currentEpoch]
                 if (cur != null && s.epochs.containsKey(cur.keyId)) {
@@ -647,6 +654,15 @@ class EpochKeyManager(
                 }
             }
         }
+        // No anchor: the mint guard refused, or the announce aged out of
+        // storage. Either way the keys are on other members and asking is the
+        // only way left, admin or not. A virgin channel never reaches here;
+        // the bootstrap gives it epoch 1.
+        val stranded = mutex.withLock {
+            val s = getState(messageStreamId)
+            s.announces.isEmpty() && (s.epochs.isNotEmpty() || isOwnAdmin(messageStreamId))
+        }
+        if (stranded) sendKeyRequest(messageStreamId, keysStreamId, anchorless = true)
 
         // N-B: answer stored requests no wrap covers yet — a member arriving
         // later serves whoever is still waiting, so requester and key-holder
@@ -1546,7 +1562,9 @@ class EpochKeyManager(
      * rate-limited) plus the account's static pubkey, so a v2 wrap answered
      * days later still opens. Only the request id persists — no key material.
      */
-    private suspend fun sendKeyRequest(messageStreamId: String, keysStreamId: String) {
+    private suspend fun sendKeyRequest(
+        messageStreamId: String, keysStreamId: String, anchorless: Boolean = false
+    ) {
         var request: JSONObject? = null
         mutex.withLock {
             val s = getState(messageStreamId)
@@ -1558,7 +1576,13 @@ class EpochKeyManager(
             // The interactions key counts too: a device can hold every epoch
             // key and the publish key and still be unable to react, because the
             // -5 grants publish to the interactions key alone.
-            if (missing.isEmpty() && !needsPubKeyLocked(messageStreamId, s)
+            // `anchorless`: no announce to name what is missing, so the request
+            // asks from the first epoch and takes whatever a member still holds.
+            val stranded = s.missingKids.mapNotNull {
+                it.substringBefore('.').toIntOrNull()
+            }
+            if (!anchorless && missing.isEmpty() && stranded.isEmpty()
+                && !needsPubKeyLocked(messageStreamId, s)
                 && !needsInteractionsKeyLocked(s)) return
             val (priv, pub) = EpochKeyCrypto.generateRequestKeypair()
             val requestId = PomboCrypto.randomHex(16)
@@ -1568,7 +1592,11 @@ class EpochKeyManager(
                 .put("t", StreamConstants.KEY_REQUEST)
                 .put("requestId", requestId)
                 .put("pubkey", pub)
-                .put("fromEpoch", if (missing.isNotEmpty()) missing.min() else 1)
+                .put("fromEpoch", when {
+                    missing.isNotEmpty() -> missing.min()
+                    stranded.isNotEmpty() -> stranded.min()
+                    else -> 1
+                })
             val spk = myPrivateKey()?.let {
                 try { EthereumSigner.compressedPublicKey(it) } catch (e: Exception) { null }
             }
@@ -1612,6 +1640,7 @@ class EpochKeyManager(
     ) {
         s.epochs[keyId] = EpochEntry(keyHex, keyHash, epoch)
         if (epoch > s.currentEpoch) s.currentEpoch = epoch
+        s.missingKids.remove(keyId)
         s.requestAttempts = 0   // future rotations start on the fast retry again
         // Retained request ids exist to catch late v2 wraps; once nothing is
         // missing they only invite redundant answers.
@@ -1950,7 +1979,7 @@ class EpochKeyManager(
             }
         }
         if (lookup == null) {
-            noteMissingKid(messageStreamId, keysStreamId)
+            noteMissingKid(messageStreamId, keysStreamId, kid)
             return null
         }
         if (!lookup.second) {
@@ -2014,7 +2043,7 @@ class EpochKeyManager(
             }
         }
         if (lookup == null) {
-            noteMissingKid(messageStreamId, keysStreamId)
+            noteMissingKid(messageStreamId, keysStreamId, parsed.kid)
             return null
         }
         if (!lookup.second) {
@@ -2061,9 +2090,17 @@ class EpochKeyManager(
     }
 
     /** Unknown kid seen: refresh key state at most once per interval. */
-    private suspend fun noteMissingKid(messageStreamId: String, keysStreamId: String) {
+    private suspend fun noteMissingKid(
+        messageStreamId: String, keysStreamId: String, kid: String? = null
+    ) {
         val refresh = mutex.withLock {
             val s = getState(messageStreamId)
+            if (kid != null) {
+                s.missingKids.add(kid)
+                while (s.missingKids.size > MISSING_KIDS_MAX) {
+                    s.missingKids.remove(s.missingKids.first())
+                }
+            }
             val now = System.currentTimeMillis()
             if (now - s.lastMissingRefresh < REQUEST_MIN_INTERVAL_MS) false
             else { s.lastMissingRefresh = now; true }
