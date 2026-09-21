@@ -54,7 +54,9 @@ class SyncManager(
 
     /** Web default: 15s of quiet before an auto-push. */
     private val autoPushDelayMs = 15_000L
-    private val maxPayloads = 10
+
+    /** A snapshot is a RUN of messages, so the window must hold several. */
+    private val maxPayloads = 60
 
     /** Floor between lifecycle-triggered syncs (foreground churn is the enemy). */
     private val autoSyncMinIntervalMs = 5 * 60_000L
@@ -119,10 +121,40 @@ class SyncManager(
                 .put("ts", ts)
                 .put("data", exportLocal())
 
+            val serialised = payload.toString()
+            Log.d(TAG, "push: ${serialised.length} B, " +
+                "${payload.optJSONObject("data")?.optJSONArray("channels")?.length() ?: 0} channel(s)")
+
             // Sealed-to-self v2 under a throwaway publisher (web pushSync):
             // only this account's static key opens it, and the proof inside
             // recovers to this wallet — which the pull verifies.
-            sealPublishToSelf(inbox, StreamConstants.P_SYNC, payload)
+            //
+            // Over the wire ceiling the network drops the message with no
+            // error the publisher can see, so an account whose state outgrew
+            // it would go on reporting successful pushes forever. Split it
+            // the way image blobs are split.
+            if (serialised.length <= SYNC_CHUNK_CHARS) {
+                sealPublishToSelf(inbox, StreamConstants.P_SYNC, payload)
+            } else {
+                val syncId = com.pombo.android.core.PomboCrypto.randomHex(8)
+                val chunkCount = (serialised.length + SYNC_CHUNK_CHARS - 1) / SYNC_CHUNK_CHARS
+                Log.i(TAG, "push: splitting into $chunkCount chunk(s) (id $syncId)")
+                for (i in 0 until chunkCount) {
+                    sealPublishToSelf(inbox, StreamConstants.P_SYNC, JSONObject()
+                        .put("type", "sync_chunk").put("v", 1)
+                        .put("ts", ts).put("syncId", syncId)
+                        .put("chunkIndex", i).put("chunkCount", chunkCount)
+                        .put("data", serialised.substring(
+                            i * SYNC_CHUNK_CHARS,
+                            minOf((i + 1) * SYNC_CHUNK_CHARS, serialised.length))))
+                }
+                // Last, so a reader that has the manifest knows the run is
+                // complete rather than still arriving.
+                sealPublishToSelf(inbox, StreamConstants.P_SYNC, JSONObject()
+                    .put("type", "sync_manifest").put("v", 1)
+                    .put("ts", ts).put("syncId", syncId)
+                    .put("chunkCount", chunkCount))
+            }
 
             // Our own snapshot is by definition already applied locally.
             store.recordApplied(listOf(ts))
@@ -259,11 +291,7 @@ class SyncManager(
 
     // ==================== image blobs (partition 2) ====================
 
-    /**
-     * Chunk budget mirrors the chat-image protocol so each encrypted envelope
-     * stays under the media payload limit (web: imageChunkInitialRawBytes).
-     */
-    private val blobChunkChars = 150 * 1024
+    private val blobChunkChars = SYNC_CHUNK_CHARS
 
     /** Publishes locally-held images that no device has synced yet. */
     suspend fun pushImageBlobs() {
@@ -420,10 +448,41 @@ class SyncManager(
         // currently skips that second check — flagged to be fixed there.)
         val opened = openAllSealed(arr)
         val out = mutableListOf<JSONObject>()
+        // syncId -> index -> slice, plus the chunk count its manifest claims.
+        val chunks = HashMap<String, HashMap<Int, String>>()
+        val expected = HashMap<String, Int>()
         for (i in 0 until arr.length()) {
             val o = opened?.takeIf { !it.isNull(i) }?.optJSONObject(i) ?: continue
             if (!o.optString("sender").equals(me, ignoreCase = true)) continue
             val payload = o.optJSONObject("message") ?: continue
+            if (payload.optInt("v") != 1) continue
+            when (payload.optString("type")) {
+                "sync" -> out.add(payload)
+                "sync_chunk" -> {
+                    val id = payload.optString("syncId")
+                    val data = payload.optString("data")
+                    val index = payload.optInt("chunkIndex", -1)
+                    if (id.isNotEmpty() && data.isNotEmpty() && index >= 0) {
+                        chunks.getOrPut(id) { HashMap() }[index] = data
+                    }
+                }
+                "sync_manifest" -> payload.optString("syncId").ifEmpty { null }
+                    ?.let { expected[it] = payload.optInt("chunkCount", 0) }
+            }
+        }
+        for ((id, count) in expected) {
+            val parts = chunks[id] ?: continue
+            if (count <= 0 || parts.size != count) {
+                // A run whose head fell out of the window is not half a
+                // snapshot, it is none: applying it would merge a truncated
+                // JSON, so wait for the next push instead.
+                Log.w(TAG, "sync run $id incomplete (${parts.size}/$count) — skipping")
+                continue
+            }
+            val joined = (0 until count).joinToString("") { parts[it] ?: "" }
+            val payload = try { JSONObject(joined) } catch (e: Exception) {
+                Log.w(TAG, "sync run $id did not parse: ${e.message}"); continue
+            }
             if (payload.optString("type") == "sync" && payload.optInt("v") == 1) out.add(payload)
         }
         return out
@@ -462,6 +521,11 @@ class SyncManager(
         val (envelope, ephemeralPk) = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.Default) {
             com.pombo.android.core.SealedSenderCrypto.seal(payload, myPk, me, recipientPub)
         }
+        // The ceiling applies to the envelope, not the payload: JSON-escaping
+        // the slice and base64 of the ciphertext both inflate it. Measured, a
+        // 150 KB slice lands near 227 KB.
+        val wire = envelope.toString().length
+        if (wire > WIRE_WARN_BYTES) Log.w(TAG, "wire message $wire B — near the network ceiling")
         bridge.call("publishAs", JSONObject()
             .put("streamId", streamId)
             .put("partition", partition)
@@ -475,5 +539,18 @@ class SyncManager(
             .optString("publicKey").let { it.isNotEmpty() && it != "null" }
     } catch (e: Exception) {
         false
+    }
+
+    companion object {
+        /**
+         * Characters of cleartext per wire message. Sealing base64s the
+         * ciphertext, so the envelope lands around a third larger — this
+         * budget keeps it clear of the network's message ceiling, which
+         * drops anything over it without telling the publisher.
+         */
+        const val SYNC_CHUNK_CHARS = 150 * 1024
+
+        /** Above this an envelope is close enough to the ceiling to say so. */
+        const val WIRE_WARN_BYTES = 235 * 1024
     }
 }
