@@ -2876,6 +2876,11 @@ class AppViewModel(app: Application) : AndroidViewModel(app), PomboBridge.Listen
     private val _gateEntryChecking = MutableStateFlow(false)
     val gateEntryChecking: StateFlow<Boolean> = _gateEntryChecking.asStateFlow()
 
+    /** A payment in flight. The screen stays up as the failure's retry
+     *  context, so without this its Pay button would start a second one. */
+    private val _gateEntryPaying = MutableStateFlow(false)
+    val gateEntryPaying: StateFlow<Boolean> = _gateEntryPaying.asStateFlow()
+
     fun gateEntryRecheck() = viewModelScope.launch {
         val entry = _gateEntry.value ?: return@launch
         _gateEntryChecking.value = true
@@ -2922,28 +2927,34 @@ class AppViewModel(app: Application) : AndroidViewModel(app), PomboBridge.Listen
 
     fun gateEntryPay() = viewModelScope.launch {
         val entry = _gateEntry.value ?: return@launch
+        if (_gateEntryPaying.value) return@launch
         // Renewal: the dialog's job ends at the tap — the toast narrates the
         // payment from here. (First-time pay keeps the dialog up: on failure
         // it is the retry context.)
         if (entry.renewal) _gateEntry.value = null
-        chainAction(
-            "Pay subscription",
-            "Pays one subscription period to this channel's gate (may wrap POL and approve the token first)."
-        ) {
-            val ok = try {
-                runWithToast(
-                    "Paying subscription…", null, "Payment failed",
-                    onToastId = { payToastId = it }
-                ) {
-                    manager.gatePay(entry.info.gateAddress)
+        _gateEntryPaying.value = true
+        try {
+            chainAction(
+                "Pay subscription",
+                "Pays one subscription period to this channel's gate (may wrap POL and approve the token first)."
+            ) {
+                val ok = try {
+                    runWithToast(
+                        "Paying subscription…", null, "Payment failed",
+                        onToastId = { payToastId = it }
+                    ) {
+                        manager.gatePay(entry.info.gateAddress)
+                    }
+                } finally {
+                    payToastId = null
                 }
-            } finally {
-                payToastId = null
+                if (ok) {
+                    _gateEntry.value = null
+                    entry.retry()
+                }
             }
-            if (ok) {
-                _gateEntry.value = null
-                entry.retry()
-            }
+        } finally {
+            _gateEntryPaying.value = false
         }
     }
 
