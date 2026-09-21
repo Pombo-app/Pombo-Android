@@ -1981,11 +1981,19 @@ class EpochKeyManager(
         gated: Boolean = false, live: Boolean = true, timestamp: Long = 0L
     ): JSONObject? {
         val kid = envelope.optString("k")
+        var known = 0
+        var inForce = -1
         val lookup = mutex.withLock {
             val s = state[messageStreamId]
             val entry = s?.epochs?.get(kid)
             if (entry == null) null else {
                 val fresh = !gated || kidIsFreshLocked(s, kid, entry.epoch, live, timestamp)
+                if (!fresh) {
+                    known = s.announces.size
+                    inForce = s.announces.entries
+                        .filter { it.value.validFrom <= timestamp }
+                        .maxByOrNull { it.value.validFrom }?.key ?: 0
+                }
                 Pair(entry.keyHex, fresh)
             }
         }
@@ -1994,7 +2002,8 @@ class EpochKeyManager(
             return null
         }
         if (!lookup.second) {
-            Log.w(TAG, "kid freshness violation (kid $kid, live=$live) — dropping")
+            Log.w(TAG, "kid freshness violation (kid $kid, live=$live, ts=$timestamp, " +
+                "announces=$known, inForce=$inForce) — dropping")
             return null
         }
         return try {
@@ -2097,7 +2106,13 @@ class EpochKeyManager(
                 epochInForce = epoch
             }
         }
-        return kidEpoch == epochInForce
+        if (kidEpoch == epochInForce) return true
+        // A rotation is two clocks: an author already on the new epoch lands
+        // just before its announce, so the window opens backwards by the same
+        // tolerance the current-epoch branch grants forwards.
+        val announce = s.announces[kidEpoch] ?: return false
+        return announce.validFrom > timestamp &&
+            announce.validFrom - timestamp <= KID_FRESHNESS_TOLERANCE_MS
     }
 
     /** Unknown kid seen: refresh key state at most once per interval. */
