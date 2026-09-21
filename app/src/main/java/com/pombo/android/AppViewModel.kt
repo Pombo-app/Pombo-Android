@@ -2245,24 +2245,11 @@ class AppViewModel(app: Application) : AndroidViewModel(app), PomboBridge.Listen
         slice.keys().forEach { streamId ->
             val incoming = slice.optJSONObject(streamId) ?: return@forEach
             val local = epochKeyStore.load(streamId)
-            if (local == null) {
-                epochKeyStore.save(streamId, incoming)
-                return@forEach
-            }
-            val localEpochs = local.optJSONObject("epochs")
-                ?: JSONObject().also { local.put("epochs", it) }
-            incoming.optJSONObject("epochs")?.let { inc ->
-                inc.keys().forEach { kid -> if (!localEpochs.has(kid)) localEpochs.put(kid, inc.get(kid)) }
-            }
-            val localAnnounces = local.optJSONObject("announces")
-                ?: JSONObject().also { local.put("announces", it) }
-            incoming.optJSONObject("announces")?.let { inc ->
-                inc.keys().forEach { e -> if (!localAnnounces.has(e)) localAnnounces.put(e, inc.get(e)) }
-            }
-            if (incoming.optInt("currentEpoch") > local.optInt("currentEpoch")) {
-                local.put("currentEpoch", incoming.optInt("currentEpoch"))
-            }
-            epochKeyStore.save(streamId, local)
+            epochKeyStore.save(
+                streamId,
+                if (local == null) incoming
+                else com.pombo.android.core.SyncMerge.foldEpochKeySlice(local, incoming)
+            )
         }
         viewModelScope.launch { manager.epochKeys.refreshPersisted() }
     }
