@@ -712,7 +712,7 @@ fun ChatScreen(vm: AppViewModel) {
                         )
                         Spacer(Modifier.height(4.dp))
                         Text(
-                            "Another member needs to be online to share them",
+                            "Requested from the channel, this can take a moment",
                             color = Color.White.copy(alpha = 0.25f), fontSize = 12.sp
                         )
                     } else if (terminalEmpty) {
