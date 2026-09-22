@@ -385,6 +385,8 @@ internal fun MessageGroup(
     /** Starts editing this message in the composer (web parity) — no commit here. */
     onEdit: (UiMessage) -> Unit,
     onDelete: (String) -> Unit,
+    /** Publish again a message whose bubble says "Not sent". */
+    onRetry: (String) -> Unit = {},
     /** Whether deleting this own message also erases it from storage, for the confirm text. */
     ownPurgeApplies: (String) -> Boolean = { false },
     onPin: (String, Boolean) -> Unit,
@@ -551,6 +553,7 @@ internal fun MessageGroup(
                     onReply = { onReply(msg) },
                     onEdit = { onEdit(msg) },
                     onDelete = { onDelete(msg.id) },
+                    onRetry = { onRetry(msg.id) },
                     purgesOnDelete = { ownPurgeApplies(msg.id) },
                     onPin = { pin -> onPin(msg.id, pin) },
                     onHide = { hide -> onHide(msg.id, hide) },
@@ -608,6 +611,7 @@ private fun MessageBubble(
     /** Starts editing this message in the composer (web parity) — no commit here. */
     onEdit: () -> Unit,
     onDelete: () -> Unit,
+    onRetry: () -> Unit = {},
     /** Evaluated when the delete is confirmed, so the text can say what happens on storage. */
     purgesOnDelete: () -> Boolean = { false },
     onPin: (Boolean) -> Unit = {},
@@ -945,12 +949,25 @@ private fun MessageBubble(
                         Text(
                             formatTime(msg.timestamp) +
                                 (if (msg.edited) " · edited" else "") +
-                                (if (msg.pending) " · sending…" else ""),
-                            color = PomboColors.TextDim,
+                                (if (msg.pending) " · sending…" else "") +
+                                (if (msg.failed) " · Not sent" else ""),
+                            color = if (msg.failed) PomboColors.Danger else PomboColors.TextDim,
                             // Web `.message-time` is `text-xs` = 12px.
                             fontSize = 12.sp,
                             modifier = Modifier.align(Alignment.CenterVertically)
                         )
+                        if (msg.failed) {
+                            Spacer(Modifier.width(6.dp))
+                            Text(
+                                "Retry",
+                                color = PomboColors.Danger,
+                                fontSize = 12.sp,
+                                textDecoration = androidx.compose.ui.text.style.TextDecoration.Underline,
+                                modifier = Modifier
+                                    .align(Alignment.CenterVertically)
+                                    .clickableNoRipple(onRetry)
+                            )
+                        }
                         when (msg.verified) {
                             false -> { Spacer(Modifier.width(4.dp)); Text("❌", fontSize = 12.sp) }
                             else -> {}

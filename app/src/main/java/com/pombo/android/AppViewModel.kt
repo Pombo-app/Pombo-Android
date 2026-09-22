@@ -3454,6 +3454,10 @@ class AppViewModel(app: Application) : AndroidViewModel(app), PomboBridge.Listen
         try { manager.sendMessage(text, replyTo) } catch (e: Exception) { _lastError.value = "Failed to send: ${e.message}" }
     }
 
+    fun resendMessage(id: String) = viewModelScope.launch {
+        try { manager.resendMessage(id) } catch (e: Exception) { _lastError.value = "Failed to send: ${e.message}" }
+    }
+
     /** Reads an image from a content Uri and sends it over the chunked transport. */
     fun sendImage(uri: android.net.Uri) = viewModelScope.launch {
         try {

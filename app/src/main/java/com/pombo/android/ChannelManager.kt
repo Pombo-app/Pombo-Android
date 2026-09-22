@@ -83,6 +83,9 @@ data class UiMessage(
     val timestamp: Long,
     val mine: Boolean,
     val pending: Boolean = false,
+    /** The publish threw; `failError` says why. Cleared by a retry or an echo. */
+    val failed: Boolean = false,
+    val failError: String? = null,
     val verified: Boolean? = null,
     /** -1 invalid, 0 valid signature, 1 ENS verified, 2 trusted contact. */
     val trustLevel: Int = 0,
@@ -4035,7 +4038,12 @@ class ChannelManager(
             ensName = ensStore.cachedName(sender),
             ensAvatar = ensStore.cachedAvatar(sender)
         )))
+        publishDm(channel, id, text, sender, timestamp)
+    }
 
+    /** Publish a DM already on the timeline and settle its send state. */
+    private suspend fun publishDm(channel: Channel, id: String, text: String, sender: String, timestamp: Long) {
+        val peer = channel.peerAddress ?: return
         // Wire message, post-D6: no app-layer signature, no `sender`, no
         // `channelId`. Identity travels as the proof inside the sealed
         // envelope (`p`, added by the bridge); a signature here would be a
@@ -4046,11 +4054,16 @@ class ChannelManager(
             .put("senderName", myUsername() ?: JSONObject.NULL)
             .put("timestamp", timestamp).put("replyTo", JSONObject.NULL)
 
-        publishTextWithRetry {
-            publishContent(
-                channel.messageStreamId, StreamConstants.P_MESSAGES,
-                wire, password = null, dmPeer = peer
-            )
+        try {
+            publishTextWithRetry {
+                publishContent(
+                    channel.messageStreamId, StreamConstants.P_MESSAGES,
+                    wire, password = null, dmPeer = peer
+                )
+            }
+        } catch (e: Exception) {
+            markFailed(id, e.message)
+            throw e
         }
         confirmMessage(id)
         // Persist only after the publish succeeded, so a failed send does not
@@ -5468,15 +5481,28 @@ class ChannelManager(
             ensAvatar = ensStore.cachedAvatar(sender)
         )))
 
-        // No app-layer signature (D6): the Streamr envelope authenticates the
-        // publisher and the proof (added by the bridge on ephemeral publishes)
-        // authenticates the account behind it. `sender`/`channelId` stay on
-        // the OBJECT for local use — the bridge strips them at egress; on the
-        // account paths (gated/readOnly) they are simply redundant.
-        val content = JSONObject()
+        publishText(channel, id, textWire(id, trimmed, sender, timestamp, replyTo))
+    }
+
+    /** Send again a message whose publish failed, under the same id. */
+    suspend fun resendMessage(id: String) {
+        val channel = _current.value ?: return
+        val msg = _messages.value.firstOrNull { it.id == id && it.failed } ?: return
+        markSending(id)
+        if (channel.type == "dm") { publishDm(channel, id, msg.text, msg.sender, msg.timestamp); return }
+        publishText(channel, id, textWire(id, msg.text, msg.sender, msg.timestamp, msg.replyTo))
+    }
+
+    // No app-layer signature (D6): the Streamr envelope authenticates the
+    // publisher and the proof (added by the bridge on ephemeral publishes)
+    // authenticates the account behind it. `sender`/`channelId` stay on
+    // the OBJECT for local use — the bridge strips them at egress; on the
+    // account paths (gated/readOnly) they are simply redundant.
+    private fun textWire(id: String, text: String, sender: String, timestamp: Long, replyTo: ReplyRef?): JSONObject =
+        JSONObject()
             .put("type", "text")
             .put("id", id)
-            .put("text", trimmed)
+            .put("text", text)
             .put("sender", sender)
             .put("senderName", myUsername() ?: JSONObject.NULL)
             .put("timestamp", timestamp)
@@ -5488,10 +5514,15 @@ class ChannelManager(
                     .put("text", it.text)
             } ?: JSONObject.NULL)
 
-        // Web publishWithRetry (channels.js:3277): a transient publish failure
-        // left the optimistic bubble stuck on `pending` forever.
-        publishTextWithRetry {
-            publishForChannel(channel, channel.messageStreamId, StreamConstants.P_MESSAGES, content)
+    /** Publish a text already on the timeline and settle its send state. */
+    private suspend fun publishText(channel: Channel, id: String, content: JSONObject) {
+        try {
+            publishTextWithRetry {
+                publishForChannel(channel, channel.messageStreamId, StreamConstants.P_MESSAGES, content)
+            }
+        } catch (e: Exception) {
+            markFailed(id, e.message)
+            throw e
         }
         confirmMessage(id)
         // Without this a message sent from Android never wakes anyone: web
@@ -6894,7 +6925,7 @@ class ChannelManager(
         _messages.value.forEach { byId[it.id] = it }
         fresh.forEach { msg ->
             val existing = byId[msg.id]
-            byId[msg.id] = existing?.copy(pending = false) ?: msg
+            byId[msg.id] = existing?.copy(pending = false, failed = false, failError = null) ?: msg
         }
         _messages.value = byId.values.sortedBy { it.timestamp }
         // A parked override waits for its target; the target may well arrive
@@ -6905,7 +6936,23 @@ class ChannelManager(
 
     @Synchronized
     internal fun confirmMessage(id: String) {
-        _messages.value = _messages.value.map { if (it.id == id) it.copy(pending = false) else it }
+        _messages.value = _messages.value.map {
+            if (it.id == id) it.copy(pending = false, failed = false, failError = null) else it
+        }
+    }
+
+    @Synchronized
+    internal fun markFailed(id: String, reason: String?) {
+        _messages.value = _messages.value.map {
+            if (it.id == id) it.copy(pending = false, failed = true, failError = reason) else it
+        }
+    }
+
+    @Synchronized
+    private fun markSending(id: String) {
+        _messages.value = _messages.value.map {
+            if (it.id == id) it.copy(pending = true, failed = false, failError = null) else it
+        }
     }
 
     /**
