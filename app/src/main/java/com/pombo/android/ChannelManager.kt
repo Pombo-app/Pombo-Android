@@ -258,7 +258,12 @@ class ChannelManager(
             }
             entries
         },
-        onKeyAdopted = { messageStreamId, _ -> refreshAfterEpochKey(messageStreamId) },
+        onKeyAdopted = { messageStreamId, _ ->
+            refreshAfterEpochKey(messageStreamId)
+            // A key this device just minted or adopted is the one thing the
+            // account's other devices cannot get anywhere else
+            onLocalStateChanged()
+        },
         checkGateAccess = { messageStreamId, requester ->
             val channel = channelByStream(messageStreamId)
             if (channel?.type != "gated") true
