@@ -83,6 +83,13 @@ data class UiMessage(
     val timestamp: Long,
     val mine: Boolean,
     val pending: Boolean = false,
+    /** The publish threw; `failError` says why. Cleared by a retry or an echo. */
+    val failed: Boolean = false,
+    val failError: String? = null,
+    /** Storage served the envelope back: the message exists for whoever reads there. */
+    val delivered: Boolean = false,
+    /** Storage never recorded it; travels with `failed`. */
+    val undelivered: Boolean = false,
     val verified: Boolean? = null,
     /** -1 invalid, 0 valid signature, 1 ENS verified, 2 trusted contact. */
     val trustLevel: Int = 0,
@@ -169,6 +176,7 @@ class ChannelManager(
 
     /** Moderation, permissions and gated membership (core/channels). */
     private val admin = Moderation(this)
+    internal val delivery = com.pombo.android.core.channels.DeliveryConfirm(this)
 
     /** Signature verification and the trust ladder (core/channels). */
     private val verification = MessageVerification(this)
@@ -4035,7 +4043,12 @@ class ChannelManager(
             ensName = ensStore.cachedName(sender),
             ensAvatar = ensStore.cachedAvatar(sender)
         )))
+        publishDm(channel, id, text, sender, timestamp)
+    }
 
+    /** Publish a DM already on the timeline and settle its send state. */
+    private suspend fun publishDm(channel: Channel, id: String, text: String, sender: String, timestamp: Long) {
+        val peer = channel.peerAddress ?: return
         // Wire message, post-D6: no app-layer signature, no `sender`, no
         // `channelId`. Identity travels as the proof inside the sealed
         // envelope (`p`, added by the bridge); a signature here would be a
@@ -4046,11 +4059,16 @@ class ChannelManager(
             .put("senderName", myUsername() ?: JSONObject.NULL)
             .put("timestamp", timestamp).put("replyTo", JSONObject.NULL)
 
-        publishTextWithRetry {
-            publishContent(
-                channel.messageStreamId, StreamConstants.P_MESSAGES,
-                wire, password = null, dmPeer = peer
-            )
+        try {
+            publishTextWithRetry {
+                publishContent(
+                    channel.messageStreamId, StreamConstants.P_MESSAGES,
+                    wire, password = null, dmPeer = peer
+                )
+            }
+        } catch (e: Exception) {
+            markFailed(id, e.message)
+            throw e
         }
         confirmMessage(id)
         // Persist only after the publish succeeded, so a failed send does not
@@ -5457,6 +5475,7 @@ class ChannelManager(
         if (trimmed.isEmpty()) return
 
         if (channel.type == "dm") { sendDm(channel, trimmed); return }
+        assertMayPublish(channel)
 
         val id = Protocol.generateMessageId()
         val timestamp = System.currentTimeMillis()
@@ -5468,15 +5487,49 @@ class ChannelManager(
             ensAvatar = ensStore.cachedAvatar(sender)
         )))
 
-        // No app-layer signature (D6): the Streamr envelope authenticates the
-        // publisher and the proof (added by the bridge on ephemeral publishes)
-        // authenticates the account behind it. `sender`/`channelId` stay on
-        // the OBJECT for local use — the bridge strips them at egress; on the
-        // account paths (gated/readOnly) they are simply redundant.
-        val content = JSONObject()
+        publishText(channel, id, textWire(id, trimmed, sender, timestamp, replyTo))
+    }
+
+    /** Send again a message whose publish failed, under the same id. */
+    suspend fun resendMessage(id: String) {
+        val channel = _current.value ?: return
+        val msg = _messages.value.firstOrNull { it.id == id && it.failed } ?: return
+        if (channel.type == "dm") {
+            markSending(id)
+            publishDm(channel, id, msg.text, msg.sender, msg.timestamp)
+            return
+        }
+        assertMayPublish(channel)
+        markSending(id)
+        publishText(channel, id, textWire(id, msg.text, msg.sender, msg.timestamp, msg.replyTo))
+    }
+
+    /**
+     * Refuse before the bubble exists (web MessageFlow._assertMayPublish): a
+     * gated channel asks the gate for the sender's own access. An unreachable
+     * chain lets the publish through, the network refuses what it must.
+     */
+    private suspend fun assertMayPublish(channel: Channel) {
+        if (channel.type != "gated") return
+        val gate = channel.gateAddress ?: return
+        val me = myAddress() ?: throw IllegalStateException("No identity")
+        val res = try {
+            bridge.call("gateCheckAccess", JSONObject().put("gate", gate).put("user", me))
+        } catch (e: Exception) { return }
+        if (res.optBoolean("access", false) || res.optBoolean("failed", false)) return
+        throw IllegalStateException("You do not have permission to send messages in this channel.")
+    }
+
+    // No app-layer signature (D6): the Streamr envelope authenticates the
+    // publisher and the proof (added by the bridge on ephemeral publishes)
+    // authenticates the account behind it. `sender`/`channelId` stay on
+    // the OBJECT for local use — the bridge strips them at egress; on the
+    // account paths (gated/readOnly) they are simply redundant.
+    private fun textWire(id: String, text: String, sender: String, timestamp: Long, replyTo: ReplyRef?): JSONObject =
+        JSONObject()
             .put("type", "text")
             .put("id", id)
-            .put("text", trimmed)
+            .put("text", text)
             .put("sender", sender)
             .put("senderName", myUsername() ?: JSONObject.NULL)
             .put("timestamp", timestamp)
@@ -5488,22 +5541,42 @@ class ChannelManager(
                     .put("text", it.text)
             } ?: JSONObject.NULL)
 
-        // Web publishWithRetry (channels.js:3277): a transient publish failure
-        // left the optimistic bubble stuck on `pending` forever.
-        publishTextWithRetry {
-            publishForChannel(channel, channel.messageStreamId, StreamConstants.P_MESSAGES, content)
+    /** Publish a text already on the timeline and settle its send state. */
+    private suspend fun publishText(channel: Channel, id: String, content: JSONObject) {
+        val envelopeTs = try {
+            publishTextWithRetry {
+                publishForChannel(channel, channel.messageStreamId, StreamConstants.P_MESSAGES, content)
+            }
+        } catch (e: Exception) {
+            markFailed(id, e.message)
+            throw e
         }
         confirmMessage(id)
+        delivery.track(channel, id, envelopeTs)
         // Without this a message sent from Android never wakes anyone: web
         // clients rely on the relay seeing a wake signal on the push stream.
         sendWakeSignal(channel)
     }
 
+    /**
+     * Envelope timestamps storage holds in a window of the message stream, or
+     * null when the read was refused or failed: absence only counts on a read
+     * that was answered.
+     */
+    internal suspend fun readEnvelopeTimes(streamId: String, from: Long, to: Long): List<Long>? {
+        val res = bridge.call("resendEnvelopes", JSONObject()
+            .put("streamId", streamId).put("partition", StreamConstants.P_MESSAGES)
+            .put("from", from).put("to", to), 45_000)
+        if (res.optJSONObject("readError") != null) return null
+        val rows = res.optJSONArray("rows") ?: return null
+        return (0 until rows.length()).map { rows.getJSONObject(it).optLong("timestamp") }
+    }
+
     /** Web publishWithRetry: 3 attempts, 2s apart, then the error surfaces. */
-    internal suspend fun publishTextWithRetry(block: suspend () -> Unit) {
+    internal suspend fun <T> publishTextWithRetry(block: suspend () -> T): T {
         var last: Exception? = null
         repeat(3) { attempt ->
-            try { block(); return } catch (e: Exception) {
+            try { return block() } catch (e: Exception) {
                 last = e
                 if (attempt < 2) delay(2_000)
             }
@@ -6894,7 +6967,7 @@ class ChannelManager(
         _messages.value.forEach { byId[it.id] = it }
         fresh.forEach { msg ->
             val existing = byId[msg.id]
-            byId[msg.id] = existing?.copy(pending = false) ?: msg
+            byId[msg.id] = existing?.copy(pending = false, failed = false, failError = null, undelivered = false) ?: msg
         }
         _messages.value = byId.values.sortedBy { it.timestamp }
         // A parked override waits for its target; the target may well arrive
@@ -6905,7 +6978,37 @@ class ChannelManager(
 
     @Synchronized
     internal fun confirmMessage(id: String) {
-        _messages.value = _messages.value.map { if (it.id == id) it.copy(pending = false) else it }
+        _messages.value = _messages.value.map {
+            if (it.id == id) it.copy(pending = false, failed = false, failError = null, undelivered = false) else it
+        }
+    }
+
+    @Synchronized
+    internal fun markFailed(id: String, reason: String?) {
+        _messages.value = _messages.value.map {
+            if (it.id == id) it.copy(pending = false, failed = true, failError = reason) else it
+        }
+    }
+
+    @Synchronized
+    internal fun markDelivered(id: String) {
+        _messages.value = _messages.value.map { if (it.id == id) it.copy(delivered = true) else it }
+    }
+
+    @Synchronized
+    internal fun markUndelivered(id: String, reason: String) {
+        _messages.value = _messages.value.map {
+            if (it.id == id) it.copy(pending = false, failed = true, undelivered = true, failError = reason) else it
+        }
+    }
+
+    @Synchronized
+    private fun markSending(id: String) {
+        _messages.value = _messages.value.map {
+            if (it.id == id) {
+                it.copy(pending = true, failed = false, failError = null, delivered = false, undelivered = false)
+            } else it
+        }
     }
 
     /**

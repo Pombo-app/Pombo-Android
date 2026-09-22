@@ -1449,6 +1449,25 @@ const api = {
         return storageFetch.lastReadError(a.streamId, a.partition) || {};
     },
 
+    // Envelope coordinates in a window of a stream: raw, nothing opened or
+    // validated, the caller matches timestamps. A refused read drains as
+    // empty, so `readError` travels with the rows.
+    async resendEnvelopes(a) {
+        if (!client) throw new Error('client not connected');
+        const stream = await client.resend(
+            { streamId: a.streamId, partition: a.partition },
+            { from: { timestamp: a.from }, to: { timestamp: a.to }, raw: true }
+        );
+        const rows = [];
+        for await (const msg of stream) {
+            rows.push({
+                timestamp: msg.timestamp,
+                publisherId: msg.publisherId != null ? String(msg.publisherId) : null
+            });
+        }
+        return { rows: rows, readError: storageFetch.lastReadError(a.streamId, a.partition) };
+    },
+
     async resend(a) {
         if (!client) throw new Error('client not connected');
         const pwKey = a.password ? await api._pwKey(a.password) : null;
