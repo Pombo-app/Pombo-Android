@@ -90,7 +90,9 @@ import androidx.compose.material.icons.outlined.PersonAddAlt
 import androidx.compose.material.icons.outlined.Edit
 import androidx.compose.material.icons.outlined.Settings
 import androidx.compose.material.icons.outlined.Campaign
+import androidx.compose.material.icons.outlined.ErrorOutline
 import androidx.compose.material.icons.outlined.Lock
+import androidx.compose.material.icons.outlined.Schedule
 import androidx.compose.material.icons.outlined.Public
 import androidx.compose.material.icons.outlined.Storage
 import androidx.compose.material.icons.automirrored.filled.Logout
@@ -101,8 +103,11 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.zIndex
 import androidx.compose.ui.unit.sp
+import androidx.compose.ui.draw.drawBehind
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.Path
+import androidx.compose.ui.graphics.drawscope.Stroke
 import com.pombo.android.AppViewModel
 import com.pombo.android.ChannelManager
 import com.pombo.android.NetStatus
@@ -561,61 +566,88 @@ fun ChatScreen(vm: AppViewModel) {
                 && msLeft < com.pombo.android.core.GateFormat.WARNING_MS
             if (lapsed || (warning && !subWarnDismissed)) {
                 val tint = if (lapsed) Color(0xFFF87171) else Color(0xFFFBBF24)
-                Box(Modifier.fillMaxWidth().height(1.dp).background(tint.copy(alpha = 0.15f)))
-                Row(
+                val stripShape = RoundedCornerShape(bottomStart = 12.dp, bottomEnd = 12.dp)
+                val edge = tint.copy(alpha = 0.15f)
+                Box(
                     Modifier.fillMaxWidth()
-                        .background(tint.copy(alpha = 0.08f))
-                        // One line or two, the strip keeps the height the
-                        // Renew button gives it
-                        .heightIn(min = 44.dp)
-                        .padding(horizontal = 12.dp, vertical = 7.dp),
-                    verticalAlignment = Alignment.CenterVertically
+                        .background(tint.copy(alpha = 0.08f), stripShape)
+                        .drawBehind {
+                            val r = 12.dp.toPx()
+                            val w = 1.dp.toPx()
+                            val i = w / 2
+                            drawPath(
+                                Path().apply {
+                                    moveTo(i, 0f)
+                                    lineTo(i, size.height - i - r)
+                                    quadraticTo(i, size.height - i, i + r, size.height - i)
+                                    lineTo(size.width - i - r, size.height - i)
+                                    quadraticTo(
+                                        size.width - i, size.height - i,
+                                        size.width - i, size.height - i - r
+                                    )
+                                    lineTo(size.width - i, 0f)
+                                },
+                                edge,
+                                style = Stroke(width = w)
+                            )
+                        }
                 ) {
-                    if (state == ChannelManager.SubscriptionState.BANNED) {
+                    Row(
+                        Modifier.fillMaxWidth()
+                            // One line or two, the strip keeps the height the
+                            // Renew button gives it
+                            .heightIn(min = 44.dp)
+                            .padding(horizontal = 12.dp, vertical = 7.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
                         Icon(
-                            Icons.Filled.Gavel, contentDescription = null,
-                            tint = tint, modifier = Modifier.size(15.dp)
+                            when (state) {
+                                ChannelManager.SubscriptionState.BANNED -> Icons.Filled.Gavel
+                                ChannelManager.SubscriptionState.ACTIVE -> Icons.Outlined.Schedule
+                                else -> Icons.Outlined.ErrorOutline
+                            },
+                            contentDescription = null,
+                            tint = tint, modifier = Modifier.size(16.dp)
                         )
                         Spacer(Modifier.width(7.dp))
-                    }
-                    Text(
-                        when (state) {
-                            ChannelManager.SubscriptionState.EXPIRED -> "Subscription expired"
-                            ChannelManager.SubscriptionState.UNSUBSCRIBED -> "No active subscription"
-                            ChannelManager.SubscriptionState.BANNED ->
-                                "A moderator removed your access to this channel"
-                            else ->
-                                "Subscription ends in ${com.pombo.android.core.GateFormat.formatRemaining(msLeft)}"
-                        },
-                        color = tint, fontSize = 13.sp, lineHeight = 16.sp,
-                        modifier = Modifier.weight(1f)
-                    )
-                    // Paying again buys a banned account nothing
-                    if (state != ChannelManager.SubscriptionState.BANNED) {
-                        Spacer(Modifier.width(8.dp))
-                        Box(
-                            Modifier
-                                .background(PomboColors.Accent.copy(alpha = 0.20f), RoundedCornerShape(10.dp))
-                                .border(1.dp, PomboColors.Accent.copy(alpha = 0.35f), RoundedCornerShape(10.dp))
-                                .clickableNoRipple { vm.renewSubscription() }
-                                .padding(horizontal = 12.dp, vertical = 4.dp)
-                        ) {
-                            Text(
-                                if (state == ChannelManager.SubscriptionState.UNSUBSCRIBED) "Subscribe" else "Renew",
-                                color = Color.White, fontSize = 12.sp, fontWeight = FontWeight.SemiBold
+                        Text(
+                            when (state) {
+                                ChannelManager.SubscriptionState.EXPIRED -> "Subscription expired"
+                                ChannelManager.SubscriptionState.UNSUBSCRIBED -> "No active subscription"
+                                ChannelManager.SubscriptionState.BANNED ->
+                                    "A moderator removed your access to this channel"
+                                else ->
+                                    "Subscription ends in ${com.pombo.android.core.GateFormat.formatRemaining(msLeft)}"
+                            },
+                            color = tint, fontSize = 13.sp, lineHeight = 16.sp,
+                            modifier = Modifier.weight(1f)
+                        )
+                        // Paying again buys a banned account nothing
+                        if (state != ChannelManager.SubscriptionState.BANNED) {
+                            Spacer(Modifier.width(8.dp))
+                            Box(
+                                Modifier
+                                    .background(PomboColors.Accent.copy(alpha = 0.20f), RoundedCornerShape(10.dp))
+                                    .border(1.dp, PomboColors.Accent.copy(alpha = 0.35f), RoundedCornerShape(10.dp))
+                                    .clickableNoRipple { vm.renewSubscription() }
+                                    .padding(horizontal = 12.dp, vertical = 4.dp)
+                            ) {
+                                Text(
+                                    if (state == ChannelManager.SubscriptionState.UNSUBSCRIBED) "Subscribe" else "Renew",
+                                    color = Color.White, fontSize = 12.sp, fontWeight = FontWeight.SemiBold
+                                )
+                            }
+                        }
+                        if (!lapsed) {
+                            Spacer(Modifier.width(8.dp))
+                            Icon(
+                                Icons.Filled.Close, contentDescription = "Dismiss subscription warning",
+                                tint = Color.White.copy(alpha = 0.35f),
+                                modifier = Modifier.size(16.dp).clickableNoRipple { subWarnDismissed = true }
                             )
                         }
                     }
-                    if (!lapsed) {
-                        Spacer(Modifier.width(8.dp))
-                        Icon(
-                            Icons.Filled.Close, contentDescription = "Dismiss subscription warning",
-                            tint = Color.White.copy(alpha = 0.35f),
-                            modifier = Modifier.size(16.dp).clickableNoRipple { subWarnDismissed = true }
-                        )
-                    }
                 }
-                Box(Modifier.fillMaxWidth().height(1.dp).background(tint.copy(alpha = 0.15f)))
             }
         }
 
@@ -652,6 +684,12 @@ fun ChatScreen(vm: AppViewModel) {
                         || subState == ChannelManager.SubscriptionState.UNSUBSCRIBED
                     val refusal = historyError.takeIf { !accessLost }
                     if (terminalEmpty && subState == ChannelManager.SubscriptionState.BANNED) {
+                        Icon(
+                            Icons.Filled.Gavel, contentDescription = null,
+                            tint = Color.White.copy(alpha = 0.25f),
+                            modifier = Modifier.size(24.dp)
+                        )
+                        Spacer(Modifier.height(12.dp))
                         Text(
                             "You no longer have access to this channel",
                             color = Color.White.copy(alpha = 0.40f), fontSize = 14.sp
