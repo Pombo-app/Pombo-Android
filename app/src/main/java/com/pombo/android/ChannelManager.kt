@@ -86,6 +86,10 @@ data class UiMessage(
     /** The publish threw; `failError` says why. Cleared by a retry or an echo. */
     val failed: Boolean = false,
     val failError: String? = null,
+    /** Storage served the envelope back: the message exists for whoever reads there. */
+    val delivered: Boolean = false,
+    /** Storage never recorded it; travels with `failed`. */
+    val undelivered: Boolean = false,
     val verified: Boolean? = null,
     /** -1 invalid, 0 valid signature, 1 ENS verified, 2 trusted contact. */
     val trustLevel: Int = 0,
@@ -172,6 +176,7 @@ class ChannelManager(
 
     /** Moderation, permissions and gated membership (core/channels). */
     private val admin = Moderation(this)
+    internal val delivery = com.pombo.android.core.channels.DeliveryConfirm(this)
 
     /** Signature verification and the trust ladder (core/channels). */
     private val verification = MessageVerification(this)
@@ -5516,7 +5521,7 @@ class ChannelManager(
 
     /** Publish a text already on the timeline and settle its send state. */
     private suspend fun publishText(channel: Channel, id: String, content: JSONObject) {
-        try {
+        val envelopeTs = try {
             publishTextWithRetry {
                 publishForChannel(channel, channel.messageStreamId, StreamConstants.P_MESSAGES, content)
             }
@@ -5525,16 +5530,31 @@ class ChannelManager(
             throw e
         }
         confirmMessage(id)
+        delivery.track(channel, id, envelopeTs)
         // Without this a message sent from Android never wakes anyone: web
         // clients rely on the relay seeing a wake signal on the push stream.
         sendWakeSignal(channel)
     }
 
+    /**
+     * Envelope timestamps storage holds in a window of the message stream, or
+     * null when the read was refused or failed: absence only counts on a read
+     * that was answered.
+     */
+    internal suspend fun readEnvelopeTimes(streamId: String, from: Long, to: Long): List<Long>? {
+        val res = bridge.call("resendEnvelopes", JSONObject()
+            .put("streamId", streamId).put("partition", StreamConstants.P_MESSAGES)
+            .put("from", from).put("to", to), 45_000)
+        if (res.optJSONObject("readError") != null) return null
+        val rows = res.optJSONArray("rows") ?: return null
+        return (0 until rows.length()).map { rows.getJSONObject(it).optLong("timestamp") }
+    }
+
     /** Web publishWithRetry: 3 attempts, 2s apart, then the error surfaces. */
-    internal suspend fun publishTextWithRetry(block: suspend () -> Unit) {
+    internal suspend fun <T> publishTextWithRetry(block: suspend () -> T): T {
         var last: Exception? = null
         repeat(3) { attempt ->
-            try { block(); return } catch (e: Exception) {
+            try { return block() } catch (e: Exception) {
                 last = e
                 if (attempt < 2) delay(2_000)
             }
@@ -6925,7 +6945,7 @@ class ChannelManager(
         _messages.value.forEach { byId[it.id] = it }
         fresh.forEach { msg ->
             val existing = byId[msg.id]
-            byId[msg.id] = existing?.copy(pending = false, failed = false, failError = null) ?: msg
+            byId[msg.id] = existing?.copy(pending = false, failed = false, failError = null, undelivered = false) ?: msg
         }
         _messages.value = byId.values.sortedBy { it.timestamp }
         // A parked override waits for its target; the target may well arrive
@@ -6937,7 +6957,7 @@ class ChannelManager(
     @Synchronized
     internal fun confirmMessage(id: String) {
         _messages.value = _messages.value.map {
-            if (it.id == id) it.copy(pending = false, failed = false, failError = null) else it
+            if (it.id == id) it.copy(pending = false, failed = false, failError = null, undelivered = false) else it
         }
     }
 
@@ -6949,9 +6969,23 @@ class ChannelManager(
     }
 
     @Synchronized
+    internal fun markDelivered(id: String) {
+        _messages.value = _messages.value.map { if (it.id == id) it.copy(delivered = true) else it }
+    }
+
+    @Synchronized
+    internal fun markUndelivered(id: String, reason: String) {
+        _messages.value = _messages.value.map {
+            if (it.id == id) it.copy(pending = false, failed = true, undelivered = true, failError = reason) else it
+        }
+    }
+
+    @Synchronized
     private fun markSending(id: String) {
         _messages.value = _messages.value.map {
-            if (it.id == id) it.copy(pending = true, failed = false, failError = null) else it
+            if (it.id == id) {
+                it.copy(pending = true, failed = false, failError = null, delivered = false, undelivered = false)
+            } else it
         }
     }
 

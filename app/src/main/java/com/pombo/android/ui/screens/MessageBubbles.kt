@@ -950,7 +950,7 @@ private fun MessageBubble(
                             formatTime(msg.timestamp) +
                                 (if (msg.edited) " · edited" else "") +
                                 (if (msg.pending) " · sending…" else "") +
-                                (if (msg.failed) " · Not sent" else ""),
+                                (if (msg.failed) (if (msg.undelivered) " · Not delivered" else " · Not sent") else ""),
                             color = if (msg.failed) PomboColors.Danger else PomboColors.TextDim,
                             // Web `.message-time` is `text-xs` = 12px.
                             fontSize = 12.sp,
