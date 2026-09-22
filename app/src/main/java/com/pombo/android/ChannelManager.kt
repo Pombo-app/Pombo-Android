@@ -5475,6 +5475,7 @@ class ChannelManager(
         if (trimmed.isEmpty()) return
 
         if (channel.type == "dm") { sendDm(channel, trimmed); return }
+        assertMayPublish(channel)
 
         val id = Protocol.generateMessageId()
         val timestamp = System.currentTimeMillis()
@@ -5493,9 +5494,30 @@ class ChannelManager(
     suspend fun resendMessage(id: String) {
         val channel = _current.value ?: return
         val msg = _messages.value.firstOrNull { it.id == id && it.failed } ?: return
+        if (channel.type == "dm") {
+            markSending(id)
+            publishDm(channel, id, msg.text, msg.sender, msg.timestamp)
+            return
+        }
+        assertMayPublish(channel)
         markSending(id)
-        if (channel.type == "dm") { publishDm(channel, id, msg.text, msg.sender, msg.timestamp); return }
         publishText(channel, id, textWire(id, msg.text, msg.sender, msg.timestamp, msg.replyTo))
+    }
+
+    /**
+     * Refuse before the bubble exists (web MessageFlow._assertMayPublish): a
+     * gated channel asks the gate for the sender's own access. An unreachable
+     * chain lets the publish through, the network refuses what it must.
+     */
+    private suspend fun assertMayPublish(channel: Channel) {
+        if (channel.type != "gated") return
+        val gate = channel.gateAddress ?: return
+        val me = myAddress() ?: throw IllegalStateException("No identity")
+        val res = try {
+            bridge.call("gateCheckAccess", JSONObject().put("gate", gate).put("user", me))
+        } catch (e: Exception) { return }
+        if (res.optBoolean("access", false) || res.optBoolean("failed", false)) return
+        throw IllegalStateException("You do not have permission to send messages in this channel.")
     }
 
     // No app-layer signature (D6): the Streamr envelope authenticates the

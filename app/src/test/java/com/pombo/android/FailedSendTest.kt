@@ -24,9 +24,12 @@ class FailedSendTest {
     private val peer = "0x1563915e194d8cfba1943570603f7606a3115508"
     private val peerPublicKey = "0x02466d7fcae563e5cb09a0d1870bb580344804617879a14949cf22285f1bae3f27"
     private val dmId = "$peer/Pombo-DM-1"
+    private val gate = "0x" + "cd".repeat(20)
+    private val gatedId = "$me/gated-1"
     private val h = ChannelManagerHarness(channels = listOf(
         ChannelManagerHarness.channel(streamId),
-        ChannelManagerHarness.channel(dmId, type = "dm").copy(peerAddress = peer)
+        ChannelManagerHarness.channel(dmId, type = "dm").copy(peerAddress = peer),
+        ChannelManagerHarness.channel(gatedId, type = "gated").copy(gateAddress = gate)
     ))
     private val manager = h.manager
 
@@ -124,6 +127,28 @@ class FailedSendTest {
         assertFalse(bubble().pending)
         assertNull(bubble().failError)
         assertEquals(1, sealedPublishes)
+    }
+
+    @Test
+    fun `a gated channel asks the gate first and refuses before any bubble exists`() {
+        manager.openChannel(gatedId)
+        coEvery { h.bridge.call("gateCheckAccess", any()) } returns JSONObject().put("access", false)
+
+        val error = runCatching { runBlocking { manager.sendMessage("hello") } }.exceptionOrNull()
+
+        assertTrue(error?.message?.contains("permission") == true)
+        assertTrue(manager.messages.value.isEmpty())
+        assertEquals(0, h.published.count { it.contains("\"type\":\"text\"") })
+    }
+
+    @Test
+    fun `a gated channel lets the send through when the chain cannot answer`() {
+        manager.openChannel(gatedId)
+        coEvery { h.bridge.call("gateCheckAccess", any()) } returns JSONObject().put("access", false).put("failed", true)
+
+        runCatching { runBlocking { manager.sendMessage("hello") } }
+
+        assertEquals("hello", bubble().text)
     }
 
     @Test
