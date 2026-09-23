@@ -1380,7 +1380,7 @@ class ChannelManager(
 
     suspend fun gateBannedMembers(): List<String> = admin.gateBannedMembers()
 
-    private suspend fun rotateForLostAccess(channel: Channel) = admin.rotateForLostAccess(channel)
+    internal suspend fun rotateForLostAccess(channel: Channel) = admin.rotateForLostAccess(channel)
 
     suspend fun channelMembers(): List<MemberRow> = admin.channelMembers()
 
@@ -1813,8 +1813,9 @@ class ChannelManager(
     }
 
     private fun markStorage(channel: Channel, enabled: Boolean) {
-        if (channel.storageEnabled == enabled) return
-        val updated = channel.copy(storageEnabled = enabled)
+        val stored = _channels.value.find { it.messageStreamId == channel.messageStreamId } ?: return
+        if (stored.storageEnabled == enabled) return
+        val updated = stored.copy(storageEnabled = enabled)
         _channels.value = _channels.value.map { if (it.messageStreamId == updated.messageStreamId) updated else it }
         store.save(_channels.value)
         if (_current.value?.messageStreamId == updated.messageStreamId) _current.value = updated
