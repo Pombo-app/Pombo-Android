@@ -1868,52 +1868,9 @@ private fun ChannelModerationPanel(vm: AppViewModel, channel: Channel, canModera
         }
     }
 
-    if (isChannelAdmin && channel.type == "gated") {
-        var rotateHint by remember { mutableStateOf(false) }
-        var rotateDue by remember(channel.messageStreamId) { mutableStateOf<Long?>(null) }
-        LaunchedEffect(channel.messageStreamId, reloadKey) { rotateDue = vm.nextRotationAt() }
-        Spacer(Modifier.height(20.dp))
-        Box(Modifier.fillMaxWidth().height(1.dp).background(Color.White.copy(alpha = 0.05f)))
-        Spacer(Modifier.height(20.dp))
-        Row(verticalAlignment = Alignment.CenterVertically) {
-            Text(
-                "ROTATE CHANNEL KEY", color = Color.White.copy(alpha = 0.80f),
-                fontSize = 12.sp, fontWeight = FontWeight.Medium, letterSpacing = 0.8.sp
-            )
-            Spacer(Modifier.width(6.dp))
-            HintIcon(rotateHint) { rotateHint = !rotateHint }
-        }
-        if (rotateHint) {
-            Spacer(Modifier.height(8.dp))
-            HintBody(
-                "Issues a new encryption key now. Anyone without current access stops " +
-                    "reading new messages. Free — no transaction."
-            )
-        }
-        rotateDue?.let { due ->
-            val msLeft = due - System.currentTimeMillis()
-            Spacer(Modifier.height(6.dp))
-            Text(
-                if (msLeft > 0) "Next auto-rotate: ${com.pombo.android.core.GateFormat.formatRemaining(msLeft)}"
-                else "Next auto-rotate: due",
-                color = Color.White.copy(alpha = 0.40f), fontSize = 13.sp
-            )
-        }
-        Spacer(Modifier.height(10.dp))
-        Box(
-            Modifier
-                .fillMaxWidth()
-                .background(Color.White.copy(alpha = 0.05f), RoundedCornerShape(12.dp))
-                .border(1.dp, Color.White.copy(alpha = 0.10f), RoundedCornerShape(12.dp))
-                .clickableNoRipple { vm.rotateEpochNow { reloadKey++ } }
-                .padding(vertical = 12.dp),
-            contentAlignment = Alignment.Center
-        ) { Text("Rotate Now", color = Color.White.copy(alpha = 0.80f), fontSize = 13.sp) }
-    }
-
     // ── ADVANCED ─────────────────────────────────────────────────────
-    // The grantees and the re-key: neither belongs in a routine visit, so
-    // they live folded at the bottom, the same place the web keeps them.
+    // The grantees, the rotation and the re-keys: none belongs in a routine
+    // visit, so they live folded at the bottom, the same place the web keeps them.
     if (canModerate && channel.type == "gated") {
         var advancedOpen by remember { mutableStateOf(false) }
         Spacer(Modifier.height(20.dp))
@@ -1953,6 +1910,47 @@ private fun ChannelModerationPanel(vm: AppViewModel, channel: Channel, canModera
                 PermissionLegend()
             }
 
+            if (isChannelAdmin) {
+                var rotateHint by remember { mutableStateOf(false) }
+                var rotateDue by remember(channel.messageStreamId) { mutableStateOf<Long?>(null) }
+                LaunchedEffect(channel.messageStreamId, reloadKey) { rotateDue = vm.nextRotationAt() }
+                Spacer(Modifier.height(20.dp))
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Text(
+                        "ROTATE ENCRYPTION KEY", color = Color.White.copy(alpha = 0.80f),
+                        fontSize = 12.sp, fontWeight = FontWeight.Medium, letterSpacing = 0.8.sp
+                    )
+                    Spacer(Modifier.width(6.dp))
+                    HintIcon(rotateHint) { rotateHint = !rotateHint }
+                }
+                if (rotateHint) {
+                    Spacer(Modifier.height(8.dp))
+                    HintBody(
+                        "Issues a new encryption key now. Anyone without current access stops " +
+                            "reading new messages. Free — no transaction."
+                    )
+                }
+                rotateDue?.let { due ->
+                    val msLeft = due - System.currentTimeMillis()
+                    Spacer(Modifier.height(6.dp))
+                    Text(
+                        if (msLeft > 0) "Next auto-rotate: ${com.pombo.android.core.GateFormat.formatRemaining(msLeft)}"
+                        else "Next auto-rotate: due",
+                        color = Color.White.copy(alpha = 0.40f), fontSize = 13.sp
+                    )
+                }
+                Spacer(Modifier.height(10.dp))
+                Box(
+                    Modifier
+                        .fillMaxWidth()
+                        .background(Color.White.copy(alpha = 0.05f), RoundedCornerShape(12.dp))
+                        .border(1.dp, Color.White.copy(alpha = 0.10f), RoundedCornerShape(12.dp))
+                        .clickableNoRipple { vm.rotateEpochNow { reloadKey++ } }
+                        .padding(vertical = 12.dp),
+                    contentAlignment = Alignment.Center
+                ) { Text("Rotate Now", color = Color.White.copy(alpha = 0.80f), fontSize = 13.sp) }
+            }
+
             if (channel.wireIdentity == "sealed") {
                 var rekeyHint by remember { mutableStateOf(false) }
                 Spacer(Modifier.height(20.dp))
@@ -1985,6 +1983,37 @@ private fun ChannelModerationPanel(vm: AppViewModel, channel: Channel, canModera
                         .padding(vertical = 12.dp),
                     contentAlignment = Alignment.Center
                 ) { Text("Reset Publish Key", color = amber, fontSize = 13.sp) }
+
+                var rekeyIntHint by remember { mutableStateOf(false) }
+                Spacer(Modifier.height(20.dp))
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Text(
+                        "RESET INTERACTIONS KEY", color = Color.White.copy(alpha = 0.80f),
+                        fontSize = 12.sp, fontWeight = FontWeight.Medium, letterSpacing = 0.8.sp
+                    )
+                    Spacer(Modifier.width(6.dp))
+                    HintIcon(rekeyIntHint) { rekeyIntHint = !rekeyIntHint }
+                }
+                if (rekeyIntHint) {
+                    Spacer(Modifier.height(8.dp))
+                    HintBody(
+                        "For when reactions and presence stopped working because no device " +
+                            "holds the key, or to cut off an ex-member who kept it. One " +
+                            "transaction. Current members pick up the new key automatically, but " +
+                            "reactions sent before the reset stop verifying for anyone reading " +
+                            "this channel outside Pombo."
+                    )
+                }
+                Spacer(Modifier.height(10.dp))
+                Box(
+                    Modifier
+                        .fillMaxWidth()
+                        .background(amber.copy(alpha = 0.10f), RoundedCornerShape(12.dp))
+                        .border(1.dp, amber.copy(alpha = 0.20f), RoundedCornerShape(12.dp))
+                        .clickableNoRipple { vm.rekeyInteractionsKey() }
+                        .padding(vertical = 12.dp),
+                    contentAlignment = Alignment.Center
+                ) { Text("Reset Interactions Key", color = amber, fontSize = 13.sp) }
             }
         }
     }

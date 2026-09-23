@@ -31,8 +31,9 @@ data class Channel(
      * Identity on the wire ('sealed' | 'visible'), IMMUTABLE, from the -1
      * metadata's `m` flag: 'sealed' publishes -1/-2 under the channel's
      * SHARED key with authorship sealed inside the epoch envelope. Null on
-     * non-gated channels; a gated channel persisted without it is from
-     * before the mode existed — Visible by definition.
+     * non-gated channels, and on a gated one whose mode is not known yet
+     * (the gate settles it); a gated channel persisted without the field is
+     * from before the mode existed — Visible by definition.
      */
     val wireIdentity: String? = null,
     val createdAt: Long = System.currentTimeMillis(),
@@ -155,11 +156,15 @@ data class Channel(
                     ?.optString("address")?.lowercase()?.ifEmpty { null },
                 // Records persisted (or synced) before the rename carry
                 // authorMode 'members'/'everyone' — same axis, old names.
-                wireIdentity = when (val raw =
+                // An explicit null (or the "null" text earlier builds wrote
+                // from it) is a mode nobody resolved yet, not a pre-mode record.
+                wireIdentity = if (o.has("wireIdentity") && o.isNull("wireIdentity")) null
+                else when (val raw =
                     (o.optString("wireIdentity").ifEmpty { null }
                         ?: o.optString("authorMode").ifEmpty { null })) {
                     "members" -> "sealed"
                     "everyone" -> "visible"
+                    "null" -> null
                     null -> if (o.optString("type") == "gated") "visible" else null
                     else -> raw
                 },

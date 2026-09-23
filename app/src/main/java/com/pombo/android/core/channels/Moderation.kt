@@ -60,6 +60,8 @@ internal class Moderation(private val manager: ChannelManager) {
     private fun stillCurrent(generation: Int) = manager.stillCurrent(generation)
     private suspend fun setPermissionsRetry(streamId: String, assignments: JSONArray) =
         manager.setPermissionsRetry(streamId, assignments)
+    private suspend fun setPermissionsRetry(streamIds: List<String>, assignments: JSONArray) =
+        manager.setPermissionsRetry(streamIds, assignments)
     private suspend fun publishForChannel(
         channel: Channel,
         streamId: String,
@@ -222,17 +224,21 @@ internal class Moderation(private val manager: ChannelManager) {
         if (channel.type != "gated" || channel.gateAddress == null) return
         val me = myAddress()?.lowercase() ?: return
         if (me != channel.messageStreamId.substringBefore('/').lowercase()) return
+        // A preview has no stored record, and a Join during the gate read
+        // below would be overwritten by the preview's copy.
+        if (_channels.value.none { it.messageStreamId == channel.messageStreamId }) return
 
         val flags = try { gateMemberFlags() } catch (e: Exception) { return }
         if (flags.isEmpty()) return   // unreadable gate — judge nothing
+        val stored = _channels.value.find { it.messageStreamId == channel.messageStreamId } ?: return
 
         val withAccess = flags.filter { it.access }.map { it.address.lowercase() }.toSet()
         val noAccessNow = flags.filter { !it.access && !it.isOwner }.map { it.address.lowercase() }
         val bannedNow = flags.filter { it.banned }.map { it.address.lowercase() }
-        val previously = channel.accessSnapshot.map { it.lowercase() }.toSet()
+        val previously = stored.accessSnapshot.map { it.lowercase() }.toSet()
 
         // Regained access clears the cover, so losing it AGAIN rotates again.
-        val covered = channel.rotatedForNoAccess.map { it.lowercase() }
+        val covered = stored.rotatedForNoAccess.map { it.lowercase() }
             .filterNot { it in withAccess }.toSet()
 
         val pending = (noAccessNow.filter { it in previously } + bannedNow)
@@ -244,7 +250,8 @@ internal class Moderation(private val manager: ChannelManager) {
                 epochKeys.rotateEpoch(channel.messageStreamId, keysId)
                 Log.i(TAG, "Rotated the epoch for lost access (${pending.size} address(es))")
             }
-            val updated = channel.copy(
+            val latest = _channels.value.find { it.messageStreamId == channel.messageStreamId } ?: return
+            val updated = latest.copy(
                 rotatedForNoAccess = (covered + pending).toList(),
                 accessSnapshot = withAccess.toList())
             _channels.value = _channels.value.map {
@@ -612,6 +619,26 @@ internal class Moderation(private val manager: ChannelManager) {
             }
             setPermissionsRetry(channel.messageStreamId, assignments)
             setPermissionsRetry(channel.ephemeralStreamId, assignments)
+        }
+    }
+
+    /** Replaces the interactions key of a Sealed channel: `-5` and `-2` in one transaction. */
+    suspend fun rekeyInteractionsKey(): Int {
+        val channel = _current.value ?: throw IllegalStateException("No channel open")
+        check(channel.type == "gated" && channel.wireIdentity == "sealed") {
+            "the interactions key only exists on Sealed channels"
+        }
+        val keysId = channel.keysStreamId.ifEmpty { StreamConstants.deriveKeysId(channel.messageStreamId) }
+        val interactionsId = channel.interactionsStreamId
+            .ifEmpty { StreamConstants.deriveInteractionsId(channel.messageStreamId) }
+        return epochKeys.rekeyInteractionsKey(channel.messageStreamId, keysId) { newAddress, oldAddress ->
+            val assignments = JSONArray().apply {
+                put(JSONObject().put("userId", newAddress)
+                    .put("permissions", JSONArray(listOf("publish"))))
+                if (oldAddress != null) put(JSONObject().put("userId", oldAddress)
+                    .put("permissions", JSONArray()))
+            }
+            setPermissionsRetry(listOf(interactionsId, channel.ephemeralStreamId), assignments)
         }
     }
 

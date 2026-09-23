@@ -168,6 +168,9 @@ class EpochKeyManager(
          * with the account's static key, in any session of any device.
          */
         val pendingRequests = LinkedHashMap<String, PendingId>()
+        /** Ids this session sent — memory only. [pendingRequests] cannot say
+         *  "mine": it syncs, and would hide another device's request. */
+        val ownRequestIds = HashSet<String>()
         /**
          * Wraps that arrived before the announce that legitimises them, by
          * epoch. A responder answers the request as soon as it hears it, so on
@@ -1340,7 +1343,7 @@ class EpochKeyManager(
         if (requestId.isEmpty()) return false
         return mutex.withLock {
             val s = state[messageStreamId] ?: return@withLock false
-            s.pendingRequests.containsKey(requestId) || s.pendingRequest?.requestId == requestId
+            requestId in s.ownRequestIds || s.pendingRequest?.requestId == requestId
         }
     }
 
@@ -1713,6 +1716,7 @@ class EpochKeyManager(
             val (priv, pub) = EpochKeyCrypto.generateRequestKeypair()
             val requestId = PomboCrypto.randomHex(16)
             s.pendingRequest = PendingRequest(requestId, priv, pub, System.currentTimeMillis())
+            s.ownRequestIds.add(requestId)
             s.requestAttempts += 1
             request = JSONObject()
                 .put("t", StreamConstants.KEY_REQUEST)
@@ -1905,8 +1909,49 @@ class EpochKeyManager(
             persist(messageStreamId, s)
         }
         Log.i(TAG, "publish key reset to rev ${newKey.rev} on ${messageStreamId.takeLast(30)}")
+        onKeyAdopted(messageStreamId, newKey.keyId)
         // Members cannot write until this announce is readable from storage —
         // verify retention exactly like a fresh epoch announce.
+        retainAnnounce(messageStreamId, keysStreamId, ann)
+        return newKey.rev
+    }
+
+    /** Replaces the interactions key (Sealed), as [rekeyPublishKey] does the publish key. */
+    suspend fun rekeyInteractionsKey(
+        messageStreamId: String,
+        keysStreamId: String,
+        chainGrants: suspend (newAddress: String, oldAddress: String?) -> Unit
+    ): Int {
+        check(isOwnAdmin(messageStreamId)) { "only the channel admin can reset the interactions key" }
+        val (newKey, oldAddress) = mutex.withLock {
+            val s = getState(messageStreamId)
+            if (!s.loaded) { loadPersisted(messageStreamId, s); s.loaded = true }
+            val rev = maxOf(s.intKey?.rev ?: 0, s.intAnnounce?.rev ?: 0) + 1
+            Pair(mintInteractionsKey(rev), s.intKey?.address ?: s.intAnnounce?.address)
+        }
+        chainGrants(newKey.address, oldAddress)
+        // Adopt before announcing so a concurrent answerRequest wraps the new key.
+        mutex.withLock {
+            val s = getState(messageStreamId)
+            s.intKey = newKey
+            persist(messageStreamId, s)
+        }
+        val ann = JSONObject()
+            .put("t", StreamConstants.PUB_ANNOUNCE)
+            .put("k", "i")
+            .put("keyId", newKey.keyId)
+            .put("keyHash", EpochKeyCrypto.computeKeyHash(newKey.keyHex))
+            .put("addr", newKey.address)
+            .put("rev", newKey.rev)
+        publishKeys(keysStreamId, ann)
+        mutex.withLock {
+            val s = getState(messageStreamId)
+            applyPubAnnounceLocked(messageStreamId, s, ann, myAddress(), System.currentTimeMillis())
+            s.intAnnounceFreshness = System.currentTimeMillis()
+            persist(messageStreamId, s)
+        }
+        Log.i(TAG, "interactions key reset to rev ${newKey.rev} on ${messageStreamId.takeLast(30)}")
+        onKeyAdopted(messageStreamId, newKey.keyId)
         retainAnnounce(messageStreamId, keysStreamId, ann)
         return newKey.rev
     }

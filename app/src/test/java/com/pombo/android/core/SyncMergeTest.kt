@@ -18,6 +18,44 @@ class SyncMergeTest {
     private fun j(s: String) = JSONObject(s)
 
     @Test
+    fun `a joined record beats a later copy that has no join time`() {
+        val joined = """{"messageStreamId":"ch-1","joinedAt":1000,"createdAt":1000,"wireIdentity":"sealed"}"""
+        val copy = """{"messageStreamId":"ch-1","joinedAt":null,"createdAt":5000,"wireIdentity":null}"""
+        for ((base, incoming) in listOf(joined to copy, copy to joined)) {
+            val merged = SyncMerge.mergeState(
+                j("""{"channels":[$base],"sliceTs":{}}"""),
+                j("""{"channels":[$incoming],"sliceTs":{}}""")
+            )
+            assertEquals("sealed", merged.getJSONArray("channels").getJSONObject(0).getString("wireIdentity"))
+        }
+    }
+
+    @Test
+    fun `a re-join without a join time is not lost to the leave before it`() {
+        val merged = SyncMerge.mergeState(
+            j("""{"channels":[{"messageStreamId":"ch-1","joinedAt":1000,"createdAt":1000,"wireIdentity":"sealed"}],"sliceTs":{}}"""),
+            j("""{"channels":[{"messageStreamId":"ch-1","joinedAt":null,"createdAt":3000,"wireIdentity":null}],"channelsLeftAt":{"ch-1":2000},"sliceTs":{}}""")
+        )
+        val channels = merged.getJSONArray("channels")
+        assertEquals(1, channels.length())
+        assertEquals("sealed", channels.getJSONObject(0).getString("wireIdentity"))
+        assertEquals(0, merged.getJSONObject("channelsLeftAt").length())
+    }
+
+    @Test
+    fun `the newer of two joins still wins`() {
+        val older = """{"messageStreamId":"ch-1","joinedAt":1000,"name":"older"}"""
+        val newer = """{"messageStreamId":"ch-1","joinedAt":2000,"name":"newer"}"""
+        for ((base, incoming) in listOf(newer to older, older to newer)) {
+            val merged = SyncMerge.mergeState(
+                j("""{"channels":[$base],"sliceTs":{}}"""),
+                j("""{"channels":[$incoming],"sliceTs":{}}""")
+            )
+            assertEquals("newer", merged.getJSONArray("channels").getJSONObject(0).getString("name"))
+        }
+    }
+
+    @Test
     fun `leave beats an older join snapshot`() {
         val merged = SyncMerge.mergeState(
             j("""{"channels":[],"channelsLeftAt":{"s/a-1":2000},"sliceTs":{}}"""),
@@ -143,6 +181,33 @@ class SyncMergeTest {
         assertEquals(0, merged.getJSONObject("trustedContacts").length())
         assertTrue(merged.isNull("username"))
         assertTrue(merged.isNull("graphApiKey"))
+    }
+
+    @Test
+    fun `the interactions key survives when both devices hold the channel`() {
+        val merged = SyncMerge.mergeState(
+            j("""{"channels":[{"messageStreamId":"ch-1","joinedAt":1000}],
+                "epochKeys":{"ch-1":{"epochs":{},"currentEpoch":1,
+                "intKey":{"keyId":"i1.x","keyHex":"0xint","address":"0xaa","rev":1},
+                "intAnnounce":{"keyId":"i1.x","keyHash":"0xh","address":"0xaa","rev":1}}},"sliceTs":{}}"""),
+            j("""{"channels":[{"messageStreamId":"ch-1","joinedAt":1000}],
+                "epochKeys":{"ch-1":{"epochs":{},"currentEpoch":1,
+                "pubKey":{"keyId":"p1.x","keyHex":"0xpub","address":"0xbb","rev":1}}},"sliceTs":{}}""")
+        ).getJSONObject("epochKeys").getJSONObject("ch-1")
+        assertEquals("i1.x", merged.getJSONObject("intKey").getString("keyId"))
+        assertEquals("i1.x", merged.getJSONObject("intAnnounce").getString("keyId"))
+        assertEquals("p1.x", merged.getJSONObject("pubKey").getString("keyId"))
+    }
+
+    @Test
+    fun `a re-keyed interactions key supersedes the old one`() {
+        val merged = SyncMerge.mergeState(
+            j("""{"channels":[{"messageStreamId":"ch-1","joinedAt":1000}],
+                "epochKeys":{"ch-1":{"epochs":{},"intKey":{"keyId":"i1.x","keyHex":"0xold","address":"0xaa","rev":1}}},"sliceTs":{}}"""),
+            j("""{"channels":[{"messageStreamId":"ch-1","joinedAt":1000}],
+                "epochKeys":{"ch-1":{"epochs":{},"intKey":{"keyId":"i2.y","keyHex":"0xnew","address":"0xcc","rev":2}}},"sliceTs":{}}""")
+        ).getJSONObject("epochKeys").getJSONObject("ch-1")
+        assertEquals("i2.y", merged.getJSONObject("intKey").getString("keyId"))
     }
 
     @Test

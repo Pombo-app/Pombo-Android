@@ -2189,9 +2189,11 @@ const api = {
     },
 
     // assignments: [{public:true, permissions:[...]}] or [{userId, permissions:[...]}]
+    // items: [{streamId, assignments}, ...] — several streams, ONE transaction
     async setPermissions(a) {
         if (!client) throw new Error('client not connected');
-        await client.setPermissions({ streamId: a.streamId, assignments: a.assignments });
+        const items = Array.isArray(a.items) ? a.items : [{ streamId: a.streamId, assignments: a.assignments }];
+        await client.setPermissions(...items);
         return { ok: true };
     },
 

@@ -118,26 +118,32 @@ object SyncMerge {
         }
 
         val byId = LinkedHashMap<String, JSONObject>()
+        val latestJoin = HashMap<String, Long>()
+        val noteJoin = { id: String, c: JSONObject ->
+            latestJoin[id] = maxOf(latestJoin[id] ?: 0L, joinTs(c))
+        }
         baseChannels?.let { arr ->
             for (i in 0 until arr.length()) {
                 val c = arr.optJSONObject(i) ?: continue
-                c.optStringOrNull("messageStreamId")?.let { byId[it] = c }
+                val id = c.optStringOrNull("messageStreamId") ?: continue
+                byId[id] = c
+                noteJoin(id, c)
             }
         }
         incomingChannels?.let { arr ->
             for (i in 0 until arr.length()) {
                 val c = arr.optJSONObject(i) ?: continue
                 val id = c.optStringOrNull("messageStreamId") ?: continue
+                noteJoin(id, c)
                 val existing = byId[id]
-                // Incoming wins ties: the newer snapshot carries fresher metadata.
-                if (existing == null || joinTs(c) >= joinTs(existing)) byId[id] = c
+                if (existing == null || replaces(c, existing)) byId[id] = c
             }
         }
 
         val channels = JSONArray()
         byId.forEach { (id, channel) ->
             val left = if (leftAt.has(id)) leftAt.optLong(id) else null
-            if (left != null && left > joinTs(channel)) return@forEach
+            if (left != null && left > (latestJoin[id] ?: 0L)) return@forEach
             channels.put(channel)
             // A re-join supersedes the tombstone; drop it so the map stays small.
             if (left != null) leftAt.remove(id)
@@ -148,6 +154,16 @@ object SyncMerge {
     private fun joinTs(channel: JSONObject): Long {
         val joined = channel.optLong("joinedAt", 0L)
         return if (joined > 0L) joined else channel.optLong("createdAt", 0L)
+    }
+
+    /** Incoming wins ties: the newer snapshot carries fresher metadata. An
+     *  entry with no joinedAt of its own is never a newer join than one that
+     *  has it, but its time still counts as a join against a leave tombstone. */
+    private fun replaces(incoming: JSONObject, existing: JSONObject): Boolean {
+        val incomingJoined = incoming.optLong("joinedAt", 0L) > 0L
+        val existingJoined = existing.optLong("joinedAt", 0L) > 0L
+        if (incomingJoined != existingJoined) return incomingJoined
+        return joinTs(incoming) >= joinTs(existing)
     }
 
     /**
@@ -196,16 +212,15 @@ object SyncMerge {
             i.optJSONArray("helloEpochs")?.let { src -> for (k in 0 until src.length()) helloEpochs.add(src.optInt(k)) }
             b.optJSONArray("helloEpochs")?.let { src -> for (k in 0 until src.length()) helloEpochs.add(src.optInt(k)) }
             entry.put("helloEpochs", JSONArray(helloEpochs.filter { it > 0 }))
-            // Publish key: higher rev wins (a re-key must supersede on every
-            // device); ties keep base.
+            // Shared keys (publish and interactions): higher rev wins (a
+            // re-key must supersede on every device); ties keep base.
             val higherRev = { x: JSONObject?, y: JSONObject? ->
                 if (x == null) y else if (y == null) x
                 else if (y.optInt("rev") > x.optInt("rev")) y else x
             }
-            higherRev(b.optJSONObject("pubKey"), i.optJSONObject("pubKey"))
-                ?.let { entry.put("pubKey", it) }
-            higherRev(b.optJSONObject("pubAnnounce"), i.optJSONObject("pubAnnounce"))
-                ?.let { entry.put("pubAnnounce", it) }
+            for (slot in listOf("pubKey", "pubAnnounce", "intKey", "intAnnounce")) {
+                higherRev(b.optJSONObject(slot), i.optJSONObject(slot))?.let { entry.put(slot, it) }
+            }
             result.put(streamId, entry)
         }
         return result

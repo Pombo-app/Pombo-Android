@@ -66,7 +66,21 @@ data class ExploreChannel(
     val gateQualifier: String? = null,
     /** Wire identity from metadata `m` ('sealed' | 'visible'). */
     val wireIdentity: String? = null
-)
+) {
+    companion object {
+        fun of(info: com.pombo.android.core.GraphApi.ChannelInfo) = ExploreChannel(
+            messageStreamId = info.streamId,
+            name = info.displayName,
+            description = info.description,
+            type = info.type,
+            language = info.language,
+            category = info.category,
+            readOnly = info.readOnly,
+            gateAddress = info.gateAddress,
+            wireIdentity = info.wireIdentity
+        )
+    }
+}
 
 /** Quoted message carried by a reply (web: msg.replyTo). */
 data class ReplyRef(
@@ -307,21 +321,7 @@ class ChannelManager(
                 true
             }
         },
-        mayHoldPublishKey = { messageStreamId, requester ->
-            val channel = channelByStream(messageStreamId)
-            val gate = channel?.takeIf { it.type == "gated" }?.gateAddress
-            if (gate == null) true
-            else try {
-                val info = bridge.call("gateInfo", JSONObject().put("gate", gate))
-                if (!info.optBoolean("readOnly", false)) true
-                else info.optString("owner").equals(requester, ignoreCase = true) ||
-                    gateOwnerOrModerator(gate, requester)
-            } catch (e: Exception) {
-                // Unreadable gate fails CLOSED for the write capability
-                Log.w(TAG, "publish-key role check failed — withholding it: ${e.message}")
-                false
-            }
-        },
+        mayHoldPublishKey = { messageStreamId, requester -> mayHoldPublishKey(messageStreamId, requester) },
         pubKeyBlockedForSelf = { messageStreamId -> messageStreamId in pubKeyBlocked },
         // Only a preview lives outside _channels (channelByStream falls back to
         // _current for it) — membership in the persisted list is the signal,
@@ -1366,7 +1366,7 @@ class ChannelManager(
 
     suspend fun gateBannedMembers(): List<String> = admin.gateBannedMembers()
 
-    private suspend fun rotateForLostAccess(channel: Channel) = admin.rotateForLostAccess(channel)
+    internal suspend fun rotateForLostAccess(channel: Channel) = admin.rotateForLostAccess(channel)
 
     suspend fun channelMembers(): List<MemberRow> = admin.channelMembers()
 
@@ -1422,6 +1422,8 @@ class ChannelManager(
     suspend fun removeMember(address: String) = admin.removeMember(address)
 
     suspend fun rekeyPublishKey(): Int = admin.rekeyPublishKey()
+
+    suspend fun rekeyInteractionsKey(): Int = admin.rekeyInteractionsKey()
     suspend fun rotateEpochManual() = admin.rotateEpochManual()
 
     suspend fun nextRotationAt(): Long? = admin.nextRotationAt()
@@ -1799,8 +1801,9 @@ class ChannelManager(
     }
 
     private fun markStorage(channel: Channel, enabled: Boolean) {
-        if (channel.storageEnabled == enabled) return
-        val updated = channel.copy(storageEnabled = enabled)
+        val stored = _channels.value.find { it.messageStreamId == channel.messageStreamId } ?: return
+        if (stored.storageEnabled == enabled) return
+        val updated = stored.copy(storageEnabled = enabled)
         _channels.value = _channels.value.map { if (it.messageStreamId == updated.messageStreamId) updated else it }
         store.save(_channels.value)
         if (_current.value?.messageStreamId == updated.messageStreamId) _current.value = updated
@@ -2184,6 +2187,13 @@ class ChannelManager(
     internal suspend fun setPermissionsRetry(streamId: String, assignments: JSONArray) = retry(7) {
         bridge.call("setPermissions", JSONObject()
             .put("streamId", streamId).put("assignments", assignments), 120_000)
+    }
+
+    /** The same assignments on several streams, in one transaction. */
+    internal suspend fun setPermissionsRetry(streamIds: List<String>, assignments: JSONArray) = retry(7) {
+        val items = JSONArray()
+        streamIds.forEach { items.put(JSONObject().put("streamId", it).put("assignments", assignments)) }
+        bridge.call("setPermissions", JSONObject().put("items", items), 120_000)
     }
 
     /**
@@ -3080,6 +3090,8 @@ class ChannelManager(
     suspend fun sweepKeyResponder(entries: List<com.pombo.android.data.KeyResponderEntry>) {
         for (entry in entries) {
             val channel = channelByStream(entry.messageStreamId) ?: continue
+            // The answer hands out the shared keys only on a record that says Sealed.
+            awaitGateAuthority(channel)
             try {
                 epochKeys.ensureChannelKeys(
                     entry.messageStreamId,
@@ -4359,45 +4371,67 @@ class ChannelManager(
     /**
      * The CONTRACT is the authority on the identity mode and the read-only
      * flag (v3 immutable fields); the -1 metadata copies are mutable and even
-     * erasable by a failed rename. Reconciled once per session, best-effort.
+     * erasable by a failed rename. Read once per session, best-effort, and
+     * applied again whenever a record comes back without it: a sync import
+     * can carry another device's older copy.
      * On read-only channels it also settles whether THIS account may hold the
      * shared publish key, so a plain member stops requesting it.
      */
-    private val gateAuthorityChecked = java.util.Collections.synchronizedSet(HashSet<String>())
+    private val gateAuthority = java.util.concurrent.ConcurrentHashMap<String, Pair<String, Boolean>>()
+    private val gateAuthorityInFlight = java.util.Collections.synchronizedSet(HashSet<String>())
     internal val pubKeyBlocked = java.util.Collections.synchronizedSet(HashSet<String>())
 
     internal fun reconcileGateAuthority(channel: Channel) {
+        if (channel.type != "gated" || channel.gateAddress == null) return
+        gateAuthority[channel.messageStreamId]?.let { (mode, ro) ->
+            applyGateAuthority(channel.messageStreamId, mode, ro)
+            return
+        }
+        if (!gateAuthorityInFlight.add(channel.messageStreamId)) return
+        scope.launch {
+            try { awaitGateAuthority(channel) } finally { gateAuthorityInFlight.remove(channel.messageStreamId) }
+        }
+    }
+
+    fun reconcileAllGateAuthority() = _channels.value.forEach { reconcileGateAuthority(it) }
+
+    private suspend fun awaitGateAuthority(channel: Channel) {
         if (channel.type != "gated") return
         val gate = channel.gateAddress ?: return
-        if (!gateAuthorityChecked.add(channel.messageStreamId)) return
-        scope.launch {
-            try {
-                val info = bridge.call("gateInfo", JSONObject().put("gate", gate))
-                val mode = if (info.optString("wireIdentityName") == "sealed") "sealed" else "visible"
-                val ro = info.optBoolean("readOnly", false)
-                val cur = _channels.value.find { it.messageStreamId == channel.messageStreamId }
-                if (cur != null && (cur.wireIdentity != mode || cur.readOnly != ro)) {
-                    val updated = cur.copy(wireIdentity = mode, readOnly = ro)
-                    _channels.value = _channels.value.map {
-                        if (it.messageStreamId == updated.messageStreamId) updated else it
-                    }
-                    store.save(_channels.value)
-                    if (_current.value?.messageStreamId == updated.messageStreamId) _current.value = updated
-                    Log.i(TAG, "Gate authority corrected the local record: " +
-                        "${channel.messageStreamId.takeLast(20)} → $mode${if (ro) " (read-only)" else ""}")
-                }
-                if (ro) {
-                    val me = myAddress()?.lowercase() ?: return@launch
-                    val mayWrite = info.optString("owner").equals(me, ignoreCase = true) ||
-                        gateOwnerOrModerator(gate, me)
-                    if (mayWrite) pubKeyBlocked.remove(channel.messageStreamId)
-                    else pubKeyBlocked.add(channel.messageStreamId)
-                }
-            } catch (e: Exception) {
-                gateAuthorityChecked.remove(channel.messageStreamId)
-                Log.w(TAG, "Gate authority read failed for ${channel.messageStreamId.takeLast(20)}: ${e.message}")
-            }
+        gateAuthority[channel.messageStreamId]?.let { (mode, ro) ->
+            applyGateAuthority(channel.messageStreamId, mode, ro)
+            return
         }
+        try {
+            val info = bridge.call("gateInfo", JSONObject().put("gate", gate))
+            val mode = if (info.optString("wireIdentityName") == "sealed") "sealed" else "visible"
+            val ro = info.optBoolean("readOnly", false)
+            gateAuthority[channel.messageStreamId] = mode to ro
+            applyGateAuthority(channel.messageStreamId, mode, ro)
+            if (ro) {
+                val me = myAddress()?.lowercase() ?: return
+                val mayWrite = info.optString("owner").equals(me, ignoreCase = true) ||
+                    gateOwnerOrModerator(gate, me)
+                if (mayWrite) pubKeyBlocked.remove(channel.messageStreamId)
+                else pubKeyBlocked.add(channel.messageStreamId)
+            }
+        } catch (e: Exception) {
+            Log.w(TAG, "Gate authority read failed for ${channel.messageStreamId.takeLast(20)}: ${e.message}")
+        }
+    }
+
+    private fun applyGateAuthority(messageStreamId: String, mode: String, readOnly: Boolean) {
+        val cur = _channels.value.find { it.messageStreamId == messageStreamId } ?: return
+        if (cur.wireIdentity == mode && cur.readOnly == readOnly) return
+        val updated = cur.copy(wireIdentity = mode, readOnly = readOnly)
+        _channels.value = _channels.value.map {
+            if (it.messageStreamId == updated.messageStreamId) updated else it
+        }
+        store.save(_channels.value)
+        if (_current.value?.messageStreamId == updated.messageStreamId) _current.value = updated
+        Log.i(TAG, "Gate authority corrected the local record: " +
+            "${messageStreamId.takeLast(20)} → $mode${if (readOnly) " (read-only)" else ""}")
+        onLocalStateChanged()
     }
 
     /** One states() read: is this address the gate's owner or a moderator? */
@@ -4422,6 +4456,22 @@ class ChannelManager(
             roWriterCache[key] = allowed to System.currentTimeMillis()
         }
         return allowed
+    }
+
+    /** Read-only channels hand the shared publish key only to the owner and the moderators. */
+    internal suspend fun mayHoldPublishKey(messageStreamId: String, requester: String): Boolean {
+        val channel = channelByStream(messageStreamId)
+        val gate = channel?.takeIf { it.type == "gated" }?.gateAddress ?: return true
+        return try {
+            val info = bridge.call("gateInfo", JSONObject().put("gate", gate))
+            if (!info.optBoolean("readOnly", false)) true
+            else info.optString("owner").equals(requester, ignoreCase = true) ||
+                gateOwnerOrModerator(gate, requester)
+        } catch (e: Exception) {
+            // Unreadable gate fails CLOSED for the write capability
+            Log.w(TAG, "publish-key role check failed — withholding it: ${e.message}")
+            false
+        }
     }
 
     private suspend fun gateOwnerOrModerator(gate: String, address: String): Boolean {
@@ -4511,6 +4561,7 @@ class ChannelManager(
         // The streams are already subscribed — just swap in the stored channel.
         _current.value = joined
         _isPreview.value = false
+        refreshModerationPermission(joined, preview = false)
         return joined
     }
 
@@ -5158,6 +5209,7 @@ class ChannelManager(
     fun replaceChannels(channels: List<Channel>) {
         _channels.value = channels
         store.save(channels)
+        reconcileAllGateAuthority()
     }
 
     /** Set by the ViewModel to schedule a debounced sync push. */
