@@ -60,6 +60,8 @@ internal class Moderation(private val manager: ChannelManager) {
     private fun stillCurrent(generation: Int) = manager.stillCurrent(generation)
     private suspend fun setPermissionsRetry(streamId: String, assignments: JSONArray) =
         manager.setPermissionsRetry(streamId, assignments)
+    private suspend fun setPermissionsRetry(streamIds: List<String>, assignments: JSONArray) =
+        manager.setPermissionsRetry(streamIds, assignments)
     private suspend fun publishForChannel(
         channel: Channel,
         streamId: String,
@@ -617,6 +619,26 @@ internal class Moderation(private val manager: ChannelManager) {
             }
             setPermissionsRetry(channel.messageStreamId, assignments)
             setPermissionsRetry(channel.ephemeralStreamId, assignments)
+        }
+    }
+
+    /** Replaces the interactions key of a Sealed channel: `-5` and `-2` in one transaction. */
+    suspend fun rekeyInteractionsKey(): Int {
+        val channel = _current.value ?: throw IllegalStateException("No channel open")
+        check(channel.type == "gated" && channel.wireIdentity == "sealed") {
+            "the interactions key only exists on Sealed channels"
+        }
+        val keysId = channel.keysStreamId.ifEmpty { StreamConstants.deriveKeysId(channel.messageStreamId) }
+        val interactionsId = channel.interactionsStreamId
+            .ifEmpty { StreamConstants.deriveInteractionsId(channel.messageStreamId) }
+        return epochKeys.rekeyInteractionsKey(channel.messageStreamId, keysId) { newAddress, oldAddress ->
+            val assignments = JSONArray().apply {
+                put(JSONObject().put("userId", newAddress)
+                    .put("permissions", JSONArray(listOf("publish"))))
+                if (oldAddress != null) put(JSONObject().put("userId", oldAddress)
+                    .put("permissions", JSONArray()))
+            }
+            setPermissionsRetry(listOf(interactionsId, channel.ephemeralStreamId), assignments)
         }
     }
 

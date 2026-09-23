@@ -1090,6 +1090,19 @@ class AppViewModel(app: Application) : AndroidViewModel(app), PomboBridge.Listen
         onDone()
     }
 
+    /** Admin-only: replaces the interactions key of a Sealed channel. */
+    fun rekeyInteractionsKey(onDone: () -> Unit = {}) = viewModelScope.launch {
+        chainAction(
+            "Reset interactions key",
+            "Replaces the channel's interactions key and revokes the old one (1 transaction)."
+        ) {
+            runWithToast("Resetting interactions key…", "Interactions key reset", "Failed to reset interactions key") {
+                manager.rekeyInteractionsKey()
+            }
+        }
+        onDone()
+    }
+
     /** Owner-only: toggles a member's "Can add members" (GRANT) permission. */
     fun setMemberGrant(address: String, canGrant: Boolean, onDone: () -> Unit = {}) = viewModelScope.launch {
         chainAction(

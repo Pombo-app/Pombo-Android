@@ -1915,6 +1915,46 @@ class EpochKeyManager(
         return newKey.rev
     }
 
+    /** Replaces the interactions key (Sealed), as [rekeyPublishKey] does the publish key. */
+    suspend fun rekeyInteractionsKey(
+        messageStreamId: String,
+        keysStreamId: String,
+        chainGrants: suspend (newAddress: String, oldAddress: String?) -> Unit
+    ): Int {
+        check(isOwnAdmin(messageStreamId)) { "only the channel admin can reset the interactions key" }
+        val (newKey, oldAddress) = mutex.withLock {
+            val s = getState(messageStreamId)
+            if (!s.loaded) { loadPersisted(messageStreamId, s); s.loaded = true }
+            val rev = maxOf(s.intKey?.rev ?: 0, s.intAnnounce?.rev ?: 0) + 1
+            Pair(mintInteractionsKey(rev), s.intKey?.address ?: s.intAnnounce?.address)
+        }
+        chainGrants(newKey.address, oldAddress)
+        // Adopt before announcing so a concurrent answerRequest wraps the new key.
+        mutex.withLock {
+            val s = getState(messageStreamId)
+            s.intKey = newKey
+            persist(messageStreamId, s)
+        }
+        val ann = JSONObject()
+            .put("t", StreamConstants.PUB_ANNOUNCE)
+            .put("k", "i")
+            .put("keyId", newKey.keyId)
+            .put("keyHash", EpochKeyCrypto.computeKeyHash(newKey.keyHex))
+            .put("addr", newKey.address)
+            .put("rev", newKey.rev)
+        publishKeys(keysStreamId, ann)
+        mutex.withLock {
+            val s = getState(messageStreamId)
+            applyPubAnnounceLocked(messageStreamId, s, ann, myAddress(), System.currentTimeMillis())
+            s.intAnnounceFreshness = System.currentTimeMillis()
+            persist(messageStreamId, s)
+        }
+        Log.i(TAG, "interactions key reset to rev ${newKey.rev} on ${messageStreamId.takeLast(30)}")
+        onKeyAdopted(messageStreamId, newKey.keyId)
+        retainAnnounce(messageStreamId, keysStreamId, ann)
+        return newKey.rev
+    }
+
     /**
      * Session authorship material for our own publishes in a Sealed
      * channel: pseudonym keypair + account bind proof, minted lazily once

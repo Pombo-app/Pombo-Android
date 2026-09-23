@@ -1422,6 +1422,8 @@ class ChannelManager(
     suspend fun removeMember(address: String) = admin.removeMember(address)
 
     suspend fun rekeyPublishKey(): Int = admin.rekeyPublishKey()
+
+    suspend fun rekeyInteractionsKey(): Int = admin.rekeyInteractionsKey()
     suspend fun rotateEpochManual() = admin.rotateEpochManual()
 
     suspend fun nextRotationAt(): Long? = admin.nextRotationAt()
@@ -2185,6 +2187,13 @@ class ChannelManager(
     internal suspend fun setPermissionsRetry(streamId: String, assignments: JSONArray) = retry(7) {
         bridge.call("setPermissions", JSONObject()
             .put("streamId", streamId).put("assignments", assignments), 120_000)
+    }
+
+    /** The same assignments on several streams, in one transaction. */
+    internal suspend fun setPermissionsRetry(streamIds: List<String>, assignments: JSONArray) = retry(7) {
+        val items = JSONArray()
+        streamIds.forEach { items.put(JSONObject().put("streamId", it).put("assignments", assignments)) }
+        bridge.call("setPermissions", JSONObject().put("items", items), 120_000)
     }
 
     /**
