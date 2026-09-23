@@ -769,7 +769,9 @@ class EpochKeyManager(
                 .put("epoch", s.currentEpoch)
                 .put("keyId", cur.keyId)
                 .put("keyHash", entry.keyHash)
-                .put("validFrom", System.currentTimeMillis())
+                // A reader that only ever sees this copy judges the epoch's
+                // history by it: a later validFrom drops that history as backdated.
+                .put("validFrom", cur.validFrom)
             s.announceFreshness[s.currentEpoch] = System.currentTimeMillis()
         }
         publishKeys(keysStreamId, announce ?: return)
