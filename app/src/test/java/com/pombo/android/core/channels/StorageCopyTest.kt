@@ -59,8 +59,11 @@ class StorageCopyTest {
         override suspend fun ensureAdminLoaded(channel: Channel) {}
         override fun adminRev(channel: Channel) = adminRev
         override suspend fun readImage(channel: Channel) = image
-        override suspend fun republishAnchors(channel: Channel) =
-            listOf(publish("keys", keys, StreamConstants.P_KEY_EXCHANGE))
+        var onRepublishAnchors: () -> Unit = {}
+        override suspend fun republishAnchors(channel: Channel): List<Long> {
+            onRepublishAnchors()
+            return listOf(publish("keys", keys, StreamConstants.P_KEY_EXCHANGE))
+        }
         override suspend fun publishAdminState(channel: Channel): Long {
             if (failAdminOnce) { failAdminOnce = false; error("channel not open") }
             return publish("admin", admin, StreamConstants.ADMIN_MODERATION)
@@ -69,6 +72,20 @@ class StorageCopyTest {
             publish("image", admin, StreamConstants.ADMIN_CHANNEL_IMAGE)
         override suspend fun publishPasswordChallenge(channel: Channel) =
             publish("password", admin, StreamConstants.ADMIN_PASSWORD_CHALLENGE)
+        var anchorKeyIds = listOf("7.cur")
+        var providerList = listOf(StorageEndpoints.Node(newNode, listOf("https://new.example")))
+        /** `url|streamId|partition` → rows that provider serves. */
+        val serves = HashMap<String, List<JSONObject>>()
+        var reads = 0
+
+        override suspend fun currentAnchorKeyIds(channel: Channel) = anchorKeyIds
+        override suspend fun resolve(streamId: String) = providerList
+        override suspend fun readLast(
+            provider: StorageEndpoints.Node, streamId: String, partition: Int, count: Int
+        ): List<JSONObject>? {
+            reads++
+            return serves["${provider.urls.first()}|$streamId|$partition"] ?: emptyList()
+        }
         var answered = true
         override suspend fun providers(streamId: String) =
             if (unlistedLookups-- > 0) emptyList()
@@ -183,5 +200,85 @@ class StorageCopyTest {
 
         assertTrue(StorageCopy.Notice.DONE in host.notices)
         assertEquals(emptyList<String>(), copy.pending(stream))
+    }
+
+    // ---- before a provider is removed ----
+
+    private val oldNode = StorageEndpoints.Node("0x" + "dd".repeat(20), listOf("https://old.example"))
+    private val newProvider = StorageEndpoints.Node(newNode, listOf("https://new.example"))
+    private val announce = JSONObject().put("content", JSONObject().put("t", "key_announce").put("keyId", "7.cur"))
+    private val sealed = JSONObject().put("content", JSONObject().put("e", "epoch-aes-gcm"))
+
+    private fun serve(provider: StorageEndpoints.Node, streamId: String, partition: Int, vararg rows: JSONObject) {
+        host.serves["${provider.urls.first()}|$streamId|$partition"] = rows.toList()
+    }
+
+    private fun removalSetUp() {
+        host.providerList = listOf(oldNode, newProvider)
+        serve(oldNode, keys, StreamConstants.P_KEY_EXCHANGE, announce)
+        serve(oldNode, admin, StreamConstants.ADMIN_MODERATION, sealed)
+    }
+
+    private suspend fun refused(): String? = try {
+        copy.ensureRemainingHold(stream, oldNode.nodeAddress); null
+    } catch (e: IllegalStateException) {
+        e.message
+    }
+
+    @Test
+    fun `lets the removal go on when the provider that stays holds everything`() = runBlocking {
+        removalSetUp()
+        serve(newProvider, keys, StreamConstants.P_KEY_EXCHANGE, announce)
+        serve(newProvider, admin, StreamConstants.ADMIN_MODERATION, sealed)
+
+        assertNull(refused())
+        assertEquals(emptyList<String>(), host.published)
+    }
+
+    @Test
+    fun `copies what the provider that stays lacks, then lets the removal go on`() = runBlocking {
+        removalSetUp()
+        host.storesEverything = true
+        serve(newProvider, admin, StreamConstants.ADMIN_MODERATION, sealed)
+        host.onRepublishAnchors = { serve(newProvider, keys, StreamConstants.P_KEY_EXCHANGE, announce) }
+
+        assertNull(refused())
+        assertEquals("keys", host.published.first())
+        assertEquals(StorageCopy.Notice.PROGRESS, host.notices.first())
+    }
+
+    @Test
+    fun `refuses the removal while the provider that stays still lacks it`() = runBlocking {
+        removalSetUp()
+
+        assertTrue(refused()!!.contains("was not removed"))
+    }
+
+    @Test
+    fun `asks for the image only when the provider leaving serves one`() = runBlocking {
+        removalSetUp()
+        serve(newProvider, keys, StreamConstants.P_KEY_EXCHANGE, announce)
+        serve(newProvider, admin, StreamConstants.ADMIN_MODERATION, sealed)
+        serve(oldNode, admin, StreamConstants.ADMIN_CHANNEL_IMAGE, sealed)
+
+        assertTrue(refused()!!.contains("was not removed"))
+    }
+
+    @Test
+    fun `protects nothing when the provider leaving is the last one`() = runBlocking {
+        removalSetUp()
+        host.providerList = listOf(oldNode)
+
+        assertNull(refused())
+        assertEquals(0, host.reads)
+    }
+
+    @Test
+    fun `checks nothing for an account that does not own the channel`() = runBlocking {
+        removalSetUp()
+        host.owns = false
+
+        assertNull(refused())
+        assertEquals(0, host.reads)
     }
 }

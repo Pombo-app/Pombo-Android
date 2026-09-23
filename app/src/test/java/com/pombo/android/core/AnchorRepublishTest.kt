@@ -86,6 +86,11 @@ class AnchorRepublishTest {
     }
 
     @Test
+    fun `names the announces a member needs for the keys in use now`() = runBlocking {
+        assertEquals(listOf("3.c", "p2.x"), manager().currentAnchorKeyIds(stream))
+    }
+
+    @Test
     fun `a member publishes nothing`() = runBlocking {
         assertEquals(emptyList<Long>(), manager(address = "0x" + "99".repeat(20)).republishAnchors(stream, keysStream))
         assertEquals(emptyList<JSONObject>(), published)

@@ -674,6 +674,21 @@ class ChannelManager(
             this@ChannelManager.republishImage(channel, payload, switchGeneration)
         override suspend fun publishPasswordChallenge(channel: Channel): Long =
             this@ChannelManager.publishPasswordChallenge(channel.adminStreamId, channel.password ?: error("no password"))
+        override suspend fun currentAnchorKeyIds(channel: Channel) =
+            epochKeys.currentAnchorKeyIds(channel.messageStreamId)
+        override suspend fun resolve(streamId: String) = storageEndpoints.resolve(streamId, force = true)
+        override suspend fun readLast(
+            provider: com.pombo.android.core.StorageEndpoints.Node, streamId: String, partition: Int, count: Int
+        ): List<JSONObject>? {
+            for (url in provider.urls) {
+                try {
+                    return com.pombo.android.core.StorageHttp.directFetchLastObjects(url, streamId, partition, count)
+                } catch (e: Exception) {
+                    Log.d(TAG, "storage copy: read at $url failed: ${e.message}")
+                }
+            }
+            return null
+        }
         override suspend fun providers(streamId: String) = storageEndpoints.probeStream(streamId)
         override suspend fun storedOn(
             provider: com.pombo.android.core.StorageEndpoints.Node, streamId: String, partition: Int, timestamps: List<Long>
@@ -1627,6 +1642,7 @@ class ChannelManager(
         val channel = _current.value ?: throw IllegalStateException("No channel open")
         if (!amOwner(channel)) throw IllegalStateException("Only the channel admin can change storage")
         val addr = address.trim()
+        storageCopy.ensureRemainingHold(channel.messageStreamId, addr)
         val out = applyToStoredStreams(
             channel,
             needs = { needsNodeRemove(it, addr) },

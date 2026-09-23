@@ -1230,6 +1230,12 @@ class EpochKeyManager(
         return published
     }
 
+    suspend fun currentAnchorKeyIds(messageStreamId: String): List<String> = mutex.withLock {
+        val s = getState(messageStreamId)
+        if (!s.loaded) { loadPersisted(messageStreamId, s); s.loaded = true }
+        listOfNotNull(s.announces[s.currentEpoch]?.keyId, s.pubAnnounce?.keyId, s.intAnnounce?.keyId)
+    }
+
     /** A v2 wrap sealed to this account by one of its own admin devices. */
     private fun isSelfWrap(messageStreamId: String, data: JSONObject): Boolean =
         data.optInt("v", 1) == 2 && data.optString("requestId") == SELF_WRAP_REQUEST_ID &&

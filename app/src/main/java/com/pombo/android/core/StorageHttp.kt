@@ -134,6 +134,26 @@ object StorageHttp {
     }
 
     /**
+     * [directFetchLast] with each row's JSON content.
+     * @throws HttpStatusException on a non-2xx response.
+     */
+    suspend fun directFetchLastObjects(
+        base: String, sid: String, partition: Int, count: Int
+    ): List<JSONObject> = withContext(Dispatchers.IO) {
+        val b = base.trimEnd('/')
+        val conn = open("$b/streams/${enc(sid)}/data/partitions/$partition/last?count=$count")
+        try {
+            val code = conn.responseCode
+            if (code / 100 != 2) throw HttpStatusException(code)
+            val out = ArrayList<JSONObject>()
+            conn.inputStream.bufferedReader(Charsets.UTF_8).use { reader -> parseStorageArray(reader) { out.add(it) } }
+            out
+        } finally {
+            conn.disconnect()
+        }
+    }
+
+    /**
      * Incremental parser for a storage node's top-level JSON array of row
      * objects. Emits each row object via [onObject] the moment it closes, then
      * drops it from the buffer, so peak memory is ~one row (not the whole body).

@@ -1647,6 +1647,8 @@ class AppViewModel(app: Application) : AndroidViewModel(app), PomboBridge.Listen
         manager.onModerationWarning = { toast(it, com.pombo.android.ui.ToastKind.WARNING, 8000L) }
         manager.onStorageNotice = { message, kind ->
             when (kind) {
+                com.pombo.android.core.channels.StorageCopy.Notice.PROGRESS ->
+                    toast(message, com.pombo.android.ui.ToastKind.INFO)
                 com.pombo.android.core.channels.StorageCopy.Notice.DONE ->
                     toast(message, com.pombo.android.ui.ToastKind.SUCCESS)
                 com.pombo.android.core.channels.StorageCopy.Notice.WARNING ->

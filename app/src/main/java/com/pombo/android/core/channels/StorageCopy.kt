@@ -30,6 +30,11 @@ class StorageCopy(private val scope: CoroutineScope, private val host: Host) {
         suspend fun publishAdminState(channel: Channel): Long
         suspend fun republishImage(channel: Channel, payload: JSONObject): Long
         suspend fun publishPasswordChallenge(channel: Channel): Long
+        suspend fun currentAnchorKeyIds(channel: Channel): List<String>
+        /** The stream's providers as the chain has them now, never from a cache. */
+        suspend fun resolve(streamId: String): List<StorageEndpoints.Node>
+        /** The last rows one provider serves on a partition; null when none of its URLs answers. */
+        suspend fun readLast(provider: StorageEndpoints.Node, streamId: String, partition: Int, count: Int): List<JSONObject>?
         suspend fun providers(streamId: String): List<StorageEndpoints.Provider>
         /** The timestamps among [timestamps] the provider holds; null when it did not answer. */
         suspend fun storedOn(
@@ -41,7 +46,7 @@ class StorageCopy(private val scope: CoroutineScope, private val host: Host) {
         suspend fun sleep(ms: Long)
     }
 
-    enum class Notice { DONE, WARNING }
+    enum class Notice { PROGRESS, DONE, WARNING }
 
     data class Snapshot(val image: JSONObject?)
 
@@ -107,6 +112,75 @@ class StorageCopy(private val scope: CoroutineScope, private val host: Host) {
             val snapshot = prepare(messageStreamId)
             nodes.forEach { copyTo(messageStreamId, it, snapshot) }
         }
+    }
+
+    suspend fun ensureRemainingHold(messageStreamId: String, leavingAddress: String) {
+        val channel = ownedChannel(messageStreamId) ?: return
+        val leaving = leavingAddress.lowercase()
+        val lacking = lacking(channel, leaving)
+        if (lacking.isEmpty()) return
+
+        host.notice("Copying channel keys and settings to the provider that stays…", Notice.PROGRESS)
+        val snapshot = Snapshot(image = readImage(channel, IMAGE_READ_ATTEMPTS))
+        for (node in lacking) copyTo(messageStreamId, node, snapshot).await()
+        check(lacking(channel, leaving).isEmpty()) {
+            "The storage provider that stays does not hold this channel's keys and settings yet, " +
+                "so the old one was not removed. Try again in a minute."
+        }
+    }
+
+    private class Check(
+        val streamId: String,
+        val partition: Int,
+        val count: Int,
+        val expected: suspend (gone: StorageEndpoints.Node) -> Boolean,
+        val holds: (List<JSONObject>) -> Boolean
+    )
+
+    private suspend fun lacking(channel: Channel, leaving: String): Set<String> {
+        val checks = ArrayList<Check>()
+        // The -3 is judged against the leaving provider itself: whatever it
+        // serves there must still be served once it is gone.
+        for (partition in listOf(
+            StreamConstants.ADMIN_MODERATION, StreamConstants.ADMIN_CHANNEL_IMAGE, StreamConstants.ADMIN_PASSWORD_CHALLENGE
+        )) {
+            checks += Check(channel.adminStreamId, partition, 1,
+                expected = { gone ->
+                    host.readLast(gone, channel.adminStreamId, partition, 1)?.isNotEmpty() ?: when (partition) {
+                        StreamConstants.ADMIN_MODERATION -> host.adminRev(channel) > 0
+                        StreamConstants.ADMIN_PASSWORD_CHALLENGE -> channel.type == "password"
+                        else -> false
+                    }
+                },
+                holds = { it.isNotEmpty() })
+        }
+        val keyIds = if (channel.type == "gated") host.currentAnchorKeyIds(channel) else emptyList()
+        if (keyIds.isNotEmpty()) {
+            val keysStreamId = channel.keysStreamId.ifEmpty { StreamConstants.deriveKeysId(channel.messageStreamId) }
+            checks += Check(keysStreamId, StreamConstants.P_KEY_EXCHANGE, 1000,
+                expected = { true },
+                holds = { rows -> keyIds.all { id -> rows.any { it.optJSONObject("content")?.optString("keyId") == id } } })
+        }
+
+        val lacking = LinkedHashSet<String>()
+        for (check in checks) {
+            val providers = host.resolve(check.streamId)
+            val gone = providers.firstOrNull { it.nodeAddress.equals(leaving, ignoreCase = true) } ?: continue
+            val staying = providers.filterNot { it.nodeAddress.equals(leaving, ignoreCase = true) }
+            if (staying.isEmpty() || !check.expected(gone)) continue
+            for (provider in staying) {
+                val rows = host.readLast(provider, check.streamId, check.partition, check.count)
+                if (rows == null || !check.holds(rows)) lacking += provider.nodeAddress.lowercase()
+            }
+        }
+        return lacking
+    }
+
+    private suspend fun readImage(channel: Channel, attempts: Int): JSONObject? {
+        repeat(attempts) {
+            runCatching { host.readImage(channel) }.getOrNull()?.let { return it }
+        }
+        return null
     }
 
     private suspend fun copy(messageStreamId: String, node: String, snapshot: Snapshot?): Outcome {
@@ -214,6 +288,8 @@ class StorageCopy(private val scope: CoroutineScope, private val host: Host) {
     companion object {
         private const val TAG = "StorageCopy"
         private val ITEMS = listOf("keys", "admin", "image", "password")
+        /** Reads pick a provider each: a few tries find the one still holding it. */
+        private const val IMAGE_READ_ATTEMPTS = 4
         val DELAYS_MS = longArrayOf(5_000, 10_000, 20_000, 40_000)
         const val REPUBLISH_LIMIT = 2
     }
