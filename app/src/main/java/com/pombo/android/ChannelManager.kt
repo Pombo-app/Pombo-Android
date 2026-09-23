@@ -21,6 +21,7 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.async
 import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -384,30 +385,57 @@ class ChannelManager(
         }
     )
 
-    private var epochRefreshJob: Job? = null
+    private var historyRefreshJob: Job? = null
+    private val historyRefreshLock = Mutex()
+    private var renewalRetryJob: Job? = null
 
-    /**
-     * A key was adopted: messages skipped as "waiting for key" are sitting in
-     * storage — re-pull the recent window through the normal handlers (which
-     * dedupe by id and re-apply pending overrides). Debounced: adopting N
-     * epochs in a burst (join) fires one refresh.
-     */
     private fun refreshAfterEpochKey(messageStreamId: String) {
         if (_current.value?.messageStreamId != messageStreamId) return
         _waitingForKeys.value = false
-        epochRefreshJob?.cancel()
-        epochRefreshJob = scope.launch {
+        refreshHistory(messageStreamId)
+    }
+
+    /**
+     * Re-pull the open channel's recent window through the normal handlers
+     * (which dedupe by id and re-apply pending overrides): after a key was
+     * adopted the messages skipped as "waiting for key" are sitting in
+     * storage, and after access came back so is what the storage node
+     * refused. Debounced: adopting N epochs in a burst (join) fires one
+     * refresh. One runs at a time and is never cancelled halfway, since it
+     * paints once at the end; a trigger meanwhile queues one more.
+     */
+    private fun refreshHistory(messageStreamId: String) {
+        if (_current.value?.messageStreamId != messageStreamId) return
+        historyRefreshJob?.cancel()
+        historyRefreshJob = scope.launch {
             delay(1_500)
-            val channel = _current.value?.takeIf { it.messageStreamId == messageStreamId }
-                ?: return@launch
-            Log.i(TAG, "epochKeys: refreshing history after key adoption")
-            loadHistory(channel, switchGeneration)
-            // The -3 artifacts fetched at open were epoch-sealed and
-            // unreadable until this key arrived — pins/moderation and a
-            // hidden channel's image need their own re-pull (the admin
-            // poller would take up to a full tick to converge).
-            runCatching { loadAdminState(channel, switchGeneration) }
-            runCatching { loadChannelImage(channel) }
+            historyRefreshLock.withLock {
+                withContext(NonCancellable) {
+                    val channel = _current.value?.takeIf { it.messageStreamId == messageStreamId }
+                        ?: return@withContext
+                    Log.i(TAG, "refreshing history")
+                    loadHistory(channel, switchGeneration)
+                    // The -3 artifacts fetched at open were epoch-sealed and
+                    // unreadable until this key arrived — pins/moderation and a
+                    // hidden channel's image need their own re-pull (the admin
+                    // poller would take up to a full tick to converge).
+                    runCatching { loadAdminState(channel, switchGeneration) }
+                    runCatching { loadChannelImage(channel) }
+                }
+            }
+        }
+    }
+
+    /** After a renewal: re-read now, and once more if the storage node still refused. */
+    fun refreshHistoryAfterRenewal() {
+        val messageStreamId = _current.value?.messageStreamId ?: return
+        refreshHistory(messageStreamId)
+        renewalRetryJob?.cancel()
+        renewalRetryJob = scope.launch {
+            delay(RENEWAL_HISTORY_RETRY_MS)
+            if (_current.value?.messageStreamId == messageStreamId && _historyError.value != null) {
+                refreshHistory(messageStreamId)
+            }
         }
     }
 
@@ -884,6 +912,10 @@ class ChannelManager(
                 paidUntil * 1000 > System.currentTimeMillis() -> SubscriptionState.ACTIVE
                 else -> SubscriptionState.EXPIRED
             }
+
+        /** The chain lets the viewer in: the owner and moderators never pay. */
+        val hasAccess: Boolean
+            get() = !banned && (isOwner || moderator || state == SubscriptionState.ACTIVE)
     }
 
     /** NONE = nothing to say: the viewer owes this channel no subscription. */
@@ -2905,7 +2937,11 @@ class ChannelManager(
                     channel, StreamConstants.P_MESSAGES, MEMBER_CATCHUP_COUNT, 20_000, 30_000)
                     ?: continue
                 if (!stillCurrent(generation)) return@launch
-                page.readError?.let { _historyError.value = it }
+                val refusal = page.readError
+                val verdictFlipped = (refusal != null) != (_historyError.value != null)
+                if (refusal != null) _historyError.value = refusal
+                else if (_historyError.value != null) refreshHistory(channel.messageStreamId)
+                if (verdictFlipped) refreshPaidStatus()
                 for (i in 0 until page.entries.length()) {
                     val entry = page.entries.optJSONObject(i) ?: continue
                     val meta = entry.optJSONObject("meta") ?: JSONObject()
@@ -7195,6 +7231,8 @@ class ChannelManager(
         /** Web config.js subscriptions.memberCatchUp*. */
         const val MEMBER_CATCHUP_INTERVAL_MS = 30_000L
         const val MEMBER_CATCHUP_COUNT = 30
+        /** The storage node keeps a gate refusal for 20 s (web config.js renewalHistoryRetryMs). */
+        const val RENEWAL_HISTORY_RETRY_MS = 21_000L
         /** Allowed clock skew of a payload timestamp ahead of now / of its
          *  signed envelope (web config gate.timestampSkewMs). One-sided: a
          *  payload older than its envelope is a legitimate republish. */

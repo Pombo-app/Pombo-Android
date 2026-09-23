@@ -579,8 +579,7 @@ fun ChatScreen(vm: AppViewModel) {
         // float over content or scroll away. Amber warning is dismissible per
         // viewing session; the expired strip is not.
         var subWarnDismissed by remember(ch.messageStreamId) { mutableStateOf(false) }
-        val accessActive = !clientBanned
-            && paidStatus?.state == ChannelManager.SubscriptionState.ACTIVE
+        val accessActive = !clientBanned && paidStatus?.hasAccess == true
         // A client ban applies to channels with no gate, which have no standing
         val subState = if (clientBanned) ChannelManager.SubscriptionState.BANNED
         else paidStatus?.state ?: ChannelManager.SubscriptionState.NONE
@@ -1634,7 +1633,7 @@ private fun historyErrorText(
         // The chain grants access and this node refuses: it is behind
         else if (hasAccess)
             "Channel history is temporarily unavailable" to
-                "The storage node has not caught up with your access. Reopen the channel to retry"
+                "The storage node has not caught up with your access yet. Retrying automatically"
         else
             "Your access to this channel has ended" to "The storage node no longer serves its history to you"
         401 -> if (error.signed)

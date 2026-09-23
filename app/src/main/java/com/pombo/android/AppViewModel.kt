@@ -2902,7 +2902,8 @@ class AppViewModel(app: Application) : AndroidViewModel(app), PomboBridge.Listen
      * entry screen in renewal mode. After payment the retry re-reads the
      * standing and fires one immediate KEY_REQUEST: requests sent while
      * expired were refused silently, so waiting out the backoff would leave
-     * the channel locked for up to a minute after paying.
+     * the channel locked for up to a minute after paying. The history the
+     * storage node refused meanwhile is read again too.
      */
     fun renewSubscription() = viewModelScope.launch {
         val channel = manager.current.value ?: return@launch
@@ -2911,6 +2912,7 @@ class AppViewModel(app: Application) : AndroidViewModel(app), PomboBridge.Listen
             manager.gateInvalidateAccess(gate)
             manager.refreshPaidStatus()
             manager.requestChannelKeysNow()
+            manager.refreshHistoryAfterRenewal()
         }
     }
 
@@ -2938,7 +2940,9 @@ class AppViewModel(app: Application) : AndroidViewModel(app), PomboBridge.Listen
             ) {
                 val ok = try {
                     runWithToast(
-                        "Paying subscription…", null, "Payment failed",
+                        "Paying subscription…",
+                        if (entry.renewal) "Subscription renewed" else "Subscription paid",
+                        "Payment failed",
                         onToastId = { payToastId = it }
                     ) {
                         manager.gatePay(entry.info.gateAddress)
