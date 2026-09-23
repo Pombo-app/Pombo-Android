@@ -2940,7 +2940,9 @@ class AppViewModel(app: Application) : AndroidViewModel(app), PomboBridge.Listen
             ) {
                 val ok = try {
                     runWithToast(
-                        "Paying subscription…", null, "Payment failed",
+                        "Paying subscription…",
+                        if (entry.renewal) "Subscription renewed" else "Subscription paid",
+                        "Payment failed",
                         onToastId = { payToastId = it }
                     ) {
                         manager.gatePay(entry.info.gateAddress)
