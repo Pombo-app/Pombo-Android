@@ -11,6 +11,7 @@ import com.pombo.android.core.channels.FileTransfers
 import com.pombo.android.core.channels.MessageVerification
 import com.pombo.android.core.channels.Moderation
 import com.pombo.android.core.channels.PresenceTracker
+import com.pombo.android.core.channels.StorageCopy
 import com.pombo.android.core.channels.optStringOrNull
 import com.pombo.android.core.channels.messageTime
 import com.pombo.android.data.Channel
@@ -647,6 +648,53 @@ class ChannelManager(
             override fun username(): String? = this@ChannelManager.myUsername()
         }
     )
+
+    internal val storageCopy = StorageCopy(scope, object : StorageCopy.Host {
+        override fun account(): String? = myAddress()
+        override fun channel(messageStreamId: String): Channel? =
+            _channels.value.firstOrNull { it.messageStreamId == messageStreamId }
+        override fun isOwner(channel: Channel): Boolean = amOwner(channel)
+        override suspend fun ensureAdminLoaded(channel: Channel) {
+            if (channel.adminStreamId !in adminLoaded) loadAdminState(channel, switchGeneration)
+        }
+        override fun adminRev(channel: Channel): Int = adminRevs[channel.adminStreamId] ?: 0
+        override suspend fun readImage(channel: Channel): JSONObject? =
+            resendImagePayload(channel.adminStreamId, channel.password)
+                ?.takeIf { it.optString("data").isNotEmpty() && it.optString("hash").isNotEmpty() }
+        override suspend fun republishAnchors(channel: Channel): List<Long> = epochKeys.republishAnchors(
+            channel.messageStreamId,
+            channel.keysStreamId.ifEmpty { StreamConstants.deriveKeysId(channel.messageStreamId) })
+        override suspend fun publishAdminState(channel: Channel): Long {
+            // Moderation lives in the open channel's flows: for any other
+            // channel this would publish the open one's.
+            check(channel.adminStreamId == _current.value?.adminStreamId) { "channel not open" }
+            return admin.publishAdminState(channel)
+        }
+        override suspend fun republishImage(channel: Channel, payload: JSONObject): Long =
+            this@ChannelManager.republishImage(channel, payload, switchGeneration)
+        override suspend fun publishPasswordChallenge(channel: Channel): Long =
+            this@ChannelManager.publishPasswordChallenge(channel.adminStreamId, channel.password ?: error("no password"))
+        override suspend fun providers(streamId: String) = storageEndpoints.probeStream(streamId)
+        override suspend fun storedOn(
+            provider: com.pombo.android.core.StorageEndpoints.Node, streamId: String, partition: Int, timestamps: List<Long>
+        ): Set<Long>? {
+            val key = myPrivateKey() ?: return null
+            return com.pombo.android.core.StoragePurge.storedOn(
+                listOf(provider), streamId, partition,
+                timestamps.map { com.pombo.android.core.StoragePurge.Target(it, 0) }, key
+            )?.map { it.timestamp }?.toSet()
+        }
+        override fun loadPending(key: String): List<String> {
+            val arr = adminFloorStore.get(key)?.optJSONArray("nodes") ?: return emptyList()
+            return (0 until arr.length()).map { arr.optString(it) }.filter { it.isNotEmpty() }
+        }
+        override fun savePending(key: String, nodes: List<String>) {
+            if (nodes.isEmpty()) adminFloorStore.remove(key)
+            else adminFloorStore.put(key, JSONObject().put("nodes", JSONArray(nodes)))
+        }
+        override fun notice(message: String, kind: StorageCopy.Notice) { onStorageNotice?.invoke(message, kind) }
+        override suspend fun sleep(ms: Long) = delay(ms)
+    })
 
     init {
         // Storage reads of a gated channel's streams are signed on nodes that
@@ -1555,13 +1603,24 @@ class ChannelManager(
                 storageDays?.let { put("storageDays", it) }
             }
         }
+        val snapshot = runCatching { storageCopy.prepare(channel.messageStreamId) }
+            .onFailure { Log.w(TAG, "storage copy not prepared: ${it.message}") }
+            .getOrNull()
         val out = applyToStoredStreams(
             channel,
             needs = { needsNodeAdd(it, addr) },
             apply = { bridge.call("addToStorageNode", args(it), 180_000) }
         )
         markStorage(channel, enabled = true)
+        forgetStorageEndpoints(channel)
+        if (snapshot != null && listOf("admin", "keys").any { out.results[it]?.let { r -> r != "failed" } == true }) {
+            storageCopy.copyTo(channel.messageStreamId, addr, snapshot)
+        }
         return out
+    }
+
+    private fun forgetStorageEndpoints(channel: Channel) {
+        storedStreamsByKind(channel).forEach { (streamId, _) -> storageEndpoints.invalidate(streamId) }
     }
 
     suspend fun removeStorageNode(address: String): StorageWriteResult {
@@ -1576,6 +1635,7 @@ class ChannelManager(
                     JSONObject().put("streamId", it).put("nodeAddress", addr), 180_000)
             }
         )
+        forgetStorageEndpoints(channel)
         markStorage(channel, enabled = channelStorageInfo().enabled)
         return out
     }
@@ -2012,12 +2072,12 @@ class ChannelManager(
     }
 
     /** Publishes the password challenge on -3/P2, sealed with the password. */
-    private suspend fun publishPasswordChallenge(adminStreamId: String, password: String) {
+    private suspend fun publishPasswordChallenge(adminStreamId: String, password: String): Long {
         val challenge = JSONObject()
             .put("type", "PASSWORD_CHALLENGE").put("v", 1)
             .put("magic", StreamConstants.PASSWORD_CHALLENGE_MAGIC)
             .put("ts", System.currentTimeMillis())
-        publishContent(adminStreamId, StreamConstants.ADMIN_PASSWORD_CHALLENGE, challenge, password)
+        return publishContent(adminStreamId, StreamConstants.ADMIN_PASSWORD_CHALLENGE, challenge, password)
     }
 
     /**
@@ -2630,34 +2690,41 @@ class ChannelManager(
                     Log.d(TAG, "CHANNEL_IMAGE TTL republish skipped: encrypted payload without password")
                     return
                 }
-                val newRev = payload.optInt("rev", 0) + 1
-                val fresh = JSONObject(payload.toString())
-                    .put("rev", newRev)
-                    .put("ts", System.currentTimeMillis())
-                if (fresh.optString("createdBy").isEmpty()) fresh.put("createdBy", myAddress())
                 if (!stillCurrent(generation)) return
-                Log.i(TAG, "CHANNEL_IMAGE nearing storage TTL (${ageDays(ts)}d/${storageDays}d) — owner republishing rev=$newRev")
-                if (isEpochChannel(channel) && channel.exposure == "visible") {
-                    // Storefront image stays in the CLEAR (mirrors the
-                    // set-image path): the generic epoch publish would seal
-                    // it and hide the storefront from Explore/non-members.
-                    bridge.call("publishAsAccount", JSONObject()
-                        .put("streamId", channel.adminStreamId)
-                        .put("partition", StreamConstants.ADMIN_CHANNEL_IMAGE)
-                        .put("content", fresh), 60_000)
-                } else {
-                    publishContent(
-                        channel.adminStreamId, StreamConstants.ADMIN_CHANNEL_IMAGE, fresh,
-                        if (encrypted) pwd else null
-                    )
-                }
-                // Keep the open channel's rev counter ahead of the retained
-                // entry so a later image change never publishes a lower rev.
-                if (stillCurrent(generation)) channelImageRev = maxOf(channelImageRev, newRev)
+                Log.i(TAG, "CHANNEL_IMAGE nearing storage TTL (${ageDays(ts)}d/${storageDays}d) — owner republishing")
+                republishImage(channel, payload, generation)
             }
         } catch (e: Exception) {
             Log.w(TAG, "CHANNEL_IMAGE TTL republish failed (will retry next open): ${e.message}")
         }
+    }
+
+    private suspend fun republishImage(channel: Channel, payload: JSONObject, generation: Int): Long {
+        val newRev = payload.optInt("rev", 0) + 1
+        val fresh = JSONObject(payload.toString())
+            .put("rev", newRev)
+            .put("ts", System.currentTimeMillis())
+        if (fresh.optString("createdBy").isEmpty()) fresh.put("createdBy", myAddress())
+        val published = if (isEpochChannel(channel) && channel.exposure == "visible") {
+            // Storefront image stays in the CLEAR (mirrors the
+            // set-image path): the generic epoch publish would seal
+            // it and hide the storefront from Explore/non-members.
+            bridge.call("publishAsAccount", JSONObject()
+                .put("streamId", channel.adminStreamId)
+                .put("partition", StreamConstants.ADMIN_CHANNEL_IMAGE)
+                .put("content", fresh), 60_000).optLong("timestamp", 0L)
+        } else {
+            publishContent(
+                channel.adminStreamId, StreamConstants.ADMIN_CHANNEL_IMAGE, fresh,
+                if (payload.optBoolean("encrypted", false)) channel.password else null
+            )
+        }
+        // Keep the open channel's rev counter ahead of the retained
+        // entry so a later image change never publishes a lower rev.
+        if (stillCurrent(generation) && _current.value?.adminStreamId == channel.adminStreamId) {
+            channelImageRev = maxOf(channelImageRev, newRev)
+        }
+        return published
     }
 
     private fun applyAdminMessage(
@@ -4651,6 +4718,7 @@ class ChannelManager(
                 // An ADMIN_STATE published here that storage never confirmed
                 // is waited for again, and republished, now that the owner is back.
                 admin.resumeConfirmation(channel, generation)
+                storageCopy.resume(channel.messageStreamId)
                 // A member's keys and messages need a raw sweep the owner
                 // does not — see [startMemberCatchUp].
                 startMemberCatchUp(channel, generation)
@@ -5031,6 +5099,8 @@ class ChannelManager(
 
     /** Shown when a moderation publish never reached storage, or was replaced from another device. */
     @Volatile var onModerationWarning: ((String) -> Unit)? = null
+
+    @Volatile var onStorageNotice: ((message: String, kind: StorageCopy.Notice) -> Unit)? = null
 
     /** The wait between read-backs of a published ADMIN_STATE; tests make it instant. */
     internal var adminConfirmSleep: suspend (Long) -> Unit = { kotlinx.coroutines.delay(it) }

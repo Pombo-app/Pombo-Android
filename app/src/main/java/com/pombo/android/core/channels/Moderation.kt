@@ -1208,9 +1208,12 @@ internal class Moderation(private val manager: ChannelManager) {
     fun pendingModActions(): Int =
         deltas.values.count { it.optLong("ts") > absorbedThrough }
 
-    /** Publishes the full ADMIN_STATE with an incremented rev (owner only). */
-    internal suspend fun publishAdminState(channel: Channel) {
-        val addr = myAddress() ?: return
+    /**
+     * Publishes the full ADMIN_STATE with an incremented rev (owner only).
+     * @return the publish timestamp, 0 when there is no account to publish as
+     */
+    internal suspend fun publishAdminState(channel: Channel): Long {
+        val addr = myAddress() ?: return 0L
         // Never compute a rev off an unscanned stream (web gates publish on
         // adminLoaded): moderating fast, before the on-open load finished,
         // published rev=1 over a channel already at rev N — every peer with
@@ -1255,6 +1258,7 @@ internal class Moderation(private val manager: ChannelManager) {
         } catch (e: Exception) {
             Log.d(TAG, "admin_invalidate publish failed (non-fatal): ${e.message}")
         }
+        return envelopeTs
     }
 
     /**

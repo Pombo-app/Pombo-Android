@@ -42,7 +42,8 @@ class EpochKeyManager(
     /** For rank-delayed answers (N-B) — never delay inline in a handler. */
     private val scope: kotlinx.coroutines.CoroutineScope,
     private val myAddress: () -> String?,
-    private val publishKeys: suspend (keysStreamId: String, data: JSONObject) -> Unit,
+    /** Returns what the bridge answered: `{ timestamp }` locates the row in storage. */
+    private val publishKeys: suspend (keysStreamId: String, data: JSONObject) -> Any?,
     private val resendKeys: suspend (keysStreamId: String) -> List<Entry>,
     /** Fired on adoption — the channel layer re-pulls history so parked messages open. */
     private val onKeyAdopted: (messageStreamId: String, keyId: String) -> Unit,
@@ -1184,6 +1185,49 @@ class EpochKeyManager(
         }
         mutex.withLock { recordSeenWrapLocked(getState(messageStreamId), SELF_WRAP_REQUEST_ID, keyId) }
         Log.i(TAG, "wrapped $keyId for this account's other devices on ${keysStreamId.takeLast(30)}")
+    }
+
+    /**
+     * Same content in fresh envelopes: the network drops a resent original as a duplicate.
+     * @return each announce's publish timestamp, 0 when the bridge gave none
+     */
+    suspend fun republishAnchors(messageStreamId: String, keysStreamId: String): List<Long> {
+        if (!isOwnAdmin(messageStreamId)) return emptyList()
+        val announces = ArrayList<JSONObject>()
+        val held = ArrayList<Triple<String, String, Int>>()
+        mutex.withLock {
+            val s = getState(messageStreamId)
+            if (!s.loaded) { loadPersisted(messageStreamId, s); s.loaded = true }
+            val now = System.currentTimeMillis()
+            for ((epoch, a) in s.announces.toSortedMap()) {
+                announces += JSONObject()
+                    .put("t", StreamConstants.KEY_ANNOUNCE)
+                    .put("epoch", epoch)
+                    .put("keyId", a.keyId)
+                    .put("keyHash", a.keyHash)
+                    .put("validFrom", a.validFrom)
+                s.announceFreshness[epoch] = now
+            }
+            s.pubAnnounce?.let {
+                announces += JSONObject()
+                    .put("t", StreamConstants.PUB_ANNOUNCE)
+                    .put("keyId", it.keyId).put("keyHash", it.keyHash).put("addr", it.address).put("rev", it.rev)
+                s.pubAnnounceFreshness = now
+            }
+            s.intAnnounce?.let {
+                announces += JSONObject()
+                    .put("t", StreamConstants.PUB_ANNOUNCE).put("k", "i")
+                    .put("keyId", it.keyId).put("keyHash", it.keyHash).put("addr", it.address).put("rev", it.rev)
+                s.intAnnounceFreshness = now
+            }
+            s.epochs.forEach { (keyId, e) -> held += Triple(keyId, e.keyHex, e.epoch) }
+        }
+        val published = announces.map { a ->
+            (publishKeys(keysStreamId, a) as? JSONObject)?.optLong("timestamp", 0L) ?: 0L
+        }
+        for ((keyId, keyHex, epoch) in held) wrapForSelf(messageStreamId, keysStreamId, keyId, keyHex, epoch)
+        Log.i(TAG, "republished ${published.size} announce(s) on ${keysStreamId.takeLast(30)}")
+        return published
     }
 
     /** A v2 wrap sealed to this account by one of its own admin devices. */

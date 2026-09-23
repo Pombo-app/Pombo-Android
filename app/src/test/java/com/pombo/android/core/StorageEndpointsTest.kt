@@ -305,6 +305,19 @@ class StorageEndpointsTest {
     }
 
     @Test
+    fun `probeStream says when a provider did not answer the probe`() = runBlocking {
+        val ep = StorageEndpoints(
+            fetcher = { listOf(node("0xA", "https://a.example.com"), node("0xB", "https://b.example.com")) },
+            capabilityFetcher = { url -> if (url == "https://b.example.com") error("Failed to connect") else null }
+        )
+
+        val providers = ep.probeStream("s")
+
+        assertEquals(listOf(true, false), providers.map { it.answered })
+        assertEquals(emptySet<String>(), providers[1].features)
+    }
+
+    @Test
     fun `probeStream on a stream without storage probes nothing`() = runBlocking {
         val calls = AtomicInteger(0)
         val ep = StorageEndpoints(fetcher = { emptyList() }, capabilityFetcher = { calls.incrementAndGet(); FORK })

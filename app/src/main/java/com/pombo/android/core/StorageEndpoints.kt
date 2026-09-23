@@ -53,7 +53,13 @@ class StorageEndpoints(
     data class Node(val nodeAddress: String, val urls: List<String>)
 
     /** A provider with the union of the features its URLs announce. */
-    data class Provider(val nodeAddress: String, val urls: List<String>, val features: Set<String>)
+    /** [answered] is false when one of its URLs did not answer the capabilities probe. */
+    data class Provider(
+        val nodeAddress: String,
+        val urls: List<String>,
+        val features: Set<String>,
+        val answered: Boolean = true
+    )
 
     private class Cached(val at: Long, val nodes: List<Node>)
     private class CachedCapabilities(val at: Long, val features: Set<String>)
@@ -211,7 +217,10 @@ class StorageEndpoints(
         val nodes = resolve(streamId)
         nodes.flatMap { it.urls }.map { u -> async { probeCapabilities(u) } }.awaitAll()
         nodes.map { n ->
-            Provider(n.nodeAddress, n.urls, n.urls.flatMap { capabilitiesOf(it) ?: emptySet() }.toSet())
+            Provider(
+                n.nodeAddress, n.urls, n.urls.flatMap { capabilitiesOf(it) ?: emptySet() }.toSet(),
+                answered = n.urls.all { capabilitiesOf(it) != null }
+            )
         }
     }
 
