@@ -859,16 +859,13 @@ class AppViewModel(app: Application) : AndroidViewModel(app), PomboBridge.Listen
         }
 
         val info = runCatching { com.pombo.android.core.GraphApi.getChannelInfo(streamId) }.getOrNull()
-        val channel = ExploreChannel(
-            messageStreamId = streamId,
-            name = info?.displayName ?: streamId.substringAfter('/'),
-            description = info?.description.orEmpty(),
-            type = info?.type ?: "public",
-            language = info?.language.orEmpty(),
-            category = info?.category.orEmpty(),
-            readOnly = info?.readOnly ?: false,
-            gateAddress = info?.gateAddress
-        )
+        val channel = info?.let { ExploreChannel.of(it).copy(messageStreamId = streamId) }
+            ?: ExploreChannel(
+                messageStreamId = streamId,
+                name = streamId.substringAfter('/'),
+                description = "",
+                type = "public"
+            )
 
         when (channel.type) {
             "password" -> _linkPasswordPrompt.value = channel
@@ -3014,19 +3011,10 @@ class AppViewModel(app: Application) : AndroidViewModel(app), PomboBridge.Listen
                 // lazy-fetches the misses).
                 _explore.value = ordered.map { info ->
                     val cached = previewStore.cached(info.streamId)
-                    ExploreChannel(
-                        messageStreamId = info.streamId,
-                        name = info.displayName,
-                        description = info.description,
-                        type = info.type,
-                        language = info.language,
-                        category = info.category,
+                    ExploreChannel.of(info).copy(
                         lastSender = cached?.sender.orEmpty(),
                         lastText = cached?.text.orEmpty(),
-                        lastSenderAddress = cached?.senderAddress.orEmpty(),
-                        readOnly = info.readOnly,
-                        gateAddress = info.gateAddress,
-                        wireIdentity = info.wireIdentity
+                        lastSenderAddress = cached?.senderAddress.orEmpty()
                     )
                 }
                 _exploreLoading.value = false

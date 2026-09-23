@@ -66,7 +66,21 @@ data class ExploreChannel(
     val gateQualifier: String? = null,
     /** Wire identity from metadata `m` ('sealed' | 'visible'). */
     val wireIdentity: String? = null
-)
+) {
+    companion object {
+        fun of(info: com.pombo.android.core.GraphApi.ChannelInfo) = ExploreChannel(
+            messageStreamId = info.streamId,
+            name = info.displayName,
+            description = info.description,
+            type = info.type,
+            language = info.language,
+            category = info.category,
+            readOnly = info.readOnly,
+            gateAddress = info.gateAddress,
+            wireIdentity = info.wireIdentity
+        )
+    }
+}
 
 /** Quoted message carried by a reply (web: msg.replyTo). */
 data class ReplyRef(
