@@ -47,13 +47,7 @@ class EpochKeyManager(
     private val resendKeys: suspend (keysStreamId: String) -> List<Entry>,
     /** Fired on adoption — the channel layer re-pulls history so parked messages open. */
     private val onKeyAdopted: (messageStreamId: String, keyId: String) -> Unit,
-    /**
-     * Gated channels (N-C): the CURRENT gate check, consulted before wrapping
-     * a key for a requester — one cached eth_call, FAIL-CLOSED. Ungated
-     * channels return true. This is where the write-cut for ex-members lives:
-     * the sticky envelope signature keeps their history valid, this keeps new
-     * epochs out of their hands.
-     */
+    /** Checked before wrapping a key for a requester: FAIL-CLOSED, and true on ungated channels. */
     private val checkGateAccess: suspend (messageStreamId: String, requester: String) -> Boolean =
         { _, _ -> true },
     /**
@@ -239,6 +233,9 @@ class EpochKeyManager(
 
     private val state = HashMap<String, ChannelState>()
     private val mutex = Mutex()
+
+    /** Called under the state lock: must not block. */
+    @Volatile var onEpochAdvanced: (messageStreamId: String) -> Unit = {}
 
     companion object {
         /**
@@ -1326,7 +1323,10 @@ class EpochKeyManager(
             if (keep) return false
         }
         s.announces[epoch] = incoming
-        if (epoch > s.currentEpoch) s.currentEpoch = epoch
+        if (epoch > s.currentEpoch) {
+            s.currentEpoch = epoch
+            onEpochAdvanced(messageStreamId)
+        }
         return true
     }
 
@@ -1403,11 +1403,22 @@ class EpochKeyManager(
      * covers — the suppression that turns thirty identical envelopes into
      * one.
      */
+    private suspend fun hasUnwrappedFor(messageStreamId: String, requestId: String, fromEpoch: Int): Boolean =
+        mutex.withLock {
+            val s = getState(messageStreamId)
+            val covered = s.seenWraps[requestId] ?: emptySet<String>()
+            s.epochs.any { (keyId, e) -> e.epoch >= fromEpoch && keyId !in covered } ||
+                listOf(s.pubKey to s.pubAnnounce, s.intKey to s.intAnnounce).any { (key, announce) ->
+                    key != null && announce?.keyId == key.keyId && key.keyId !in covered
+                }
+        }
+
     private suspend fun answerRequest(
         messageStreamId: String, keysStreamId: String,
         requestId: String, pubkey: String, fromEpoch: Int,
         requester: String?, spk: String? = null
     ) {
+        if (!hasUnwrappedFor(messageStreamId, requestId, fromEpoch)) return
         // Gated (N-C): the epoch key only goes to whoever passes the CURRENT
         // gate. Fail-closed inside checkGateAccess — RPC trouble means no
         // wrap from us; the requester's retry finds a healthier responder.
@@ -1754,7 +1765,10 @@ class EpochKeyManager(
         keyId: String, keyHex: String, keyHash: String, epoch: Int
     ) {
         s.epochs[keyId] = EpochEntry(keyHex, keyHash, epoch)
-        if (epoch > s.currentEpoch) s.currentEpoch = epoch
+        if (epoch > s.currentEpoch) {
+            s.currentEpoch = epoch
+            onEpochAdvanced(messageStreamId)
+        }
         s.missingKids.remove(keyId)
         s.requestAttempts = 0   // future rotations start on the fast retry again
         // Retained request ids exist to catch late v2 wraps; once nothing is

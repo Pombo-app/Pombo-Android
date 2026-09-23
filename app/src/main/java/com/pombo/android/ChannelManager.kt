@@ -713,6 +713,13 @@ class ChannelManager(
     })
 
     init {
+        epochKeys.onEpochAdvanced = { messageStreamId ->
+            channelByStream(messageStreamId)?.gateAddress?.let { gate ->
+                scope.launch {
+                    runCatching { bridge.call("gateInvalidateGrants", JSONObject().put("gate", gate)) }
+                }
+            }
+        }
         // Storage reads of a gated channel's streams are signed on nodes that
         // announce it: the bridge page asks which streams are gated before the
         // SDK's own resends, and the native direct reads (file chunks) get
