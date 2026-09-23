@@ -912,6 +912,10 @@ class ChannelManager(
                 paidUntil * 1000 > System.currentTimeMillis() -> SubscriptionState.ACTIVE
                 else -> SubscriptionState.EXPIRED
             }
+
+        /** The chain lets the viewer in: the owner and moderators never pay. */
+        val hasAccess: Boolean
+            get() = !banned && (isOwner || moderator || state == SubscriptionState.ACTIVE)
     }
 
     /** NONE = nothing to say: the viewer owes this channel no subscription. */

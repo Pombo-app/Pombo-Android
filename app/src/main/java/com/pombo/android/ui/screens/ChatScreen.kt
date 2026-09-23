@@ -579,8 +579,7 @@ fun ChatScreen(vm: AppViewModel) {
         // float over content or scroll away. Amber warning is dismissible per
         // viewing session; the expired strip is not.
         var subWarnDismissed by remember(ch.messageStreamId) { mutableStateOf(false) }
-        val accessActive = !clientBanned
-            && paidStatus?.state == ChannelManager.SubscriptionState.ACTIVE
+        val accessActive = !clientBanned && paidStatus?.hasAccess == true
         // A client ban applies to channels with no gate, which have no standing
         val subState = if (clientBanned) ChannelManager.SubscriptionState.BANNED
         else paidStatus?.state ?: ChannelManager.SubscriptionState.NONE

@@ -88,6 +88,20 @@ class PaidSubscriptionStateTest {
             PaidStatus(paidUntil = System.currentTimeMillis() / 1000 - 1).state)
     }
 
+    @Test fun `a moderator or the owner has access without paying, a lapsed member does not`() {
+        val lapsed = secondsFromNow(-60)
+        assertEquals(true, PaidStatus(paidUntil = lapsed, moderator = true).hasAccess)
+        assertEquals(true, PaidStatus(paidUntil = 0, isOwner = true).hasAccess)
+        assertEquals(true, PaidStatus(paidUntil = secondsFromNow(3600)).hasAccess)
+        assertEquals(false, PaidStatus(paidUntil = lapsed).hasAccess)
+        assertEquals(false, PaidStatus(paidUntil = 0).hasAccess)
+    }
+
+    @Test fun `a ban takes access away from a moderator and a live subscription alike`() {
+        assertEquals(false, PaidStatus(paidUntil = 0, moderator = true, banned = true).hasAccess)
+        assertEquals(false, PaidStatus(paidUntil = secondsFromNow(3600), banned = true).hasAccess)
+    }
+
     companion object {
         private const val GATE_OWNER = "0x03e2b466754f187f571ab48c69e3ab592e76d819"
         private const val STREAM = "0xowner/paid-1"
