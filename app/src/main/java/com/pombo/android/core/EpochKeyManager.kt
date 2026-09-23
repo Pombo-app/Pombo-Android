@@ -168,6 +168,9 @@ class EpochKeyManager(
          * with the account's static key, in any session of any device.
          */
         val pendingRequests = LinkedHashMap<String, PendingId>()
+        /** Ids this session sent — memory only. [pendingRequests] cannot say
+         *  "mine": it syncs, and would hide another device's request. */
+        val ownRequestIds = HashSet<String>()
         /**
          * Wraps that arrived before the announce that legitimises them, by
          * epoch. A responder answers the request as soon as it hears it, so on
@@ -1340,7 +1343,7 @@ class EpochKeyManager(
         if (requestId.isEmpty()) return false
         return mutex.withLock {
             val s = state[messageStreamId] ?: return@withLock false
-            s.pendingRequests.containsKey(requestId) || s.pendingRequest?.requestId == requestId
+            requestId in s.ownRequestIds || s.pendingRequest?.requestId == requestId
         }
     }
 
@@ -1713,6 +1716,7 @@ class EpochKeyManager(
             val (priv, pub) = EpochKeyCrypto.generateRequestKeypair()
             val requestId = PomboCrypto.randomHex(16)
             s.pendingRequest = PendingRequest(requestId, priv, pub, System.currentTimeMillis())
+            s.ownRequestIds.add(requestId)
             s.requestAttempts += 1
             request = JSONObject()
                 .put("t", StreamConstants.KEY_REQUEST)
