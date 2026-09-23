@@ -1909,6 +1909,7 @@ class EpochKeyManager(
             persist(messageStreamId, s)
         }
         Log.i(TAG, "publish key reset to rev ${newKey.rev} on ${messageStreamId.takeLast(30)}")
+        onKeyAdopted(messageStreamId, newKey.keyId)
         // Members cannot write until this announce is readable from storage —
         // verify retention exactly like a fresh epoch announce.
         retainAnnounce(messageStreamId, keysStreamId, ann)
