@@ -184,6 +184,33 @@ class SyncMergeTest {
     }
 
     @Test
+    fun `the interactions key survives when both devices hold the channel`() {
+        val merged = SyncMerge.mergeState(
+            j("""{"channels":[{"messageStreamId":"ch-1","joinedAt":1000}],
+                "epochKeys":{"ch-1":{"epochs":{},"currentEpoch":1,
+                "intKey":{"keyId":"i1.x","keyHex":"0xint","address":"0xaa","rev":1},
+                "intAnnounce":{"keyId":"i1.x","keyHash":"0xh","address":"0xaa","rev":1}}},"sliceTs":{}}"""),
+            j("""{"channels":[{"messageStreamId":"ch-1","joinedAt":1000}],
+                "epochKeys":{"ch-1":{"epochs":{},"currentEpoch":1,
+                "pubKey":{"keyId":"p1.x","keyHex":"0xpub","address":"0xbb","rev":1}}},"sliceTs":{}}""")
+        ).getJSONObject("epochKeys").getJSONObject("ch-1")
+        assertEquals("i1.x", merged.getJSONObject("intKey").getString("keyId"))
+        assertEquals("i1.x", merged.getJSONObject("intAnnounce").getString("keyId"))
+        assertEquals("p1.x", merged.getJSONObject("pubKey").getString("keyId"))
+    }
+
+    @Test
+    fun `a re-keyed interactions key supersedes the old one`() {
+        val merged = SyncMerge.mergeState(
+            j("""{"channels":[{"messageStreamId":"ch-1","joinedAt":1000}],
+                "epochKeys":{"ch-1":{"epochs":{},"intKey":{"keyId":"i1.x","keyHex":"0xold","address":"0xaa","rev":1}}},"sliceTs":{}}"""),
+            j("""{"channels":[{"messageStreamId":"ch-1","joinedAt":1000}],
+                "epochKeys":{"ch-1":{"epochs":{},"intKey":{"keyId":"i2.y","keyHex":"0xnew","address":"0xcc","rev":2}}},"sliceTs":{}}""")
+        ).getJSONObject("epochKeys").getJSONObject("ch-1")
+        assertEquals("i2.y", merged.getJSONObject("intKey").getString("keyId"))
+    }
+
+    @Test
     fun `epoch keys union with base winning per entry and currentEpoch never regressing`() {
         val merged = SyncMerge.mergeState(
             j(
