@@ -1634,7 +1634,7 @@ private fun historyErrorText(
         // The chain grants access and this node refuses: it is behind
         else if (hasAccess)
             "Channel history is temporarily unavailable" to
-                "The storage node has not caught up with your access. Reopen the channel to retry"
+                "The storage node has not caught up with your access yet. Retrying automatically"
         else
             "Your access to this channel has ended" to "The storage node no longer serves its history to you"
         401 -> if (error.signed)
