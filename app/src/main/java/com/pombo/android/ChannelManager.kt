@@ -4561,6 +4561,7 @@ class ChannelManager(
         // The streams are already subscribed — just swap in the stored channel.
         _current.value = joined
         _isPreview.value = false
+        refreshModerationPermission(joined, preview = false)
         return joined
     }
 
