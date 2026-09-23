@@ -3451,11 +3451,29 @@ class AppViewModel(app: Application) : AndroidViewModel(app), PomboBridge.Listen
     }
 
     fun sendMessage(text: String, replyTo: com.pombo.android.ReplyRef? = null) = viewModelScope.launch {
-        try { manager.sendMessage(text, replyTo) } catch (e: Exception) { _lastError.value = "Failed to send: ${e.message}" }
+        try { manager.sendMessage(text, replyTo) } catch (e: Exception) { reportSendFailure(e) }
     }
 
     fun resendMessage(id: String) = viewModelScope.launch {
-        try { manager.resendMessage(id) } catch (e: Exception) { _lastError.value = "Failed to send: ${e.message}" }
+        try { manager.resendMessage(id) } catch (e: Exception) { reportSendFailure(e) }
+    }
+
+    /** Up while the owner may rotate instead of waiting for a responder to hand over the current key. */
+    private val _rotateOffer = MutableStateFlow(false)
+    val rotateOffer: StateFlow<Boolean> = _rotateOffer.asStateFlow()
+
+    private fun reportSendFailure(e: Exception) {
+        val channel = manager.current.value
+        val noKey = e.message?.startsWith("No epoch key") == true
+        if (noKey && channel != null && manager.amOwner(channel)) _rotateOffer.value = true
+        else _lastError.value = "Failed to send: ${e.message}"
+    }
+
+    fun dismissRotateOffer() { _rotateOffer.value = false }
+
+    fun rotateForMissingKey() {
+        _rotateOffer.value = false
+        rotateEpochNow()
     }
 
     /** Reads an image from a content Uri and sends it over the chunked transport. */

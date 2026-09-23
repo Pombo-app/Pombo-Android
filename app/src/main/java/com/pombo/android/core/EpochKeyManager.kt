@@ -34,6 +34,9 @@ import org.json.JSONObject
  * Transport (publish as the ACCOUNT with encryptionType NONE, resend of -4)
  * is injected — this class holds protocol state only.
  */
+/** Request id of a wrap an admin seals to its own account: every device of that account opens it. */
+private const val SELF_WRAP_REQUEST_ID = "self"
+
 class EpochKeyManager(
     private val store: EpochKeyStore,
     /** For rank-delayed answers (N-B) — never delay inline in a handler. */
@@ -590,7 +593,8 @@ class EpochKeyManager(
                             // session is gone — adopted after every announce
                             // in this page has been applied.
                             if (entry.data.optInt("v", 1) == 2 &&
-                                (s.pendingRequests.containsKey(rid) || s.pendingRequest?.requestId == rid)
+                                (s.pendingRequests.containsKey(rid) || s.pendingRequest?.requestId == rid ||
+                                    isSelfWrap(messageStreamId, entry.data))
                             ) {
                                 storedV2Wraps.add(entry.data)
                             }
@@ -1043,12 +1047,14 @@ class EpochKeyManager(
     ) {
         var announce: JSONObject? = null
         var adopt: Triple<String, String, Int>? = null   // keyId, keyHex, epoch — null on re-announce
+        var held: Triple<String, String, Int>? = null    // the re-announced key, same shape
         var keyHash = ""
         mutex.withLock {
             val s = getState(messageStreamId)
             val existing = s.epochs.entries.maxByOrNull { it.value.epoch }
             if (existing != null) {
                 keyHash = existing.value.keyHash
+                held = Triple(existing.key, existing.value.keyHex, existing.value.epoch)
                 announce = JSONObject()
                     .put("t", StreamConstants.KEY_ANNOUNCE)
                     .put("epoch", existing.value.epoch)
@@ -1090,6 +1096,7 @@ class EpochKeyManager(
             Log.i(TAG, "re-announced existing epoch on ${keysStreamId.takeLast(30)} (announce was missing from storage)")
         }
         retainAnnounce(messageStreamId, keysStreamId, ann)
+        (adopted ?: held)?.let { wrapForSelf(messageStreamId, keysStreamId, it.first, it.second, it.third) }
     }
 
     /**
@@ -1100,6 +1107,9 @@ class EpochKeyManager(
         check(isOwnAdmin(messageStreamId)) { "only the channel admin can announce a new epoch" }
         val keyHex = EpochKeyCrypto.generateEpochKey()
         val keyHash = EpochKeyCrypto.computeKeyHash(keyHex)
+        // Another device of this admin may have rotated since this one last
+        // read the -4; the new epoch numbers above whatever storage holds.
+        refreshAnnouncesFromStorage(messageStreamId, keysStreamId)
         var epoch = 0
         var keyId = ""
         mutex.withLock {
@@ -1124,8 +1134,60 @@ class EpochKeyManager(
         scheduleHello(messageStreamId, keysStreamId, keyId)
         Log.i(TAG, "rotated to epoch $epoch on ${keysStreamId.takeLast(30)}")
         retainAnnounce(messageStreamId, keysStreamId, announce)
+        wrapForSelf(messageStreamId, keysStreamId, keyId, keyHex, epoch)
         return epoch
     }
+
+    /** Apply the announces storage holds on top of what this device knows. */
+    private suspend fun refreshAnnouncesFromStorage(messageStreamId: String, keysStreamId: String) {
+        val entries = try { resendKeys(keysStreamId) } catch (e: Exception) { return }
+        mutex.withLock {
+            val s = getState(messageStreamId)
+            if (!s.loaded) { loadPersisted(messageStreamId, s); s.loaded = true }
+            var changed = false
+            for (entry in entries) {
+                if (entry.data.optString("t") != StreamConstants.KEY_ANNOUNCE) continue
+                if (applyAnnounceLocked(messageStreamId, s, entry.data, entry.publisherId, entry.timestamp)) changed = true
+            }
+            if (changed) persist(messageStreamId, s)
+        }
+    }
+
+    /**
+     * Seal an epoch key to the account's own static pubkey, on P1: any later
+     * session of this account opens it without a request or a responder.
+     */
+    private suspend fun wrapForSelf(
+        messageStreamId: String, keysStreamId: String, keyId: String, keyHex: String, epoch: Int
+    ) {
+        val spk = try { myPrivateKey()?.let { EthereumSigner.compressedPublicKey(it) } } catch (e: Exception) { null }
+            ?: return
+        val envelope = try {
+            val wrapped = EpochKeyCrypto.wrapEpochKeyToStatic(keyHex, spk)
+            JSONObject()
+                .put("t", StreamConstants.KEY_WRAP)
+                .put("v", 2)
+                .put("requestId", SELF_WRAP_REQUEST_ID)
+                .put("keyId", keyId)
+                .put("epoch", epoch)
+                .put("tag", EpochKeyCrypto.computeWrapTagV2(SELF_WRAP_REQUEST_ID, keyId))
+                .put("epk", wrapped.getString("epk"))
+                .put("iv", wrapped.getString("iv"))
+                .put("ct", wrapped.getString("ct"))
+        } catch (e: Exception) {
+            Log.w(TAG, "self wrap failed: ${e.message}"); return
+        }
+        try { publishKeys(keysStreamId, envelope) } catch (e: Exception) {
+            Log.w(TAG, "self wrap publish failed: ${e.message}"); return
+        }
+        mutex.withLock { recordSeenWrapLocked(getState(messageStreamId), SELF_WRAP_REQUEST_ID, keyId) }
+        Log.i(TAG, "wrapped $keyId for this account's other devices on ${keysStreamId.takeLast(30)}")
+    }
+
+    /** A v2 wrap sealed to this account by one of its own admin devices. */
+    private fun isSelfWrap(messageStreamId: String, data: JSONObject): Boolean =
+        data.optInt("v", 1) == 2 && data.optString("requestId") == SELF_WRAP_REQUEST_ID &&
+            isOwnAdmin(messageStreamId)
 
     // ---- Protocol handlers (live -4 subscription) ----
 
@@ -1525,7 +1587,8 @@ class EpochKeyManager(
             if (rid.isNotEmpty() && keyId.isNotEmpty()) recordSeenWrapLocked(s, rid, keyId)
             if (rid.isEmpty() || keyId.isEmpty()) return
             if (s.epochs.containsKey(keyId)) return                    // already adopted
-            val mine = s.pendingRequests.containsKey(rid) || s.pendingRequest?.requestId == rid
+            val mine = s.pendingRequests.containsKey(rid) || s.pendingRequest?.requestId == rid ||
+                isSelfWrap(messageStreamId, data)
             if (!mine) return
 
             val expectedTag = EpochKeyCrypto.computeWrapTagV2(rid, keyId)

@@ -170,6 +170,32 @@ fun ChatScreen(vm: AppViewModel) {
     val loadingInitial by vm.initialLoad.collectAsState()
     val waitingForKeys by vm.waitingForKeys.collectAsState()
     val paidStatus by vm.paidStatus.collectAsState()
+    val rotateOffer by vm.rotateOffer.collectAsState()
+    if (rotateOffer) {
+        androidx.compose.ui.window.Dialog(onDismissRequest = { vm.dismissRotateOffer() }) {
+            Column(
+                Modifier
+                    .background(PomboColors.Background, RoundedCornerShape(16.dp))
+                    .padding(horizontal = 20.dp, vertical = 18.dp)
+            ) {
+                Text("No key for the current epoch", color = Color.White, fontSize = 15.sp, fontWeight = FontWeight.Medium)
+                androidx.compose.foundation.layout.Spacer(Modifier.height(6.dp))
+                Text(
+                    "Rotate to write again. Older messages stay as they are.",
+                    color = Color.White.copy(alpha = 0.6f), fontSize = 13.sp
+                )
+                androidx.compose.foundation.layout.Spacer(Modifier.height(14.dp))
+                Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End) {
+                    androidx.compose.material3.TextButton(onClick = { vm.dismissRotateOffer() }) {
+                        Text("Not now", color = Color.White.copy(alpha = 0.6f))
+                    }
+                    androidx.compose.material3.TextButton(onClick = { vm.rotateForMissingKey() }) {
+                        Text("Rotate", color = Color.White)
+                    }
+                }
+            }
+        }
+    }
     val bannedMembers by vm.bannedMembers.collectAsState()
 
     // NATIVE reverse-layout chat (deliberate divergence from the web's
