@@ -39,6 +39,28 @@ class PushRegistryTest {
     )
 
     @Test
+    fun `remembers where the chain says a stream is stored, and when it was asked`() {
+        val r = registry()
+        assertEquals(0L, r.providersCheckedAt("0xa/one-1"))
+
+        r.rememberProviders("0xa/one-1", listOf("https://new.test"))
+
+        assertEquals(listOf("https://new.test"), r.endpointsFor("0xa/one-1"))
+        assertTrue(r.providersCheckedAt("0xa/one-1") > 0L)
+    }
+
+    @Test
+    fun `a chain that answered nothing leaves the endpoints as they were`() {
+        val r = registry()
+        r.rememberEndpoints("0xa/one-1", listOf("https://old.test"))
+
+        r.rememberProviders("0xa/one-1", emptyList())
+
+        assertEquals(listOf("https://old.test"), r.endpointsFor("0xa/one-1"))
+        assertTrue(r.providersCheckedAt("0xa/one-1") > 0L)
+    }
+
+    @Test
     fun `two channels sharing a tag are both returned`() {
         val r = registry()
         r.add(entry("0xa/one-1", "7f"))

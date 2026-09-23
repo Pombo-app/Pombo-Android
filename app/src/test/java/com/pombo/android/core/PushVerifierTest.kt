@@ -1,6 +1,7 @@
 package com.pombo.android.core
 
 import kotlinx.coroutines.runBlocking
+import org.json.JSONObject
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
@@ -126,24 +127,101 @@ class PushVerifierTest {
     }
 
     @Test
-    fun `a registration without resolved endpoints still reaches a node`() = runBlocking {
-        val rec = Recorder(listOf(PushVerifier.Response(200, row)))
-        val result = PushVerifier(
-            endpointsFor = { emptyList() },
-            signHeaders = { emptyMap() },
-            http = rec::call
-        ).verify(entry("public"))
-
-        assertTrue(result.hasNew)
-        assertTrue(rec.urls.single().startsWith("https://blob-storage-streamr.online/"))
-    }
-
-    @Test
-    fun `resolved endpoints are used instead of the built-in ones`() = runBlocking {
+    fun `resolved endpoints are the ones asked`() = runBlocking {
         val rec = Recorder(listOf(PushVerifier.Response(200, row)))
         verifier(rec, endpoints = listOf("https://own.provider.test")).verify(entry("public"))
 
         assertTrue(rec.urls.single().startsWith("https://own.provider.test/streams/"))
+    }
+
+    // ---- a channel whose storage moved ----
+
+    private val older = """[{"timestamp":1000,"publisherId":"0xABC","content":{"type":"text","text":"old"}}]"""
+
+    private class Chain(val answer: List<String>) {
+        var asked = 0
+        val remembered = mutableListOf<List<String>>()
+    }
+
+    private fun moved(
+        rec: Recorder, chain: Chain, stored: List<String>, checkedAt: Long = 0L,
+        sign: (String) -> Map<String, String>? = { mapOf("x-pombo-user" to "0xme") }
+    ) = PushVerifier(
+        endpointsFor = { stored },
+        signHeaders = sign,
+        http = rec::call,
+        resolveProviders = { chain.asked++; chain.answer },
+        providersCheckedAt = { checkedAt },
+        rememberProviders = { _, urls -> chain.remembered += urls }
+    )
+
+    @Test
+    fun `asks the providers the chain has now when the registered ones have nothing new`() = runBlocking {
+        val rec = Recorder(listOf(PushVerifier.Response(200, older), PushVerifier.Response(200, row)))
+        val chain = Chain(listOf("https://new.test"))
+
+        val result = moved(rec, chain, stored = listOf("https://old.test")).verify(entry("gated", last = 1500L))
+
+        assertTrue(result.hasNew)
+        assertTrue(rec.urls[1].startsWith("https://new.test/streams/"))
+        assertEquals(listOf(listOf("https://new.test")), chain.remembered)
+    }
+
+    @Test
+    fun `asks the chain when a registration has no providers at all`() = runBlocking {
+        val rec = Recorder(listOf(PushVerifier.Response(200, row)))
+        val chain = Chain(listOf("https://new.test"))
+
+        val result = moved(rec, chain, stored = emptyList()).verify(entry("public"))
+
+        assertTrue(result.hasNew)
+        assertTrue(rec.urls.single().startsWith("https://new.test/streams/"))
+    }
+
+    @Test
+    fun `does not ask the chain again within the refresh window`() = runBlocking {
+        val rec = Recorder(listOf(PushVerifier.Response(200, older)))
+        val chain = Chain(listOf("https://new.test"))
+
+        val result = moved(rec, chain, stored = listOf("https://old.test"), checkedAt = System.currentTimeMillis())
+            .verify(entry("gated", last = 1500L))
+
+        assertFalse(result.hasNew)
+        assertEquals(0, chain.asked)
+    }
+
+    @Test
+    fun `keeps its answer when the providers have not changed`() = runBlocking {
+        val rec = Recorder(listOf(PushVerifier.Response(200, older)))
+        val chain = Chain(listOf("https://old.test"))
+
+        val result = moved(rec, chain, stored = listOf("https://old.test")).verify(entry("gated", last = 1500L))
+
+        assertFalse(result.hasNew)
+        assertEquals(1, rec.urls.size)
+        assertEquals(1, chain.asked)
+    }
+
+    @Test
+    fun `asks the chain nothing while there is no key to sign`() = runBlocking {
+        val rec = Recorder(emptyList())
+        val chain = Chain(listOf("https://new.test"))
+
+        val result = moved(rec, chain, stored = listOf("https://old.test"), sign = { null }).verify(entry("gated"))
+
+        assertFalse(result.hasNew)
+        assertEquals(0, chain.asked)
+    }
+
+    @Test
+    fun `the chain's answer keeps only the URLs a client may reach`() {
+        val node = { urls: String -> JSONObject().put("metadata", """{"urls":$urls}""") }
+        val data = JSONObject().put("stream", JSONObject().put("storageNodes", org.json.JSONArray()
+            .put(node("""["https://1.storage.test/","http://plain.test"]"""))
+            .put(node("""["https://10.0.0.1","https://2.storage.test"]"""))
+            .put(JSONObject().put("metadata", "not json"))))
+
+        assertEquals(listOf("https://1.storage.test", "https://2.storage.test"), GraphApi.storageNodeUrlsIn(data))
     }
 
     @Test

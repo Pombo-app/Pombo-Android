@@ -228,6 +228,34 @@ object GraphApi {
         }
     }
 
+    /** Null when The Graph did not answer. */
+    suspend fun storageNodeUrls(streamId: String): List<String>? {
+        val gql = """
+            query StorageNodes {
+                stream(id: "$streamId") { storageNodes { metadata } }
+            }
+        """.trimIndent()
+        return storageNodeUrlsIn(query("storage_nodes:$streamId", gql) ?: return null)
+    }
+
+    internal fun storageNodeUrlsIn(data: JSONObject): List<String> {
+        val nodes = data.optJSONObject("stream")?.optJSONArray("storageNodes") ?: return emptyList()
+        val urls = LinkedHashSet<String>()
+        for (i in 0 until nodes.length()) {
+            val metadata = try {
+                JSONObject(nodes.optJSONObject(i)?.optString("metadata")?.ifEmpty { null } ?: continue)
+            } catch (e: Exception) {
+                continue
+            }
+            val arr = metadata.optJSONArray("urls") ?: continue
+            for (j in 0 until arr.length()) {
+                val url = StorageEndpoints.normalizeUrl(arr.optString(j))
+                if (StorageEndpoints.isWebSafeStorageNodeUrl(url)) urls += url
+            }
+        }
+        return urls.toList()
+    }
+
     /** Drops cached queries so a permission change is visible immediately. */
     fun clearCache() = cache.clear()
 
