@@ -114,6 +114,26 @@ class StorageEndpointsTest {
     }
 
     @Test
+    fun `force reads The Graph instead of the SDK`() = runBlocking {
+        val sdkCalls = AtomicInteger(0)
+        val ep = StorageEndpoints(
+            fetcher = { sdkCalls.incrementAndGet(); listOf(node("0xa", "https://a.example.com")) },
+            freshFetcher = { listOf(node("0xB", "https://b.example.com/", "http://plain.example.com")) }
+        )
+
+        assertEquals(listOf(node("0xb", "https://b.example.com")), ep.resolve("s", force = true))
+        assertEquals(0, sdkCalls.get())
+    }
+
+    @Test
+    fun `resolveFresh throws when The Graph does not answer`() = runBlocking {
+        val ep = StorageEndpoints(fetcher = { listOf(node("0xa", "https://a.example.com")) })
+
+        val thrown = try { ep.resolveFresh("s"); null } catch (e: IllegalStateException) { e }
+        assertTrue(thrown != null)
+    }
+
+    @Test
     fun `invalidate drops the cached set`() = runBlocking {
         val calls = AtomicInteger(0)
         val ep = StorageEndpoints(

@@ -164,13 +164,34 @@ class StorageCopy(private val scope: CoroutineScope, private val host: Host) {
 
         val lacking = LinkedHashSet<String>()
         for (check in checks) {
-            val providers = host.resolve(check.streamId)
+            val providers = try {
+                host.resolve(check.streamId)
+            } catch (e: Exception) {
+                Log.w(TAG, "providers of ${check.streamId.takeLast(20)} unknown: ${e.message}")
+                throw IllegalStateException(
+                    "Could not check which storage providers this channel has, " +
+                        "so the old one was not removed. Try again in a minute."
+                )
+            }
             val gone = providers.firstOrNull { it.nodeAddress.equals(leaving, ignoreCase = true) } ?: continue
             val staying = providers.filterNot { it.nodeAddress.equals(leaving, ignoreCase = true) }
-            if (staying.isEmpty() || !check.expected(gone)) continue
+            if (staying.isEmpty()) {
+                // The Graph can still miss a provider added moments ago; its pending copy names it.
+                if (pending(channel.messageStreamId).any { !it.equals(leaving, ignoreCase = true) }) {
+                    throw IllegalStateException(
+                        "The copy to the new storage provider is not confirmed yet, " +
+                            "so the old one was not removed. Try again in a minute."
+                    )
+                }
+                continue
+            }
+            if (!check.expected(gone)) continue
             for (provider in staying) {
                 val rows = host.readLast(provider, check.streamId, check.partition, check.count)
-                if (rows == null || !check.holds(rows)) lacking += provider.nodeAddress.lowercase()
+                val holds = rows != null && check.holds(rows)
+                Log.d(TAG, "${provider.nodeAddress.take(10)} ${if (holds) "holds" else "lacks"} " +
+                    "${check.streamId.takeLast(20)} P${check.partition}")
+                if (!holds) lacking += provider.nodeAddress.lowercase()
             }
         }
         return lacking

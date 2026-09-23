@@ -41,13 +41,18 @@ import kotlinx.coroutines.sync.withLock
  * @param capabilityFetcher `GET /capabilities` for one base URL: the announced
  *   features, null on 404 (vanilla), throws on any other failure.
  * @param clock injectable time source, so the TTL is testable without sleeping.
+ * @param freshFetcher the nodes as The Graph has them now, unfiltered; null when
+ *   it did not answer. The SDK behind [fetcher] keeps a stream's list for a day
+ *   and only forgets it on its own writes, so a change made from another device
+ *   never reaches it.
  */
 class StorageEndpoints(
     private val fetcher: suspend (streamId: String) -> List<Node>,
     private val ttlMs: Long = StorageMediaConfig.ENDPOINT_CACHE_TTL_MS,
     private val failureLimit: Int = StorageMediaConfig.NODE_FAILURE_LIMIT,
     private val clock: () -> Long = { System.currentTimeMillis() },
-    private val capabilityFetcher: suspend (url: String) -> Set<String>? = { StorageHttp.fetchCapabilities(it) }
+    private val capabilityFetcher: suspend (url: String) -> Set<String>? = { StorageHttp.fetchCapabilities(it) },
+    private val freshFetcher: suspend (streamId: String) -> List<Node>? = { null }
 ) {
     /** A storage node and its (web-safe once resolved) HTTP base URLs. */
     data class Node(val nodeAddress: String, val urls: List<String>)
@@ -79,48 +84,52 @@ class StorageEndpoints(
     /**
      * Resolve the storage nodes (and their web-safe HTTP URLs) for a stream.
      * Cached per stream with a TTL; concurrent callers share one resolution.
+     * [force] bypasses the cache and reads The Graph, falling back to [fetcher].
      * May return an empty list (no storage, or no node published a web-safe URL).
      */
     suspend fun resolve(streamId: String, force: Boolean = false): List<Node> {
+        val key = if (force) "$streamId|fresh" else streamId
         val deferred: CompletableDeferred<List<Node>>
         var owner = false
         lock.withLock {
             val cached = cache[streamId]
             if (!force && cached != null && clock() - cached.at < ttlMs) return cached.nodes
-            val existing = inFlight[streamId]
+            val existing = inFlight[key]
             if (existing != null) {
-                // Dedupe concurrent resolutions even when force is set, exactly
-                // like the web (force only bypasses the cache, not the in-flight).
                 deferred = existing
             } else {
                 deferred = CompletableDeferred()
-                inFlight[streamId] = deferred
+                inFlight[key] = deferred
                 owner = true
             }
         }
         if (!owner) return deferred.await()
 
         try {
-            val nodes = fetcher(streamId)
-                .map { n ->
-                    Node(
-                        n.nodeAddress.lowercase(),
-                        n.urls.filter { isWebSafeStorageNodeUrl(it) }.map { normalizeUrl(it) }
-                    )
-                }
-                .filter { it.urls.isNotEmpty() }
+            val fresh = if (force) runCatching { freshFetcher(streamId) }.getOrNull() else null
+            val nodes = webSafe(fresh ?: fetcher(streamId))
             lock.withLock {
                 cache[streamId] = Cached(clock(), nodes)
-                inFlight.remove(streamId)
+                inFlight.remove(key)
             }
             deferred.complete(nodes)
             return nodes
         } catch (e: Throwable) {
-            lock.withLock { inFlight.remove(streamId) }
+            lock.withLock { inFlight.remove(key) }
             deferred.completeExceptionally(e)
             throw e
         }
     }
+
+    /** The nodes as The Graph has them now, never the SDK's; throws when it does not answer. */
+    suspend fun resolveFresh(streamId: String): List<Node> {
+        val raw = freshFetcher(streamId) ?: throw IllegalStateException("The Graph did not answer")
+        return webSafe(raw)
+    }
+
+    private fun webSafe(nodes: List<Node>): List<Node> = nodes
+        .map { n -> Node(n.nodeAddress.lowercase(), n.urls.filter { isWebSafeStorageNodeUrl(it) }.map { normalizeUrl(it) }) }
+        .filter { it.urls.isNotEmpty() }
 
     /**
      * Flat rotation list of healthy base URLs for a stream. EVERY healthy URL is
@@ -213,8 +222,8 @@ class StorageEndpoints(
     fun hasFeature(url: String, feature: String): Boolean = capabilitiesOf(url)?.contains(feature) == true
 
     /** Resolve a stream's providers and probe every URL in parallel. */
-    suspend fun probeStream(streamId: String): List<Provider> = coroutineScope {
-        val nodes = resolve(streamId)
+    suspend fun probeStream(streamId: String, force: Boolean = false): List<Provider> = coroutineScope {
+        val nodes = resolve(streamId, force)
         nodes.flatMap { it.urls }.map { u -> async { probeCapabilities(u) } }.awaitAll()
         nodes.map { n ->
             Provider(

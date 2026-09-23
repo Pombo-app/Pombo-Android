@@ -596,7 +596,8 @@ class ChannelManager(
                     urls = (0 until urlsArr.length()).map { urlsArr.optString(it) }
                 )
             }
-        }
+        },
+        freshFetcher = { streamId -> com.pombo.android.core.GraphApi.streamStorage(streamId)?.nodes }
     )
 
     /**
@@ -676,7 +677,7 @@ class ChannelManager(
             this@ChannelManager.publishPasswordChallenge(channel.adminStreamId, channel.password ?: error("no password"))
         override suspend fun currentAnchorKeyIds(channel: Channel) =
             epochKeys.currentAnchorKeyIds(channel.messageStreamId)
-        override suspend fun resolve(streamId: String) = storageEndpoints.resolve(streamId, force = true)
+        override suspend fun resolve(streamId: String) = storageEndpoints.resolveFresh(streamId)
         override suspend fun readLast(
             provider: com.pombo.android.core.StorageEndpoints.Node, streamId: String, partition: Int, count: Int
         ): List<JSONObject>? {
@@ -689,7 +690,7 @@ class ChannelManager(
             }
             return null
         }
-        override suspend fun providers(streamId: String) = storageEndpoints.probeStream(streamId)
+        override suspend fun providers(streamId: String) = storageEndpoints.probeStream(streamId, force = true)
         override suspend fun storedOn(
             provider: com.pombo.android.core.StorageEndpoints.Node, streamId: String, partition: Int, timestamps: List<Long>
         ): Set<Long>? {
@@ -1460,9 +1461,14 @@ class ChannelManager(
         fun carries(address: String) = nodes.any { it.equals(address, ignoreCase = true) }
     }
 
-    private suspend fun readStoredStreams(channel: Channel): List<StoredStream> {
+    /** [fresh] reads The Graph instead of the SDK's cached copy. */
+    private suspend fun readStoredStreams(channel: Channel, fresh: Boolean = false): List<StoredStream> {
         return storedStreamsByKind(channel).map { (id, kind) ->
-            val res = streamStorage(id)
+            val res = if (fresh) {
+                com.pombo.android.core.GraphApi.streamStorage(id)?.let { s -> s.nodes.map { it.nodeAddress } to s.storageDays }
+            } else {
+                streamStorage(id)
+            }
             StoredStream(id, kind, res != null, res?.first ?: emptyList(), res?.second)
         }
     }
@@ -1484,7 +1490,9 @@ class ChannelManager(
         needs: (StoredStream) -> Boolean,
         apply: suspend (String) -> Unit
     ): StorageWriteResult {
-        val before = readStoredStreams(channel)
+        // Before: The Graph, which sees changes made from other devices. After:
+        // the SDK, which follows this client's own writes before The Graph indexes them.
+        val before = readStoredStreams(channel, fresh = true)
         val results = LinkedHashMap<String, String>()
         var sent = 0
 

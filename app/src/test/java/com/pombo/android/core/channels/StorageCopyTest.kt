@@ -79,7 +79,9 @@ class StorageCopyTest {
         var reads = 0
 
         override suspend fun currentAnchorKeyIds(channel: Channel) = anchorKeyIds
-        override suspend fun resolve(streamId: String) = providerList
+        var resolveFails = false
+        override suspend fun resolve(streamId: String) =
+            if (resolveFails) throw IllegalStateException("The Graph did not answer") else providerList
         override suspend fun readLast(
             provider: StorageEndpoints.Node, streamId: String, partition: Int, count: Int
         ): List<JSONObject>? {
@@ -271,6 +273,24 @@ class StorageCopyTest {
 
         assertNull(refused())
         assertEquals(0, host.reads)
+    }
+
+    @Test
+    fun `refuses the removal when the providers of the channel cannot be read`() = runBlocking {
+        removalSetUp()
+        host.resolveFails = true
+
+        assertTrue(refused()!!.contains("was not removed"))
+        assertEquals(0, host.reads)
+    }
+
+    @Test
+    fun `refuses the removal while a provider still waiting for its copy is not listed yet`() = runBlocking {
+        removalSetUp()
+        host.providerList = listOf(oldNode)
+        host.pendingStore["storage-copy|$owner|$stream"] = listOf(newNode)
+
+        assertTrue(refused()!!.contains("not confirmed yet"))
     }
 
     @Test
