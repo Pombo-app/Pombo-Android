@@ -17,6 +17,7 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import org.json.JSONObject
 
@@ -177,6 +178,13 @@ class KeyResponderWorker(
                     } == true
                 }
             )
+            manager.onEpochAdvanced = { messageStreamId ->
+                byMessageStream[messageStreamId]?.gateAddress?.let { gate ->
+                    sweepScope.launch {
+                        runCatching { bridge.call("gateInvalidateGrants", JSONObject().put("gate", gate)) }
+                    }
+                }
+            }
 
             for (entry in entries) {
                 try {

@@ -2311,6 +2311,10 @@ const api = {
     _gateProviderUrl: null,
     _gateProviderInst: null,
     _gateAccessCache: new Map(), // "gate|user" -> { value, at }
+    // gate -> generation, bumped by gateInvalidateGrants; a read that started
+    // under an older one must not write its answer back.
+    _gateAccessGen: new Map(),
+    _gateGen(gate) { return api._gateAccessGen.get(String(gate).toLowerCase()) || 0; },
     // Refusals expire far sooner: nothing outside this app can drop one
     _GATE_GRANT_TTL_MS: 10 * 60 * 1000,
     _GATE_DENIAL_TTL_MS: 30 * 1000,
@@ -2442,6 +2446,7 @@ const api = {
         const cacheKey = String(a.gate).toLowerCase() + '|' + String(a.user).toLowerCase();
         const cached = api._gateAccessCache.get(cacheKey);
         if (cached && Date.now() - cached.at < api._gateAccessTtl(cached.value)) return { access: cached.value };
+        const gen = api._gateGen(a.gate);
         var value;
         try {
             value = await api._gateWithProvider(function () {
@@ -2451,6 +2456,7 @@ const api = {
             console.warn('gate: checkAccess failed (fail-closed): ' + (e && e.message || e));
             return { access: false, failed: true };
         }
+        if (gen !== api._gateGen(a.gate)) return { access: !!value };
         if (api._gateAccessCache.size > 2000) {
             api._gateAccessCache.delete(api._gateAccessCache.keys().next().value);
         }
@@ -2480,7 +2486,9 @@ const api = {
         const list = (typeof RPCS !== 'undefined' && RPCS && RPCS.length) ? RPCS : [{ url: 'https://polygon-bor-rpc.publicnode.com' }];
         const urls = list.map(function (e) { return typeof e === 'string' ? e : e.url; }).filter(Boolean);
         if (!urls.length) return { access: false, failed: true };
+        const gen = api._gateGen(a.gate);
         function cache(v) {
+            if (gen !== api._gateGen(a.gate)) return;
             if (api._gateAccessCache.size > 2000) api._gateAccessCache.delete(api._gateAccessCache.keys().next().value);
             api._gateAccessCache.set(cacheKey, { value: !!v, at: Date.now() });
         }
@@ -2699,6 +2707,18 @@ const api = {
             return api._gateRead(a.gate).paidUntil(a.user);
         });
         return { paidUntil: String(until) };
+    },
+
+    // { gate } -> { ok, dropped } — forgets the cached grants only; refusals stay.
+    async gateInvalidateGrants(a) {
+        const gate = String(a.gate).toLowerCase();
+        api._gateAccessGen.set(gate, api._gateGen(gate) + 1);
+        let dropped = 0;
+        Array.from(api._gateAccessCache.entries()).forEach(function (e) {
+            if (e[0].indexOf(gate + '|') === 0 && e[1].value === true) { api._gateAccessCache.delete(e[0]); dropped++; }
+        });
+        if (dropped > 0) console.log('gate: new epoch on ' + gate.slice(0, 10) + ', access of ' + dropped + ' member(s) will be re-checked');
+        return { ok: true, dropped: dropped };
     },
 
     // { gate, user? } — drop cached access. The entry screen's recheck/enter
