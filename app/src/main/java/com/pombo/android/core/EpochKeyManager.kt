@@ -1403,11 +1403,22 @@ class EpochKeyManager(
      * covers — the suppression that turns thirty identical envelopes into
      * one.
      */
+    private suspend fun hasUnwrappedFor(messageStreamId: String, requestId: String, fromEpoch: Int): Boolean =
+        mutex.withLock {
+            val s = getState(messageStreamId)
+            val covered = s.seenWraps[requestId] ?: emptySet<String>()
+            s.epochs.any { (keyId, e) -> e.epoch >= fromEpoch && keyId !in covered } ||
+                listOf(s.pubKey to s.pubAnnounce, s.intKey to s.intAnnounce).any { (key, announce) ->
+                    key != null && announce?.keyId == key.keyId && key.keyId !in covered
+                }
+        }
+
     private suspend fun answerRequest(
         messageStreamId: String, keysStreamId: String,
         requestId: String, pubkey: String, fromEpoch: Int,
         requester: String?, spk: String? = null
     ) {
+        if (!hasUnwrappedFor(messageStreamId, requestId, fromEpoch)) return
         // Gated (N-C): the epoch key only goes to whoever passes the CURRENT
         // gate. Fail-closed inside checkGateAccess — RPC trouble means no
         // wrap from us; the requester's retry finds a healthier responder.
