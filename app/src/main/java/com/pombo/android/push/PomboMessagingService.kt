@@ -67,7 +67,10 @@ class PomboMessagingService : FirebaseMessagingService() {
                 endpointsFor = { registry.endpointsFor(it) },
                 signHeaders = { url ->
                     StorageReadSigner.parse(url)?.let { StorageReadSigner.headers(it, privateKey) }
-                }
+                },
+                resolveProviders = { com.pombo.android.core.GraphApi.storageNodeUrls(it) ?: emptyList() },
+                providersCheckedAt = { registry.providersCheckedAt(it) },
+                rememberProviders = { streamId, urls -> registry.rememberProviders(streamId, urls) }
             )
 
             for (entry in entries) {

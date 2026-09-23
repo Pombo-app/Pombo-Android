@@ -65,8 +65,9 @@ object GraphApi {
         val wireIdentity: String? = null
     )
 
-    private suspend fun query(cacheKey: String, gql: String): JSONObject? {
-        cache[cacheKey]?.let { if (System.currentTimeMillis() - it.at < CACHE_MS) return it.data }
+    /** A null [cacheKey] asks The Graph every time. */
+    private suspend fun query(cacheKey: String?, gql: String): JSONObject? {
+        cacheKey?.let { key -> cache[key]?.let { if (System.currentTimeMillis() - it.at < CACHE_MS) return it.data } }
         val data = withContext(Dispatchers.IO) {
             try {
                 val conn = (URL(endpoint).openConnection() as HttpURLConnection).apply {
@@ -86,7 +87,7 @@ object GraphApi {
                 null
             }
         }.also { lastQueryOk = it != null } ?: return null
-        cache[cacheKey] = Entry(data, System.currentTimeMillis())
+        if (cacheKey != null) cache[cacheKey] = Entry(data, System.currentTimeMillis())
         return data
     }
 
@@ -226,6 +227,62 @@ object GraphApi {
         } catch (e: Exception) {
             null
         }
+    }
+
+    /** A stream's storage nodes, their metadata URLs unfiltered, and its retention. */
+    data class StreamStorage(val nodes: List<StorageEndpoints.Node>, val storageDays: Int?)
+
+    /** Never from a cache; null when The Graph did not answer. */
+    suspend fun streamStorage(streamId: String): StreamStorage? {
+        val gql = """
+            query GetStreamStorage {
+                stream(id: "${streamId.lowercase()}") { metadata storageNodes(first: 100) { id metadata } }
+            }
+        """.trimIndent()
+        return streamStorageIn(query(null, gql) ?: return null)
+    }
+
+    internal fun streamStorageIn(data: JSONObject): StreamStorage {
+        val stream = data.optJSONObject("stream") ?: return StreamStorage(emptyList(), null)
+        fun parse(json: String?): JSONObject = try { JSONObject(json ?: "{}") } catch (e: Exception) { JSONObject() }
+        val arr = stream.optJSONArray("storageNodes")
+        val nodes = (0 until (arr?.length() ?: 0)).mapNotNull { i ->
+            val node = arr?.optJSONObject(i) ?: return@mapNotNull null
+            val urls = parse(node.optString("metadata")).optJSONArray("urls")
+            StorageEndpoints.Node(
+                node.optString("id").lowercase(),
+                (0 until (urls?.length() ?: 0)).mapNotNull { j -> urls?.opt(j) as? String }
+            )
+        }
+        return StreamStorage(nodes, parse(stream.optString("metadata")).optInt("storageDays").takeIf { it > 0 })
+    }
+
+    /** Null when The Graph did not answer. */
+    suspend fun storageNodeUrls(streamId: String): List<String>? {
+        val gql = """
+            query StorageNodes {
+                stream(id: "$streamId") { storageNodes { metadata } }
+            }
+        """.trimIndent()
+        return storageNodeUrlsIn(query("storage_nodes:$streamId", gql) ?: return null)
+    }
+
+    internal fun storageNodeUrlsIn(data: JSONObject): List<String> {
+        val nodes = data.optJSONObject("stream")?.optJSONArray("storageNodes") ?: return emptyList()
+        val urls = LinkedHashSet<String>()
+        for (i in 0 until nodes.length()) {
+            val metadata = try {
+                JSONObject(nodes.optJSONObject(i)?.optString("metadata")?.ifEmpty { null } ?: continue)
+            } catch (e: Exception) {
+                continue
+            }
+            val arr = metadata.optJSONArray("urls") ?: continue
+            for (j in 0 until arr.length()) {
+                val url = StorageEndpoints.normalizeUrl(arr.optString(j))
+                if (StorageEndpoints.isWebSafeStorageNodeUrl(url)) urls += url
+            }
+        }
+        return urls.toList()
     }
 
     /** Drops cached queries so a permission change is visible immediately. */

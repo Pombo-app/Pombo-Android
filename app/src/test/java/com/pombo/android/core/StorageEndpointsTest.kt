@@ -114,6 +114,26 @@ class StorageEndpointsTest {
     }
 
     @Test
+    fun `force reads The Graph instead of the SDK`() = runBlocking {
+        val sdkCalls = AtomicInteger(0)
+        val ep = StorageEndpoints(
+            fetcher = { sdkCalls.incrementAndGet(); listOf(node("0xa", "https://a.example.com")) },
+            freshFetcher = { listOf(node("0xB", "https://b.example.com/", "http://plain.example.com")) }
+        )
+
+        assertEquals(listOf(node("0xb", "https://b.example.com")), ep.resolve("s", force = true))
+        assertEquals(0, sdkCalls.get())
+    }
+
+    @Test
+    fun `resolveFresh throws when The Graph does not answer`() = runBlocking {
+        val ep = StorageEndpoints(fetcher = { listOf(node("0xa", "https://a.example.com")) })
+
+        val thrown = try { ep.resolveFresh("s"); null } catch (e: IllegalStateException) { e }
+        assertTrue(thrown != null)
+    }
+
+    @Test
     fun `invalidate drops the cached set`() = runBlocking {
         val calls = AtomicInteger(0)
         val ep = StorageEndpoints(
@@ -302,6 +322,19 @@ class StorageEndpointsTest {
 
         repeat(3) { ep.noteReadError("https://a1.example.com", StorageHttp.HttpStatusException(503)) }
         assertEquals(listOf("https://a2.example.com"), ep.rotation("s"))
+    }
+
+    @Test
+    fun `probeStream says when a provider did not answer the probe`() = runBlocking {
+        val ep = StorageEndpoints(
+            fetcher = { listOf(node("0xA", "https://a.example.com"), node("0xB", "https://b.example.com")) },
+            capabilityFetcher = { url -> if (url == "https://b.example.com") error("Failed to connect") else null }
+        )
+
+        val providers = ep.probeStream("s")
+
+        assertEquals(listOf(true, false), providers.map { it.answered })
+        assertEquals(emptySet<String>(), providers[1].features)
     }
 
     @Test

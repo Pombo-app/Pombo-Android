@@ -89,6 +89,25 @@ class RetentionWiringTest {
     }
 
     /**
+     * The SDK keeps a stream's storage nodes for a day and never hears of a
+     * change made from another device, so what a write skips is decided on
+     * The Graph; the read-back after it stays on the SDK, which follows this
+     * client's own writes.
+     */
+    @Test
+    fun `the stored-stream apply decides on The Graph and confirms on the SDK`() {
+        val apply = body("private suspend fun applyToStoredStreams(")
+        assertTrue(
+            "applyToStoredStreams no longer decides on a fresh read",
+            apply.contains("readStoredStreams(channel, fresh = true)")
+        )
+        assertTrue(
+            "applyToStoredStreams no longer confirms on the SDK",
+            apply.contains("val after = readStoredStreams(channel)")
+        )
+    }
+
+    /**
      * The bridge answers a failed lookup with the same empty shape a stream
      * with no storage returns. Ignoring its `ok` flag brings back the bug
      * where absence read as fact.

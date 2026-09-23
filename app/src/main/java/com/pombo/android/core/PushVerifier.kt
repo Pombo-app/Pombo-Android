@@ -25,7 +25,10 @@ import java.net.URLEncoder
 class PushVerifier(
     private val endpointsFor: (streamId: String) -> List<String>,
     private val signHeaders: (url: String) -> Map<String, String>?,
-    private val http: (url: String, headers: Map<String, String>) -> Response = ::fetch
+    private val http: (url: String, headers: Map<String, String>) -> Response = ::fetch,
+    private val resolveProviders: suspend (streamId: String) -> List<String> = { emptyList() },
+    private val providersCheckedAt: (streamId: String) -> Long = { 0L },
+    private val rememberProviders: (streamId: String, urls: List<String>) -> Unit = { _, _ -> }
 ) {
 
     /** A node's answer: [body] is null unless the request succeeded. */
@@ -38,8 +41,25 @@ class PushVerifier(
         val publisherId: String? = null
     )
 
+    /** A provider taken off a stream still serves its old rows: its "nothing new" proves nothing. */
     suspend fun verify(entry: PushRegistry.Entry): Result = withContext(Dispatchers.IO) {
-        val endpoints = endpointsFor(entry.streamId).ifEmpty { LEGACY_ENDPOINTS }
+        val stored = endpointsFor(entry.streamId)
+        val first = if (stored.isNotEmpty()) verifyAt(entry, stored) else Answer(Result(hasNew = false))
+        if (first.result.hasNew || first.unsigned) return@withContext first.result
+        if (System.currentTimeMillis() - providersCheckedAt(entry.streamId) < PROVIDERS_REFRESH_MS) {
+            return@withContext first.result
+        }
+        val current = resolveProviders(entry.streamId)
+        rememberProviders(entry.streamId, current)
+        if (current.isEmpty() || current.toSet() == stored.toSet()) return@withContext first.result
+        android.util.Log.i(TAG, "providers of ${entry.streamId.takeLast(24)} changed; asking the current ones")
+        verifyAt(entry, current).result
+    }
+
+    /** [unsigned]: there was no key to sign with, so no provider could have answered. */
+    private class Answer(val result: Result, val unsigned: Boolean = false)
+
+    private fun verifyAt(entry: PushRegistry.Entry, endpoints: List<String>): Answer {
         val signed = needsSignature(entry.type)
         for (endpoint in endpoints) {
             val url = endpoint.trimEnd('/') + API_PATH.format(
@@ -50,7 +70,7 @@ class PushVerifier(
                     // No key to sign with (locked before the first unlock):
                     // every endpoint would refuse, so do not ask them.
                     android.util.Log.w(TAG, "no signature available for ${entry.streamId.takeLast(24)}")
-                    return@withContext Result(hasNew = false)
+                    return Answer(Result(hasNew = false), unsigned = true)
                 }
             } else emptyMap()
 
@@ -65,7 +85,7 @@ class PushVerifier(
             // a node that failed as a node is worth asking again.
             if (response.code in 400..499) {
                 android.util.Log.w(TAG, "HTTP ${response.code} for ${entry.streamId.takeLast(24)}")
-                return@withContext Result(hasNew = false)
+                return Answer(Result(hasNew = false))
             }
             if (response.code != 200) {
                 android.util.Log.w(TAG, "HTTP ${response.code} at $endpoint")
@@ -75,26 +95,22 @@ class PushVerifier(
 
             val timestamp = last.optLong("timestamp", 0L)
             val hasNew = timestamp > entry.lastTimestamp
-            return@withContext Result(
+            return Answer(Result(
                 hasNew = hasNew,
                 timestamp = timestamp,
                 content = if (hasNew) last.optJSONObject("content") else null,
                 publisherId = if (hasNew) last.optStringOrNull("publisherId") else null
-            )
+            ))
         }
         // Every endpoint failed: stay silent rather than guess. Showing a
         // notification here would mean showing one for every colliding tag.
-        Result(hasNew = false)
+        return Answer(Result(hasNew = false))
     }
 
     companion object {
         private const val TAG = "PushVerifier"
 
-        /** Fallback for a registration whose endpoints are not resolved yet. */
-        private val LEGACY_ENDPOINTS = listOf(
-            "https://blob-storage-streamr.online",
-            "https://vps2.blob-storage-streamr.online"
-        )
+        private const val PROVIDERS_REFRESH_MS = 10 * 60 * 1000L
 
         private const val API_PATH = "/streams/%s/data/partitions/%d/last?count=1"
         private const val TIMEOUT_MS = 5_000

@@ -100,14 +100,32 @@ class PushRegistry(context: Context) {
         return (0 until arr.length()).map { arr.optString(it) }.filter { it.isNotEmpty() }
     }
 
+    fun rememberProviders(streamId: String, urls: List<String>) {
+        rememberEndpoints(streamId, urls)
+        val map = checkedMap()
+        map.put(streamId, System.currentTimeMillis())
+        prefs.edit().putString(checkedKey(), map.toString()).apply()
+    }
+
+    fun providersCheckedAt(streamId: String): Long = checkedMap().optLong(streamId, 0L)
+
     private fun endpointMap(): JSONObject = try {
         JSONObject(prefs.getString(endpointsKey(), null) ?: "{}")
     } catch (e: Exception) {
         JSONObject()
     }
 
+    private fun checkedMap(): JSONObject = try {
+        JSONObject(prefs.getString(checkedKey(), null) ?: "{}")
+    } catch (e: Exception) {
+        JSONObject()
+    }
+
     private fun endpointsKey(): String =
         if (scopeAddress.isNullOrEmpty()) ENDPOINTS_KEY else "${ENDPOINTS_KEY}_${scopeAddress!!.lowercase()}"
+
+    private fun checkedKey(): String =
+        if (scopeAddress.isNullOrEmpty()) CHECKED_KEY else "${CHECKED_KEY}_${scopeAddress!!.lowercase()}"
 
     /** Advances the watermark so the same message never notifies twice. */
     fun updateLastSeen(streamId: String, timestamp: Long) {
@@ -122,5 +140,6 @@ class PushRegistry(context: Context) {
     private companion object {
         const val KEY = "push_channels"
         const val ENDPOINTS_KEY = "push_endpoints"
+        const val CHECKED_KEY = "push_providers_checked"
     }
 }
