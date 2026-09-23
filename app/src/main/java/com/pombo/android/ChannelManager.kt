@@ -2934,8 +2934,10 @@ class ChannelManager(
                     ?: continue
                 if (!stillCurrent(generation)) return@launch
                 val refusal = page.readError
+                val verdictFlipped = (refusal != null) != (_historyError.value != null)
                 if (refusal != null) _historyError.value = refusal
                 else if (_historyError.value != null) refreshHistory(channel.messageStreamId)
+                if (verdictFlipped) refreshPaidStatus()
                 for (i in 0 until page.entries.length()) {
                     val entry = page.entries.optJSONObject(i) ?: continue
                     val meta = entry.optJSONObject("meta") ?: JSONObject()
