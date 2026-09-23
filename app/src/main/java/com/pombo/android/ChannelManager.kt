@@ -2721,14 +2721,16 @@ class ChannelManager(
             .put("rev", newRev)
             .put("ts", System.currentTimeMillis())
         if (fresh.optString("createdBy").isEmpty()) fresh.put("createdBy", myAddress())
-        val published = if (isEpochChannel(channel) && channel.exposure == "visible") {
-            // Storefront image stays in the CLEAR (mirrors the
-            // set-image path): the generic epoch publish would seal
-            // it and hide the storefront from Explore/non-members.
+        val published = if (isEpochChannel(channel)) {
+            // Mirrors the set-image path: a storefront (Visible) image stays in
+            // the CLEAR for non-members, any other one is sealed to the epoch.
+            val content = if (channel.exposure == "visible") fresh
+            else epochKeys.encryptCurrent(channel.messageStreamId, fresh)
+                ?: throw IllegalStateException("No epoch key — cannot publish the channel image yet")
             bridge.call("publishAsAccount", JSONObject()
                 .put("streamId", channel.adminStreamId)
                 .put("partition", StreamConstants.ADMIN_CHANNEL_IMAGE)
-                .put("content", fresh), 60_000).optLong("timestamp", 0L)
+                .put("content", content), 60_000).optLong("timestamp", 0L)
         } else {
             publishContent(
                 channel.adminStreamId, StreamConstants.ADMIN_CHANNEL_IMAGE, fresh,
