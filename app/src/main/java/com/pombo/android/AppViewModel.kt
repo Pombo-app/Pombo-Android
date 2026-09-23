@@ -3663,6 +3663,7 @@ class AppViewModel(app: Application) : AndroidViewModel(app), PomboBridge.Listen
             refreshDmInbox()
             // Catch up on what happened in the other channels while we were away.
             scanChannelsActivity()
+            manager.reconcileAllGateAuthority()
         }
         // Push relay housekeeping: republish rows after an FCM token rotation
         // (they hold a dead token until then) and at the web's 6h cadence.
