@@ -321,21 +321,7 @@ class ChannelManager(
                 true
             }
         },
-        mayHoldPublishKey = { messageStreamId, requester ->
-            val channel = channelByStream(messageStreamId)
-            val gate = channel?.takeIf { it.type == "gated" }?.gateAddress
-            if (gate == null) true
-            else try {
-                val info = bridge.call("gateInfo", JSONObject().put("gate", gate))
-                if (!info.optBoolean("readOnly", false)) true
-                else info.optString("owner").equals(requester, ignoreCase = true) ||
-                    gateOwnerOrModerator(gate, requester)
-            } catch (e: Exception) {
-                // Unreadable gate fails CLOSED for the write capability
-                Log.w(TAG, "publish-key role check failed — withholding it: ${e.message}")
-                false
-            }
-        },
+        mayHoldPublishKey = { messageStreamId, requester -> mayHoldPublishKey(messageStreamId, requester) },
         pubKeyBlockedForSelf = { messageStreamId -> messageStreamId in pubKeyBlocked },
         // Only a preview lives outside _channels (channelByStream falls back to
         // _current for it) — membership in the persisted list is the signal,
@@ -4461,6 +4447,22 @@ class ChannelManager(
             roWriterCache[key] = allowed to System.currentTimeMillis()
         }
         return allowed
+    }
+
+    /** Read-only channels hand the shared publish key only to the owner and the moderators. */
+    internal suspend fun mayHoldPublishKey(messageStreamId: String, requester: String): Boolean {
+        val channel = channelByStream(messageStreamId)
+        val gate = channel?.takeIf { it.type == "gated" }?.gateAddress ?: return true
+        return try {
+            val info = bridge.call("gateInfo", JSONObject().put("gate", gate))
+            if (!info.optBoolean("readOnly", false)) true
+            else info.optString("owner").equals(requester, ignoreCase = true) ||
+                gateOwnerOrModerator(gate, requester)
+        } catch (e: Exception) {
+            // Unreadable gate fails CLOSED for the write capability
+            Log.w(TAG, "publish-key role check failed — withholding it: ${e.message}")
+            false
+        }
     }
 
     private suspend fun gateOwnerOrModerator(gate: String, address: String): Boolean {
