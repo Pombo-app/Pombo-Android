@@ -67,6 +67,8 @@ class PomboBridge(
         fun onBridgeBinary(streamId: String, partition: Int, data: ByteArray, metaJson: String) {}
         /** Step announcements from multi-transaction bridge flows (gatePay). */
         fun onBridgeProgress(op: String, step: String) {}
+        /** The client's node failed to start; nothing publishes or subscribes until a [reconnect]. */
+        fun onBridgeNodeDead(message: String) {}
         fun onBridgeError(message: String)
     }
 
@@ -456,6 +458,9 @@ class PomboBridge(
 
         @JavascriptInterface
         fun progress(op: String, step: String) { main.post { listener.onBridgeProgress(op, step) } }
+
+        @JavascriptInterface
+        fun nodeDead(msg: String) { main.post { listener.onBridgeNodeDead(msg) } }
 
         @JavascriptInterface
         fun error(msg: String) { main.post { listener.onBridgeError(msg) } }
