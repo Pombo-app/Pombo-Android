@@ -67,6 +67,7 @@ class AppViewModel(app: Application) : AndroidViewModel(app), PomboBridge.Listen
             viewModelScope.launch { sync.autoSync() }
             sync.startSnapshotWatch()
         }
+        nodeRevival.kick()
     }
 
     /** Live transfer work across both transports (mesh swarm + storage nodes). */
@@ -1465,6 +1466,31 @@ class AppViewModel(app: Application) : AndroidViewModel(app), PomboBridge.Listen
     private val _status = MutableStateFlow(NetStatus.BOOTING)
     val status: StateFlow<NetStatus> = _status.asStateFlow()
 
+    @Volatile private var networkValidated = true
+
+    private val nodeRevival = com.pombo.android.bridge.NodeRevival(
+        viewModelScope,
+        object : com.pombo.android.bridge.NodeRevival.Host {
+            override fun networkUp() = networkValidated
+            override fun rebuild() {
+                android.util.Log.w("PomboBridge", "Rebuilding the bridge after a failed node start")
+                _status.value = NetStatus.CONNECTING
+                bridge.reconnect()
+            }
+            override suspend fun sleep(ms: Long) = delay(ms)
+        }
+    )
+
+    private val networkCallback = object : android.net.ConnectivityManager.NetworkCallback() {
+        override fun onCapabilitiesChanged(network: android.net.Network, caps: android.net.NetworkCapabilities) {
+            val up = caps.hasCapability(android.net.NetworkCapabilities.NET_CAPABILITY_VALIDATED)
+            val cameUp = up && !networkValidated
+            networkValidated = up
+            if (cameUp) viewModelScope.launch { nodeRevival.kick() }
+        }
+        override fun onLost(network: android.net.Network) { networkValidated = false }
+    }
+
     private val _address = MutableStateFlow(store.address)
     val address: StateFlow<String?> = _address.asStateFlow()
 
@@ -1779,6 +1805,10 @@ class AppViewModel(app: Application) : AndroidViewModel(app), PomboBridge.Listen
                 com.pombo.android.ui.ToastKind.ERROR,
                 12_000L
             )
+        }
+        runCatching {
+            app.getSystemService(android.net.ConnectivityManager::class.java)
+                ?.registerDefaultNetworkCallback(networkCallback)
         }
     }
 
@@ -3661,11 +3691,28 @@ class AppViewModel(app: Application) : AndroidViewModel(app), PomboBridge.Listen
                 }
             }
             "connecting" -> _status.value = NetStatus.CONNECTING
+            "node-up" -> {
+                nodeRevival.onAlive()
+                if (_status.value == NetStatus.CONNECTING) _status.value = NetStatus.CONNECTED
+            }
         }
     }
 
+    override fun onBridgeNodeDead(message: String) {
+        android.util.Log.w("PomboBridge", "Streamr node failed to start: $message")
+        _status.value = NetStatus.CONNECTING
+        nodeRevival.onDead()
+    }
+
     override fun onBridgeConnected(address: String) {
-        _status.value = NetStatus.CONNECTED
+        if (nodeRevival.rebuilding) {
+            // Nothing else may touch the node soon enough to tell whether this
+            // client's start worked.
+            _status.value = NetStatus.CONNECTING
+            viewModelScope.launch { runCatching { bridge.call("startNode") } }
+        } else {
+            _status.value = NetStatus.CONNECTED
+        }
         // Immediate: the only one of this group with something on screen
         // waiting for it (an open channel resubscribing) — null on a cold
         // start, so this is a no-op exactly when Explore owns the screen.
@@ -3829,6 +3876,10 @@ class AppViewModel(app: Application) : AndroidViewModel(app), PomboBridge.Listen
     }
 
     override fun onCleared() {
+        runCatching {
+            getApplication<Application>().getSystemService(android.net.ConnectivityManager::class.java)
+                ?.unregisterNetworkCallback(networkCallback)
+        }
         bridge.destroy()
     }
 }

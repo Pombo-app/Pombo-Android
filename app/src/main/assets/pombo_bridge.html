@@ -100,6 +100,21 @@ function utf8ToB64(s) {
 }
 function subKey(streamId, partition) { return streamId + '|' + partition; }
 
+// The SDK keeps a failed node start for the client's whole life: Kotlin has to
+// hear of it to build a new client. Watched from the first call that needs the
+// node, so the node starts exactly when it did before.
+let watchedClient = null;
+function watchNode() {
+    const c = client;
+    if (!c || watchedClient === c) return;
+    watchedClient = c;
+    c.getNodeId().then(function () {
+        if (client === c) Native.status('node-up');
+    }, function (e) {
+        if (client === c) Native.nodeDead((e && e.message) ? e.message : String(e));
+    });
+}
+
 // ---- binary <-> base64 (media data on -2/P2) ----
 // JSON cannot carry bytes: a Uint8Array put through JSON.stringify comes out
 // as {"0":12,"1":255,…} — roughly 6x the size and an object, not bytes, on the
@@ -682,6 +697,15 @@ const api = {
 
     // ===== Streamr (transport) =====
 
+    // Resolves once the node is up, so a rebuilt client learns at once
+    // whether its start worked.
+    async startNode() {
+        if (!client) throw new Error('client not connected');
+        watchNode();
+        await client.getNodeId();
+        return { ok: true };
+    },
+
     // `a.password` (optional) encrypts the payload here instead of in Kotlin.
     // Only the media signal partition passes it — every other caller keeps
     // sealing in PomboCrypto and hands us the finished string, so nothing else
@@ -689,6 +713,7 @@ const api = {
     // BoringSSL, not Bouncy Castle, on a path that runs once per piece.
     async publish(a) {
         if (!client) throw new Error('client not connected');
+        watchNode();
         const key = subKey(a.streamId, a.partition);
         const content = a.password
             ? await pwEncryptString(JSON.stringify(a.content), String(a.password))
@@ -741,6 +766,7 @@ const api = {
     // timestamp }.
     async _publishAs(identity, streamId, partition, data, opts) {
         if (!client) throw new Error('client not connected');
+        watchNode();
         opts = opts || {};
         const MessageID = window.MessageID, MessageSigner = window.MessageSigner;
         if (!MessageID || !MessageSigner) {
@@ -1183,6 +1209,7 @@ const api = {
     // moving them would be a behaviour change for every existing flow.
     async subscribe(a) {
         if (!client) throw new Error('client not connected');
+        watchNode();
         const key = subKey(a.streamId, a.partition);
         if (a.password) subPasswords.set(key, String(a.password));
         // Idempotent, which is what lets Kotlin call ensureMediaPartitions
@@ -2877,6 +2904,7 @@ window.bridgeCall = function (id, method, argsB64) {
 window.bridgePublishBinary = function (id, argsB64, dataB64) {
     Promise.resolve().then(async function () {
         if (!client) throw new Error('client not connected');
+        watchNode();
         const a = JSON.parse(b64ToUtf8(argsB64));
         let bytes = b64ToU8(dataB64);
         // Pre-framed piece from Kotlin (0x02 sealed DM or 0x03 channel frame
@@ -2941,6 +2969,7 @@ window.bridgePublishBinary = function (id, argsB64, dataB64) {
 window.bridgePublishStorageChunk = function (id, argsB64, dataB64) {
     Promise.resolve().then(async function () {
         if (!client) throw new Error('client not connected');
+        watchNode();
         const a = JSON.parse(b64ToUtf8(argsB64));
         let bytes = b64ToU8(dataB64);
         // Pre-sealed chunk from Kotlin under a natively-minted identity (DM
