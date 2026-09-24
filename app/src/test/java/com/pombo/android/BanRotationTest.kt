@@ -5,6 +5,7 @@ import com.pombo.android.core.channels.RotationRetry
 import io.mockk.coEvery
 import io.mockk.every
 import kotlinx.coroutines.runBlocking
+import org.json.JSONArray
 import org.json.JSONObject
 import org.junit.After
 import org.junit.Assert.assertEquals
@@ -135,6 +136,24 @@ class BanRotationTest {
 
         assertEquals(RotationRetry.OWED_MESSAGE, error?.message)
         assertTrue(manager.messages.value.isEmpty())
+    }
+
+    @Test fun `an unban on the gate reads the stored key requests again at once`() {
+        meshUp = true
+        coEvery { h.bridge.call("gateInfo", any()) } returns JSONObject().put("mode", 1)
+        coEvery { h.bridge.call("gateMembers", any(), any()) } returns JSONObject().put("members",
+            JSONArray().put(JSONObject().put("address", member).put("banned", true)))
+        var requestReads = 0
+        coEvery { h.bridge.call("resend", any(), any()) } answers {
+            val args = secondArg<JSONObject>()
+            if (args.optString("streamId") == keysId &&
+                args.optInt("partition") == StreamConstants.P_REQUESTS) requestReads++
+            JSONObject().put("messages", JSONArray())
+        }
+
+        runBlocking { manager.unbanMemberLevels(member) }
+
+        assertTrue(requestReads > 0)
     }
 
     /** Another session of the same device, sharing its local store. */

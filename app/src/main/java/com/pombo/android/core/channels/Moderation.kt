@@ -529,6 +529,7 @@ internal class Moderation(private val manager: ChannelManager) {
             _channels.value = _channels.value.map { if (it.messageStreamId == updated.messageStreamId) updated else it }
             store.save(_channels.value)
             _current.value = updated
+            answerWaitingRequests(updated)
             return
         }
 
@@ -1472,9 +1473,29 @@ internal class Moderation(private val manager: ChannelManager) {
             bridge.call("gateUnban", JSONObject()
                 .put("gate", channel.gateAddress).put("user", addr), 180_000)
             gateManageCache.clear()
+            answerWaitingRequests(channel)
         }
         if (_bannedMembers.value.any { it.equals(addr, ignoreCase = true) }) {
             banMember(addr, false)
+        }
+    }
+
+    /**
+     * Answer the key requests storage holds for the channel now. The SDK keeps
+     * refusing a just-readmitted member's live requests for up to ten minutes;
+     * the stored copies are read raw, past that check.
+     */
+    private fun answerWaitingRequests(channel: Channel) {
+        if (channel.type != "gated") return
+        val keysId = channel.keysStreamId.ifEmpty { StreamConstants.deriveKeysId(channel.messageStreamId) }
+        scope.launch {
+            try {
+                epochKeys.ensureChannelKeys(
+                    channel.messageStreamId, keysId, ChannelManager.keysRetentionDays(channel),
+                    allowMint = false, memberCount = channel.members.size, gated = true)
+            } catch (e: Exception) {
+                Log.w(TAG, "Answering the stored key requests failed: ${e.message}")
+            }
         }
     }
 }
