@@ -74,6 +74,8 @@ import androidx.compose.ui.graphics.PathOperation
 import androidx.compose.ui.graphics.TransformOrigin
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.unit.Density
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.IntOffset
@@ -507,15 +509,41 @@ internal fun PomboHeader(status: NetStatus, trailing: @Composable (() -> Unit)? 
             .padding(start = 14.dp, end = 14.dp, top = 10.dp, bottom = 6.dp),
         verticalAlignment = Alignment.CenterVertically
     ) {
-        androidx.compose.foundation.Image(
-            painter = androidx.compose.ui.res.painterResource(id = com.pombo.android.R.drawable.pombo_logo),
-            contentDescription = "Pombo",
-            modifier = Modifier.size(34.dp)
-        )
+        Box {
+            androidx.compose.foundation.Image(
+                painter = androidx.compose.ui.res.painterResource(id = com.pombo.android.R.drawable.pombo_logo),
+                contentDescription = "Pombo",
+                modifier = Modifier.size(34.dp)
+            )
+            if (status == NetStatus.CONNECTING || status == NetStatus.ERROR) {
+                NetworkDot(Modifier.align(Alignment.BottomEnd).offset(x = 1.dp, y = 1.dp))
+            }
+        }
         Spacer(Modifier.width(8.dp))
         Text("Pombo", color = PomboColors.Text, fontSize = 17.sp, fontWeight = FontWeight.ExtraBold)
         Spacer(Modifier.weight(1f))
         if (trailing != null) trailing()
+    }
+}
+
+@Composable
+private fun NetworkDot(modifier: Modifier = Modifier) {
+    androidx.compose.foundation.Canvas(
+        modifier.size(11.dp).semantics { contentDescription = "Connecting" }
+    ) {
+        val outer = size.minDimension / 2f
+        drawCircle(PomboColors.Background, radius = outer)
+        val inner = outer - 1.5.dp.toPx()
+        drawCircle(
+            brush = androidx.compose.ui.graphics.Brush.radialGradient(
+                0f to Color(0xFFFCA5A5),
+                0.45f to PomboColors.Danger,
+                1f to Color(0xFF991B1B),
+                center = androidx.compose.ui.geometry.Offset(center.x - inner * 0.3f, center.y - inner * 0.4f),
+                radius = inner * 1.4f
+            ),
+            radius = inner
+        )
     }
 }
 
