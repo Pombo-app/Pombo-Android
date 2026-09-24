@@ -1197,6 +1197,7 @@ class AppViewModel(app: Application) : AndroidViewModel(app), PomboBridge.Listen
     val ensAvatars get() = ensStore.avatarUrls
     fun ensureEns(address: String?) = manager.ensureEns(address)
     val initialLoad get() = manager.initialLoad
+    val restoredTimeline get() = manager.restoredTimeline
     val hasMoreHistory get() = manager.hasMoreHistory
     val historyError get() = manager.historyError
     val waitingForKeys get() = manager.waitingForKeys

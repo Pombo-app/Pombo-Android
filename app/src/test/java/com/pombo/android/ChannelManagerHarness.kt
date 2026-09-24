@@ -35,6 +35,8 @@ class ChannelManagerHarness(
     /** Throwaway key; the channel pseudonym is minted from it, so it must be real. */
     val myKey = "0x4f3edf983ac636a65a842ce7c78d9aa706d3b113bce9c46f30d7d21715b23b1d"
     val me: String = com.pombo.android.core.EthereumSigner.address(myKey).lowercase()
+    /** What the manager's `myAddress` answers; a test switches accounts by changing it. */
+    @Volatile var address: String = me
     val bridge: com.pombo.android.bridge.PomboBridge = mockk(relaxed = true)
     val store: com.pombo.android.data.ChannelStore = mockk(relaxed = true)
     val ensStore: com.pombo.android.core.EnsStore = mockk(relaxed = true)
@@ -66,7 +68,7 @@ class ChannelManagerHarness(
             bridge = bridge,
             store = store,
             scope = scope,
-            myAddress = { me },
+            myAddress = { address },
             myPrivateKey = { myKey },
             myUsername = { "me" },
             imageStore = mockk(relaxed = true),
