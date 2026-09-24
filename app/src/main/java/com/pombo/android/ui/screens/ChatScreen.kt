@@ -209,11 +209,6 @@ fun ChatScreen(vm: AppViewModel) {
     // the prepend and the re-measure collapse into one snapshot emission, and
     // same-sender pages merge into the seam group, growing it in place.)
     LaunchedEffect(ch.messageStreamId) { listState.scrollToItem(0) }
-    // Follow the conversation when a NEW message lands. Keying on the last id
-    // (not the count) keeps history appends from yanking the view down.
-    LaunchedEffect(messages.lastOrNull()?.id) {
-        if (messages.isNotEmpty()) listState.animateScrollToItem(0)
-    }
 
     // Infinite scroll: the web uses an IntersectionObserver on a top sentinel;
     // in the reversed list the sentinel is the LAST item, so "near the top"
@@ -315,6 +310,11 @@ fun ChatScreen(vm: AppViewModel) {
             visibleTimeline(messages, hidden, banned, moderates, loadingInitial, restoredTimeline)
         }
         val groups = remember(visible) { buildMessageGroups(visible) }
+        // Follow the conversation on the last VISIBLE id: history appends never
+        // yank the view, and a message shown again does not stay below the screen.
+        LaunchedEffect(visible.lastOrNull()?.id) {
+            if (visible.isNotEmpty()) listState.animateScrollToItem(0)
+        }
         // Only one message shows its action triggers at a time (web: .message-active).
         var activeId by remember { mutableStateOf<String?>(null) }
         // Scrolling dismisses them — the web hides the triggers as soon as the
