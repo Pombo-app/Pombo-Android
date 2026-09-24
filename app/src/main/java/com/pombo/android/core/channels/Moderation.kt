@@ -43,7 +43,6 @@ import org.json.JSONObject
 internal class Moderation(private val manager: ChannelManager) {
 
     private val bridge get() = manager.bridge
-    private val store get() = manager.store
     private val scope get() = manager.scope
     private val myAddress get() = manager.myAddress
     private val adminFloorStore get() = manager.adminFloorStore
@@ -112,7 +111,7 @@ internal class Moderation(private val manager: ChannelManager) {
         val latest = _channels.value.find { it.messageStreamId == messageStreamId } ?: return
         val updated = change(latest)
         _channels.value = _channels.value.map { if (it.messageStreamId == messageStreamId) updated else it }
-        store.save(_channels.value)
+        manager.saveChannels()
         if (_current.value?.messageStreamId == messageStreamId) _current.value = updated
     }
 
@@ -236,7 +235,7 @@ internal class Moderation(private val manager: ChannelManager) {
         _channels.value = _channels.value.map {
             if (it.messageStreamId == updated.messageStreamId) updated else it
         }
-        store.save(_channels.value)
+        manager.saveChannels()
         if (_current.value?.messageStreamId == updated.messageStreamId) _current.value = updated
     }
 
@@ -293,13 +292,17 @@ internal class Moderation(private val manager: ChannelManager) {
                 Log.i(TAG, "Rotated the epoch for lost access (${pending.size} address(es))")
             }
             val latest = _channels.value.find { it.messageStreamId == channel.messageStreamId } ?: return
+            val cover = covered + pending
+            // Runs on every admin open, and each save schedules a full sync push.
+            if (latest.rotatedForNoAccess.map { it.lowercase() }.toSet() == cover &&
+                latest.accessSnapshot.map { it.lowercase() }.toSet() == withAccess) return
             val updated = latest.copy(
-                rotatedForNoAccess = (covered + pending).toList(),
+                rotatedForNoAccess = cover.toList(),
                 accessSnapshot = withAccess.toList())
             _channels.value = _channels.value.map {
                 if (it.messageStreamId == updated.messageStreamId) updated else it
             }
-            store.save(_channels.value)
+            manager.saveChannels()
             if (_current.value?.messageStreamId == updated.messageStreamId) _current.value = updated
         } catch (e: Exception) {
             Log.w(TAG, "Deferred rotation for lost access failed (will retry next open): ${e.message}")
@@ -527,7 +530,7 @@ internal class Moderation(private val manager: ChannelManager) {
             bridge.call("gateAllow", JSONObject().put("gate", gate).put("user", addr), 180_000)
             val updated = channel.copy(members = channel.members + addr)
             _channels.value = _channels.value.map { if (it.messageStreamId == updated.messageStreamId) updated else it }
-            store.save(_channels.value)
+            manager.saveChannels()
             _current.value = updated
             answerWaitingRequests(updated)
             return
@@ -553,7 +556,7 @@ internal class Moderation(private val manager: ChannelManager) {
         com.pombo.android.core.GraphApi.clearCache()
         val updated = channel.copy(members = channel.members + addr)
         _channels.value = _channels.value.map { if (it.messageStreamId == updated.messageStreamId) updated else it }
-        store.save(_channels.value)
+        manager.saveChannels()
         _current.value = updated
     }
 
@@ -605,7 +608,7 @@ internal class Moderation(private val manager: ChannelManager) {
         com.pombo.android.core.GraphApi.clearCache()
         val updated = channel.copy(members = channel.members.filterNot { it.equals(addr, ignoreCase = true) })
         _channels.value = _channels.value.map { if (it.messageStreamId == updated.messageStreamId) updated else it }
-        store.save(_channels.value)
+        manager.saveChannels()
         _current.value = updated
 
         // Rotate the epoch so the removed member cannot read anything published
