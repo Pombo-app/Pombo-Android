@@ -264,6 +264,10 @@ class ChannelManager(
                         publisher,
                         com.pombo.android.core.StoredAt.judgeTime(meta)))
                 }
+            } catch (e: kotlinx.coroutines.TimeoutCancellationException) {
+                // The bridge call's own timeout, not a cancellation: the rows
+                // the other partition returned must still reach the caller.
+                Log.w(TAG, "keys resend P$part timed out; continuing without it")
             } catch (e: kotlinx.coroutines.CancellationException) {
                 throw e   // channel switch — propagate, never swallow
             } catch (e: Exception) {
