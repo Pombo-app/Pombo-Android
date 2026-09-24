@@ -29,11 +29,12 @@ import org.junit.Test
  */
 class SyncManagerLightTest {
 
-    private var dirty = false
+    @Volatile private var dirty = false
     private var confirmedHash: String? = null
     private var confirmedAt = 0L
     @Volatile private var rows = JSONArray()
     @Volatile private var resendMs = 0L
+    @Volatile private var onPublish: () -> Unit = {}
     private var mode = SyncMode.AUTOMATIC
     private val calls = CopyOnWriteArrayList<String>()
     private val left = CopyOnWriteArrayList<Int>()
@@ -69,7 +70,10 @@ class SyncManagerLightTest {
             calls.add(method)
             when (method) {
                 "getPeerPublicKey" -> JSONObject().put("publicKey", "0x02aa")
-                "publishAs" -> JSONObject().put("ok", true).put("timestamp", 5000L).put("publisherId", "0xEph")
+                "publishAs" -> {
+                    onPublish()
+                    JSONObject().put("ok", true).put("timestamp", 5000L).put("publisherId", "0xEph")
+                }
                 "resend" -> {
                     if (resendMs > 0) Thread.sleep(resendMs)
                     JSONObject().put("messages", rows)
@@ -98,6 +102,26 @@ class SyncManagerLightTest {
         calls.clear()
         assertNull(sync.pushSync())
         assertFalse("publishAs" in calls)
+    }
+
+    @Test
+    fun `an auto push clears the dirty flag`() {
+        rows = JSONArray().put(row(5000, "0xeph"))
+        sync.scheduleAutoPush(10L)
+        waitFor { "publishAs" in calls && !dirty }
+
+        assertTrue("publishAs" in calls)
+        assertFalse(dirty)
+    }
+
+    @Test
+    fun `a change signalled during a push keeps the dirty flag`() = runBlocking {
+        rows = JSONArray().put(row(5000, "0xeph"))
+        onPublish = { sync.scheduleAutoPush(60_000L) }
+        sync.pushSync()
+        sync.cancelAutoPush()
+
+        assertTrue(dirty)
     }
 
     @Test
