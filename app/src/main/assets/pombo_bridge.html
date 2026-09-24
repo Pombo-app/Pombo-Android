@@ -1166,6 +1166,17 @@ const api = {
         };
     },
 
+    // Takes the node out of a stream part it joined only to publish (web
+    // streamr.js leaveStreamPart). A subscribed part is left alone: the
+    // subscription rides on it.
+    async leaveStreamPart(a) {
+        if (!client) return { ok: false };
+        if (subs.has(subKey(a.streamId, a.partition))) return { ok: false, subscribed: true };
+        const node = client.getNode();
+        await node.leave(a.streamId + '#' + a.partition);
+        return { ok: true, joined: (await node.getStreamParts()).length };
+    },
+
     // `a.password` is used ONLY for binary payloads (-2/P2 pieces), which are
     // unwrapped in the callback below. JSON messages keep being decrypted in
     // Kotlin (PomboCrypto) as before — they are low-rate and already work, and
