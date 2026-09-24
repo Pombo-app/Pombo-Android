@@ -666,7 +666,7 @@ class AppViewModel(app: Application) : AndroidViewModel(app), PomboBridge.Listen
         base.put("username", store.username ?: JSONObject.NULL)
         base.put("graphApiKey", settingsStore.graphApiKey ?: JSONObject.NULL)
         base.put("sliceTs", settingsStore.sliceTsJson())
-        return base
+        return base.put("sliceTs", com.pombo.android.core.SyncMerge.stampedSliceTs(base))
     }
 
     /**
