@@ -23,6 +23,34 @@ object SyncMerge {
         "blockedPeers", "dmLeftAt", "trustedContacts", "username", "graphApiKey"
     )
 
+    // Older than any real stamp, so a live edit still wins; newer than the 0 of
+    // a snapshot that holds nothing.
+    private const val UNSTAMPED_VALUE_TS = 1L
+
+    private fun isEmptySlice(value: Any?): Boolean = when (value) {
+        null, JSONObject.NULL -> true
+        is String -> value.isEmpty()
+        is JSONArray -> value.length() == 0
+        is JSONObject -> value.length() == 0
+        else -> false
+    }
+
+    /**
+     * The state's slice timestamps, with every slice that holds a value but no
+     * stamp (a restored backup, an old client) stamped [UNSTAMPED_VALUE_TS].
+     * Web syncMerge.js stampedSliceTs.
+     */
+    fun stampedSliceTs(state: JSONObject?): JSONObject {
+        val out = JSONObject()
+        state?.optJSONObject("sliceTs")?.let { s -> s.keys().forEach { out.put(it, s.get(it)) } }
+        TIMESTAMPED_SLICES.forEach { key ->
+            if (out.optLong(key, 0L) == 0L && !isEmptySlice(state?.opt(key))) {
+                out.put(key, UNSTAMPED_VALUE_TS)
+            }
+        }
+        return out
+    }
+
     fun mergeState(base: JSONObject?, incoming: JSONObject?): JSONObject {
         val out = JSONObject()
 
@@ -334,8 +362,12 @@ object SyncMerge {
         val incomingHas = incoming?.has(key) == true
         val baseTs = base?.optJSONObject("sliceTs")?.optLong(key, 0L) ?: 0L
         val incomingTs = incoming?.optJSONObject("sliceTs")?.optLong(key, 0L) ?: 0L
+        // A device that has read nothing yet publishes empty, unstamped slices;
+        // those never replace a value.
+        val emptyOverValue = incomingTs == 0L &&
+            isEmptySlice(incoming?.opt(key)) && !isEmptySlice(base?.opt(key))
 
-        if (incomingHas && (!baseHas || incomingTs >= baseTs)) {
+        if (incomingHas && !emptyOverValue && (!baseHas || incomingTs >= baseTs)) {
             sliceTs.put(key, incomingTs)
             return incoming!!.opt(key)
         }
