@@ -1410,6 +1410,10 @@ class AppViewModel(app: Application) : AndroidViewModel(app), PomboBridge.Listen
 
     /** The storage side of a ban: erase what the author wrote, and say how much left where. */
     private suspend fun eraseAuthorToast(address: String) {
+        val loading = toast(
+            "Erasing from storage…", com.pombo.android.ui.ToastKind.LOADING, Long.MAX_VALUE,
+            subtitle = "Locating their messages and files"
+        )
         try {
             val r = manager.eraseAuthorMessages(address)
             val o = r.outcome
@@ -1426,6 +1430,8 @@ class AppViewModel(app: Application) : AndroidViewModel(app), PomboBridge.Listen
             )
         } catch (e: Exception) {
             toast("Banned, but not erased from storage: ${e.message}", com.pombo.android.ui.ToastKind.ERROR, 6000L)
+        } finally {
+            dismissToast(loading)
         }
     }
 
