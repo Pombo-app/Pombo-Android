@@ -345,6 +345,7 @@ internal class ChannelImages(private val manager: ChannelManager) {
                 "Cannot send image: peer public key not available"
             )
         }
+        manager.settleOwedRotation(channel.messageStreamId)
 
         // The heaviest single operation in the app: bitmap decode, then a
         // resolution × quality ladder that re-compresses until the output fits,

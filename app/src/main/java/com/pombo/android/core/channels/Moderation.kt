@@ -76,6 +76,46 @@ internal class Moderation(private val manager: ChannelManager) {
         private const val CONFIRM_REPUBLISH_LIMIT = 3
     }
 
+    internal val rotations by lazy {
+        RotationRetry(scope, object : RotationRetry.Host {
+            override fun account(): String? = myAddress()
+            override suspend fun rotate(messageStreamId: String) {
+                val channel = _channels.value.find { it.messageStreamId == messageStreamId }
+                    ?: throw IllegalStateException("Channel no longer stored")
+                val keysId = channel.keysStreamId.ifEmpty { StreamConstants.deriveKeysId(messageStreamId) }
+                epochKeys.rotateEpoch(messageStreamId, keysId)
+            }
+            override suspend fun covered(messageStreamId: String, addresses: Set<String>) =
+                updateStored(messageStreamId) {
+                    it.copy(rotatedForNoAccess = (it.rotatedForNoAccess + addresses).distinct())
+                }
+            override fun stillOwned(messageStreamId: String): Boolean =
+                _channels.value.find { it.messageStreamId == messageStreamId }?.let { amOwner(it) } == true
+            override fun loadOwed(key: String): List<String> {
+                val arr = adminFloorStore.get(key)?.optJSONArray("addresses") ?: return emptyList()
+                return (0 until arr.length()).map { arr.optString(it) }.filter { it.isNotEmpty() }
+            }
+            override fun saveOwed(key: String, addresses: List<String>) {
+                if (addresses.isEmpty()) adminFloorStore.remove(key)
+                else adminFloorStore.put(key, JSONObject().put("addresses", JSONArray(addresses)))
+            }
+            override suspend fun sleep(ms: Long) = delay(ms)
+        })
+    }
+
+    /** Owed rotations of the gated channels this account owns, taken up on a bridge connect. */
+    fun resumeOwedRotations() = rotations.resume(
+        _channels.value.filter { it.type == "gated" && amOwner(it) }.map { it.messageStreamId })
+
+    /** Change the stored record as it is now, not a copy captured before a slow call. */
+    private fun updateStored(messageStreamId: String, change: (Channel) -> Channel) {
+        val latest = _channels.value.find { it.messageStreamId == messageStreamId } ?: return
+        val updated = change(latest)
+        _channels.value = _channels.value.map { if (it.messageStreamId == messageStreamId) updated else it }
+        store.save(_channels.value)
+        if (_current.value?.messageStreamId == messageStreamId) _current.value = updated
+    }
+
     internal val _pins = MutableStateFlow<List<Pin>>(emptyList())
 
     // What the UI renders: the owner's snapshot with the moderators' pending
@@ -227,6 +267,8 @@ internal class Moderation(private val manager: ChannelManager) {
         // A preview has no stored record, and a Join during the gate read
         // below would be overwritten by the preview's copy.
         if (_channels.value.none { it.messageStreamId == channel.messageStreamId }) return
+        // The retry owns the channel's rotation until it goes out.
+        if (rotations.isOwed(channel.messageStreamId)) return
 
         val flags = try { gateMemberFlags() } catch (e: Exception) { return }
         if (flags.isEmpty()) return   // unreadable gate — judge nothing
@@ -487,6 +529,7 @@ internal class Moderation(private val manager: ChannelManager) {
             _channels.value = _channels.value.map { if (it.messageStreamId == updated.messageStreamId) updated else it }
             store.save(_channels.value)
             _current.value = updated
+            answerWaitingRequests(updated)
             return
         }
 
@@ -514,8 +557,11 @@ internal class Moderation(private val manager: ChannelManager) {
         _current.value = updated
     }
 
-    /** Revokes all permissions (web: empty permission array = revoke). */
-    suspend fun removeMember(address: String) {
+    /**
+     * Revokes all permissions (web: empty permission array = revoke).
+     * @return false when the key rotation that follows is still owed
+     */
+    suspend fun removeMember(address: String): Boolean {
         val channel = _current.value ?: throw IllegalStateException("No channel open")
         if (channel.type != "gated" && !amOwner(channel)) throw IllegalStateException("Only the channel admin can remove members")
         val addr = address.trim()
@@ -540,18 +586,11 @@ internal class Moderation(private val manager: ChannelManager) {
             }
             bridge.call("gateRevokeAllow", JSONObject()
                 .put("gate", gate).put("user", addr), 180_000)
-            val keysIdGated = channel.keysStreamId.ifEmpty { StreamConstants.deriveKeysId(channel.messageStreamId) }
-            val updated = channel.copy(members = channel.members.filterNot { it.equals(addr, ignoreCase = true) })
-            _channels.value = _channels.value.map { if (it.messageStreamId == updated.messageStreamId) updated else it }
-            store.save(_channels.value)
-            _current.value = updated
-            gateManageCache.clear()
-            try {
-                epochKeys.rotateEpoch(channel.messageStreamId, keysIdGated)
-            } catch (e: Exception) {
-                Log.w(TAG, "Epoch rotation after removal FAILED — the removed member can still read new messages until the next rotation: ${e.message}")
+            updateStored(channel.messageStreamId) { stored ->
+                stored.copy(members = stored.members.filterNot { it.equals(addr, ignoreCase = true) })
             }
-            return
+            gateManageCache.clear()
+            return rotations.rotateFor(channel.messageStreamId, listOf(addr))
         }
 
         val revoke = JSONArray().put(
@@ -577,6 +616,7 @@ internal class Moderation(private val manager: ChannelManager) {
         } catch (e: Exception) {
             Log.w(TAG, "Epoch rotation after member removal FAILED — removed member can still read new messages until the next rotation: ${e.message}")
         }
+        return true
     }
 
     /**
@@ -1391,38 +1431,32 @@ internal class Moderation(private val manager: ChannelManager) {
      * the gate ban: `checkAccess` goes false, so no responder hands out keys,
      * the single gate cuts their transport at ingest, and the epoch rotation
      * that follows cuts reads from here on. Costs gas.
+     *
+     * @return false when the key rotation that follows is still owed
      */
-    suspend fun banMemberLevels(address: String, client: Boolean, protocol: Boolean) {
+    suspend fun banMemberLevels(address: String, client: Boolean, protocol: Boolean): Boolean {
         val channel = _current.value ?: throw IllegalStateException("No channel open")
         val addr = address.trim()
         if (channelOwner(channel)?.equals(addr, ignoreCase = true) == true) {
             throw IllegalStateException("Cannot ban the channel creator")
         }
+        var rotated = true
         if (protocol) {
             val gate = channel.gateAddress
                 ?: throw IllegalStateException("Only gated channels have a protocol-level ban")
             bridge.call("gateBan", JSONObject()
                 .put("gate", gate).put("user", addr), 180_000)
             gateManageCache.clear()
-            val keysId = channel.keysStreamId.ifEmpty { StreamConstants.deriveKeysId(channel.messageStreamId) }
-            var rotated = channel.rotatedForNoAccess
-            try {
-                epochKeys.rotateEpoch(channel.messageStreamId, keysId)
-                // Covered: the deferred pass must not rotate again for this one.
-                rotated = (rotated + addr.lowercase()).distinct()
-            } catch (e: Exception) {
-                Log.w(TAG, "Epoch rotation after gate ban FAILED — banned member can still read new messages until the next rotation: ${e.message}")
+            updateStored(channel.messageStreamId) { stored ->
+                stored.copy(
+                    members = stored.members.filterNot { it.equals(addr, ignoreCase = true) },
+                    knownBanned = (stored.knownBanned + addr.lowercase()).distinct()
+                )
             }
-            val updated = channel.copy(
-                members = channel.members.filterNot { it.equals(addr, ignoreCase = true) },
-                rotatedForNoAccess = rotated,
-                knownBanned = (channel.knownBanned + addr.lowercase()).distinct()
-            )
-            _channels.value = _channels.value.map { if (it.messageStreamId == updated.messageStreamId) updated else it }
-            store.save(_channels.value)
-            _current.value = updated
+            rotated = rotations.rotateFor(channel.messageStreamId, listOf(addr))
         }
         if (client) banMember(addr, true)
+        return rotated
     }
 
     /**
@@ -1439,9 +1473,29 @@ internal class Moderation(private val manager: ChannelManager) {
             bridge.call("gateUnban", JSONObject()
                 .put("gate", channel.gateAddress).put("user", addr), 180_000)
             gateManageCache.clear()
+            answerWaitingRequests(channel)
         }
         if (_bannedMembers.value.any { it.equals(addr, ignoreCase = true) }) {
             banMember(addr, false)
+        }
+    }
+
+    /**
+     * Answer the key requests storage holds for the channel now. The SDK keeps
+     * refusing a just-readmitted member's live requests for up to ten minutes;
+     * the stored copies are read raw, past that check.
+     */
+    private fun answerWaitingRequests(channel: Channel) {
+        if (channel.type != "gated") return
+        val keysId = channel.keysStreamId.ifEmpty { StreamConstants.deriveKeysId(channel.messageStreamId) }
+        scope.launch {
+            try {
+                epochKeys.ensureChannelKeys(
+                    channel.messageStreamId, keysId, ChannelManager.keysRetentionDays(channel),
+                    allowMint = false, memberCount = channel.members.size, gated = true)
+            } catch (e: Exception) {
+                Log.w(TAG, "Answering the stored key requests failed: ${e.message}")
+            }
         }
     }
 }

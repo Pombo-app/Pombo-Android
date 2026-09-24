@@ -39,6 +39,7 @@ class ChannelManagerHarness(
     val store: com.pombo.android.data.ChannelStore = mockk(relaxed = true)
     val ensStore: com.pombo.android.core.EnsStore = mockk(relaxed = true)
     val unreadStore: com.pombo.android.data.UnreadStore = mockk(relaxed = true)
+    val adminFloorStore: com.pombo.android.core.AdminFloorStore = mockk(relaxed = true)
 
     /** Every payload handed to the bridge, in order, as JSON text. */
     val published = mutableListOf<String>()
@@ -76,7 +77,7 @@ class ChannelManagerHarness(
             inviteStore = mockk(relaxed = true),
             unreadStore = unreadStore,
             epochKeyStore = mockk(relaxed = true),
-            adminFloorStore = mockk(relaxed = true),
+            adminFloorStore = adminFloorStore,
             transferDir = java.io.File(System.getProperty("java.io.tmpdir"), "pombo-tests"),
             isTrustedContact = { addr -> addr.lowercase() in trustedContacts }
         )

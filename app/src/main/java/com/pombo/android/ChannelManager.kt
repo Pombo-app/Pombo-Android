@@ -1367,6 +1367,8 @@ class ChannelManager(
     suspend fun gateBannedMembers(): List<String> = admin.gateBannedMembers()
 
     internal suspend fun rotateForLostAccess(channel: Channel) = admin.rotateForLostAccess(channel)
+    fun resumeOwedRotations() = admin.resumeOwedRotations()
+    internal suspend fun settleOwedRotation(messageStreamId: String) = admin.rotations.settle(messageStreamId)
 
     suspend fun channelMembers(): List<MemberRow> = admin.channelMembers()
 
@@ -5740,6 +5742,7 @@ class ChannelManager(
     /** Publish a text already on the timeline and settle its send state. */
     private suspend fun publishText(channel: Channel, id: String, content: JSONObject) {
         val envelopeTs = try {
+            settleOwedRotation(channel.messageStreamId)
             publishTextWithRetry {
                 publishForChannel(channel, channel.messageStreamId, StreamConstants.P_MESSAGES, content)
             }
