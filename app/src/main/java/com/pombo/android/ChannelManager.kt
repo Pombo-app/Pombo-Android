@@ -175,7 +175,9 @@ class ChannelManager(
     /** Blocked peers (web secureStorage.isBlocked) — a synced slice. */
     private val isBlockedPeer: (String) -> Boolean = { false },
     /** Persist a new block; the caller owns the settings store. */
-    private val persistBlockedPeer: (String) -> Unit = {}
+    private val persistBlockedPeer: (String) -> Unit = {},
+    /** False when Android reports no usable network: a send then fails at once. */
+    private val isOnline: () -> Boolean = { true }
 ) {
 
     /**
@@ -4249,6 +4251,7 @@ class ChannelManager(
             .put("timestamp", timestamp).put("replyTo", JSONObject.NULL)
 
         try {
+            if (!isOnline()) throw IllegalStateException(NO_NETWORK)
             publishTextWithRetry {
                 publishContent(
                     channel.messageStreamId, StreamConstants.P_MESSAGES,
@@ -5784,7 +5787,7 @@ class ChannelManager(
      * chain lets the publish through, the network refuses what it must.
      */
     private suspend fun assertMayPublish(channel: Channel) {
-        if (channel.type != "gated") return
+        if (channel.type != "gated" || !isOnline()) return
         val gate = channel.gateAddress ?: return
         val me = myAddress() ?: throw IllegalStateException("No identity")
         val res = try {
@@ -5818,6 +5821,7 @@ class ChannelManager(
     /** Publish a text already on the timeline and settle its send state. */
     private suspend fun publishText(channel: Channel, id: String, content: JSONObject) {
         val envelopeTs = try {
+            if (!isOnline()) throw IllegalStateException(NO_NETWORK)
             settleOwedRotation(channel.messageStreamId)
             publishTextWithRetry {
                 publishForChannel(channel, channel.messageStreamId, StreamConstants.P_MESSAGES, content)
@@ -7342,6 +7346,7 @@ class ChannelManager(
 
     companion object {
         private const val TAG = "PomboChannels"
+        internal const val NO_NETWORK = "No network connection"
         /** A publish rejected because the stream itself is not on chain (web publishReaction). */
         private val STREAM_ABSENT = Regex("not found|does not exist|NOT_FOUND", RegexOption.IGNORE_CASE)
         /** Canonical wrapped-native on Polygon (WPOL) — bridge `_WRAPPED_NATIVE`. */
