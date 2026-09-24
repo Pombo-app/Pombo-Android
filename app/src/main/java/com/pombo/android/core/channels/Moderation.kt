@@ -1226,6 +1226,22 @@ internal class Moderation(private val manager: ChannelManager) {
         _banSince.value = emptyMap()
     }
 
+    internal data class OwnerWord(val hidden: Set<String>, val banned: Map<String, Int?>, val absorbedThrough: Long)
+
+    internal fun ownerWord() = OwnerWord(snapHidden, snapBanned, absorbedThrough)
+
+    /**
+     * A reopened channel gets back the word it was left with. The revs survive
+     * the close, so a publish before the on-open -3 read builds on this; left
+     * empty it would erase the channel's moderation for everyone.
+     */
+    internal fun restoreOwnerWord(word: OwnerWord) {
+        snapHidden = word.hidden
+        snapBanned = word.banned
+        absorbedThrough = word.absorbedThrough
+        recompose()
+    }
+
     /**
      * Publish a delta as a moderator. The owner never takes this path: their
      * snapshot is stronger and needs nobody's ratification.

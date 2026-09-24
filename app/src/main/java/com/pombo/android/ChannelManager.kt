@@ -777,7 +777,7 @@ class ChannelManager(
 
     /** Re-reads the list after the storage scope changes (account switch/guest). */
     fun reloadChannels() {
-        scope.launch { channelSwitchMutex.withLock { closeCurrentInternal() } }
+        scope.launch { channelSwitchMutex.withLock { closeCurrentInternal(); clearReopenSnapshots() } }
         _channels.value = store.load().distinctBy { it.messageStreamId }
         _channelOrder.value = store.loadOrder()
     }
@@ -1048,6 +1048,42 @@ class ChannelManager(
 
     /** Ids the author deleted — see [applyOverride]. Reset per channel. */
     private val deletedIds = mutableSetOf<String>()
+
+    private data class ReopenSnapshot(
+        val messages: List<UiMessage>,
+        val reactions: Map<String, Map<String, Set<String>>>,
+        val oldestTimestamp: Long,
+        val deletedIds: Set<String>,
+        val hiddenIds: Set<String>,
+        val banSince: Map<String, Int?>,
+        val pins: List<Pin>,
+        val ownerWord: com.pombo.android.core.channels.Moderation.OwnerWord
+    )
+
+    /** What the chat may show of a reopened channel before its loads finish, and what it hid then. */
+    data class RestoredTimeline(
+        val ids: Set<String>,
+        val hiddenIds: Set<String>,
+        val banSince: Map<String, Int?>
+    )
+
+    /**
+     * Session memory only, keyed by account and channel, least recently used
+     * out first. Image bytes are dropped: the [blobStore] ledger has them.
+     * Guarded by this instance's monitor.
+     */
+    private val reopenSnapshots = object : LinkedHashMap<String, ReopenSnapshot>(16, 0.75f, true) {
+        override fun removeEldestEntry(eldest: MutableMap.MutableEntry<String, ReopenSnapshot>?) =
+            size > REOPEN_SNAPSHOT_CHANNELS
+    }
+
+    private fun reopenKey(account: String?, streamId: String) = "${account?.lowercase()}|$streamId"
+
+    /** The account that opened the current channel: an account switch changes [myAddress] before the close runs. */
+    @Volatile private var openedBy: String? = null
+
+    private val _restoredTimeline = MutableStateFlow<RestoredTimeline?>(null)
+    val restoredTimeline: StateFlow<RestoredTimeline?> = _restoredTimeline.asStateFlow()
 
     /**
      * Who is typing, as an address plus whatever nickname rode along with the
@@ -4905,16 +4941,30 @@ class ChannelManager(
                     if (_current.value?.messageStreamId == channel.messageStreamId) _inboxPurgeProviders.value = own
                 }
             }
-            _messages.value = emptyList()
-            _reactions.value = emptyMap()
-            _pins.value = emptyList()
+            openedBy = myAddress()
+            val snapshot = if (preview || channel.type == "dm") null
+                else synchronized(this) { reopenSnapshots[reopenKey(openedBy, channel.messageStreamId)] }
+            // Up before the restore: the subscribes below suspend, and a lowered
+            // gate shows the list without the moderation it was left with.
+            if (!channel.writeOnly) _initialLoad.value = true
+            _restoredTimeline.value = snapshot?.let { s ->
+                RestoredTimeline(s.messages.mapTo(HashSet()) { it.id }, s.hiddenIds, s.banSince)
+            }
+            _messages.value = snapshot?.messages ?: emptyList()
+            _reactions.value = snapshot?.reactions ?: emptyMap()
+            snapshot?.messages?.forEach { if (it.isImage && it.imageId != null) hydrateFromLedger(it.imageId) }
+            _pins.value = snapshot?.pins ?: emptyList()
             _hiddenIds.value = emptySet()
             _bannedMembers.value = emptySet()
             _rosterNames.value = emptyMap()
             admin.clearDeltas()
+            snapshot?.let { admin.restoreOwnerWord(it.ownerWord) }
             val generation = ++switchGeneration
-            oldestTimestamp = 0L
-            synchronized(this) { pendingOverrides.clear(); deletedIds.clear() }
+            oldestTimestamp = snapshot?.oldestTimestamp ?: 0L
+            synchronized(this) {
+                pendingOverrides.clear(); deletedIds.clear()
+                snapshot?.let { deletedIds.addAll(it.deletedIds) }
+            }
             _hasMoreHistory.value = false
             _loadingHistory.value = false
             _historyError.value = null
@@ -4981,8 +5031,35 @@ class ChannelManager(
 
     fun closeCurrent() { scope.launch { channelSwitchMutex.withLock { closeCurrentInternal() } } }
 
+    @Synchronized
+    private fun saveReopenSnapshot(channel: Channel) {
+        if (_isPreview.value || channel.type == "dm") return
+        val key = reopenKey(openedBy, channel.messageStreamId)
+        val messages = _messages.value
+        if (messages.isEmpty()) { reopenSnapshots.remove(key); return }
+        reopenSnapshots[key] = ReopenSnapshot(
+            messages = messages.map { if (it.imageBytes != null) it.copy(imageBytes = null) else it },
+            reactions = _reactions.value,
+            oldestTimestamp = oldestTimestamp,
+            deletedIds = deletedIds.toSet(),
+            hiddenIds = _hiddenIds.value,
+            banSince = _banSince.value,
+            pins = _pins.value,
+            ownerWord = admin.ownerWord()
+        )
+    }
+
+    @Synchronized
+    private fun dropReopenSnapshot(streamId: String) {
+        reopenSnapshots.remove(reopenKey(myAddress(), streamId))
+    }
+
+    @Synchronized
+    private fun clearReopenSnapshots() = reopenSnapshots.clear()
+
     private suspend fun closeCurrentInternal() {
         val channel = _current.value ?: return
+        saveReopenSnapshot(channel)
         // Closing ends the viewing session too, so work in flight for this
         // channel cannot land after we reopen the very same channel.
         val generation = ++switchGeneration
@@ -5097,6 +5174,7 @@ class ChannelManager(
         scope.launch {
             val leaving = _channels.value.firstOrNull { it.messageStreamId == messageStreamId }
             if (_current.value?.messageStreamId == messageStreamId) closeCurrentInternal()
+            dropReopenSnapshot(messageStreamId)
             _channels.value = _channels.value.filterNot { it.messageStreamId == messageStreamId }
             // Tombstone, so a sync pull cannot resurrect the channel from an
             // older snapshot taken before the user left.
@@ -7179,29 +7257,28 @@ class ChannelManager(
         applyPendingOverrides()
     }
 
-    @Synchronized
-    internal fun confirmMessage(id: String) {
-        _messages.value = _messages.value.map {
-            if (it.id == id) it.copy(pending = false, failed = false, failError = null, undelivered = false) else it
-        }
+    internal fun confirmMessage(id: String) = updateSendState(id) {
+        it.copy(pending = false, failed = false, failError = null, undelivered = false)
     }
 
-    @Synchronized
-    internal fun markFailed(id: String, reason: String?) {
-        _messages.value = _messages.value.map {
-            if (it.id == id) it.copy(pending = false, failed = true, failError = reason) else it
-        }
+    internal fun markFailed(id: String, reason: String?) = updateSendState(id) {
+        it.copy(pending = false, failed = true, failError = reason)
     }
 
-    @Synchronized
-    internal fun markDelivered(id: String) {
-        _messages.value = _messages.value.map { if (it.id == id) it.copy(delivered = true) else it }
+    internal fun markDelivered(id: String) = updateSendState(id) { it.copy(delivered = true) }
+
+    internal fun markUndelivered(id: String, reason: String) = updateSendState(id) {
+        it.copy(pending = false, failed = true, undelivered = true, failError = reason)
     }
 
+    /** A send can settle after the user left its channel: the reopen copy must hear it too. */
     @Synchronized
-    internal fun markUndelivered(id: String, reason: String) {
-        _messages.value = _messages.value.map {
-            if (it.id == id) it.copy(pending = false, failed = true, undelivered = true, failError = reason) else it
+    private fun updateSendState(id: String, transform: (UiMessage) -> UiMessage) {
+        _messages.value = _messages.value.map { if (it.id == id) transform(it) else it }
+        for (entry in reopenSnapshots.entries) {
+            val snapshot = entry.value
+            if (snapshot.messages.none { it.id == id }) continue
+            entry.setValue(snapshot.copy(messages = snapshot.messages.map { if (it.id == id) transform(it) else it }))
         }
     }
 
@@ -7290,6 +7367,7 @@ class ChannelManager(
         /** Web config.js subscriptions.memberCatchUp*. */
         const val MEMBER_CATCHUP_INTERVAL_MS = 30_000L
         const val MEMBER_CATCHUP_COUNT = 30
+        const val REOPEN_SNAPSHOT_CHANNELS = 10
         /** The storage node keeps a gate refusal for 20 s (web config.js renewalHistoryRetryMs). */
         const val RENEWAL_HISTORY_RETRY_MS = 21_000L
         /** Allowed clock skew of a payload timestamp ahead of now / of its

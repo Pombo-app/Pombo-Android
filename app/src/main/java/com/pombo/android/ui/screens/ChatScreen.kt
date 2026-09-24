@@ -168,6 +168,7 @@ fun ChatScreen(vm: AppViewModel) {
     val historyError by vm.historyError.collectAsState()
     val loadingHistory by vm.loadingHistory.collectAsState()
     val loadingInitial by vm.initialLoad.collectAsState()
+    val restoredTimeline by vm.restoredTimeline.collectAsState()
     val waitingForKeys by vm.waitingForKeys.collectAsState()
     val paidStatus by vm.paidStatus.collectAsState()
     val rotateOffer by vm.rotateOffer.collectAsState()
@@ -309,14 +310,8 @@ fun ChatScreen(vm: AppViewModel) {
         val purgeProviders by vm.purgeProviders.collectAsState()
         val inboxPurgeProviders by vm.inboxPurgeProviders.collectAsState()
         val erasedIds by vm.erasedIds.collectAsState()
-        val visible = remember(messages, hidden, banned, loadingInitial, moderates) {
-            if (loadingInitial) emptyList()
-            else messages.filter { msg ->
-                if (msg.id in hidden && !moderates) return@filter false
-                val lower = msg.sender.lowercase()
-                if (lower !in banned) return@filter true
-                !com.pombo.android.core.ModComposition.banHides(banned[lower], msg.epoch)
-            }
+        val visible = remember(messages, hidden, banned, loadingInitial, restoredTimeline, moderates) {
+            visibleTimeline(messages, hidden, banned, moderates, loadingInitial, restoredTimeline)
         }
         val groups = remember(visible) { buildMessageGroups(visible) }
         // Only one message shows its action triggers at a time (web: .message-active).
@@ -371,7 +366,7 @@ fun ChatScreen(vm: AppViewModel) {
         // Pins ride the open admin stream: they resolve long before the
         // messages they float over, and after the gate has stopped granting
         // access. Neither is a moment to draw them in.
-        val shownPins = if (accessLost || loadingInitial) emptyList()
+        val shownPins = if (accessLost || (loadingInitial && restoredTimeline == null)) emptyList()
         else pins.filter { it.targetId !in dismissedPins }.asReversed()
 
         // Channel header
@@ -1645,3 +1640,30 @@ private fun historyErrorText(
         else -> "Channel history could not be loaded" to
             "The storage node answered HTTP ${error.status}. Reopen the channel to retry"
     }
+
+/**
+ * While the open's loads run, only a restored timeline shows, and what it hid
+ * still hides: a moderator's hide comes back with the history, after the -3
+ * has already recomposed without it.
+ */
+internal fun visibleTimeline(
+    messages: List<UiMessage>,
+    hidden: Set<String>,
+    banned: Map<String, Int?>,
+    moderates: Boolean,
+    loading: Boolean,
+    restored: ChannelManager.RestoredTimeline?
+): List<UiMessage> {
+    if (loading && restored == null) return emptyList()
+    val early = if (loading) restored else null
+    fun bans(ban: Map<String, Int?>, msg: UiMessage): Boolean {
+        val lower = msg.sender.lowercase()
+        return lower in ban && com.pombo.android.core.ModComposition.banHides(ban[lower], msg.epoch)
+    }
+    return messages.filter { msg ->
+        if (early != null && msg.id !in early.ids) return@filter false
+        val isHidden = msg.id in hidden || (early != null && msg.id in early.hiddenIds)
+        if (isHidden && !moderates) return@filter false
+        !bans(banned, msg) && !(early != null && bans(early.banSince, msg))
+    }
+}
