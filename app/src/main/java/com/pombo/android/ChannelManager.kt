@@ -828,11 +828,10 @@ class ChannelManager(
                 classification = classification ?: ch.classification
             ) else ch
         }
-        store.save(_channels.value)
+        saveChannels()
         if (_current.value?.messageStreamId == streamId) {
             _current.value = _channels.value.find { it.messageStreamId == streamId } ?: _current.value
         }
-        onLocalStateChanged()
     }
 
     internal val _messages = MutableStateFlow<List<UiMessage>>(emptyList())
@@ -1250,7 +1249,7 @@ class ChannelManager(
         _channels.value = _channels.value.map {
             if (it.messageStreamId == fixed.messageStreamId) fixed else it
         }
-        store.save(_channels.value)
+        saveChannels()
         if (_current.value?.messageStreamId == fixed.messageStreamId) _current.value = fixed
         Log.i(TAG, "rename: chain says this channel is named publicly — exposure corrected")
         return true
@@ -1279,11 +1278,8 @@ class ChannelManager(
             metaUpdatedAt = System.currentTimeMillis()
         )
         _channels.value = _channels.value.map { if (it.messageStreamId == updated.messageStreamId) updated else it }
-        store.save(_channels.value)
+        saveChannels()
         _current.value = updated
-        // Renames ride the channels slice of device sync (like a DM's) — the
-        // push needs scheduling, not just the local save.
-        onLocalStateChanged()
     }
 
     /**
@@ -1325,7 +1321,7 @@ class ChannelManager(
         }
         if (changed) {
             _channels.value = _channels.value.map { updates[it.messageStreamId] ?: it }
-            store.save(_channels.value)
+            saveChannels()
             // Keep the open channel's header in sync with the list.
             _current.value?.let { cur -> updates[cur.messageStreamId]?.let { _current.value = it } }
         }
@@ -1748,7 +1744,7 @@ class ChannelManager(
             _channels.value = _channels.value.map {
                 if (it.messageStreamId == updated.messageStreamId) updated else it
             }
-            store.save(_channels.value)
+            saveChannels()
             if (_current.value?.messageStreamId == updated.messageStreamId) _current.value = updated
         }
         return out
@@ -1801,7 +1797,7 @@ class ChannelManager(
         if (updated == current) return current
 
         _channels.value = _channels.value.map { if (it.messageStreamId == updated.messageStreamId) updated else it }
-        store.save(_channels.value)
+        saveChannels()
         if (_current.value?.messageStreamId == updated.messageStreamId) _current.value = updated
         return updated
     }
@@ -1811,7 +1807,7 @@ class ChannelManager(
         if (stored.storageEnabled == enabled) return
         val updated = stored.copy(storageEnabled = enabled)
         _channels.value = _channels.value.map { if (it.messageStreamId == updated.messageStreamId) updated else it }
-        store.save(_channels.value)
+        saveChannels()
         if (_current.value?.messageStreamId == updated.messageStreamId) _current.value = updated
     }
 
@@ -3488,8 +3484,7 @@ class ChannelManager(
             joinedAt = System.currentTimeMillis(),
             peerAddress = peer
         )
-        _channels.value = _channels.value + channel
-        store.save(_channels.value)
+        addChannel(channel)
         ensureEns(peer)
         return channel
     }
@@ -3520,8 +3515,7 @@ class ChannelManager(
         _channels.value = _channels.value.map {
             if (it.messageStreamId == ch.messageStreamId) it.copy(name = name) else it
         }
-        store.save(_channels.value)
-        onLocalStateChanged()
+        saveChannels()
         if (_current.value?.messageStreamId == ch.messageStreamId) {
             _current.value = _current.value?.copy(name = name)
         }
@@ -4433,11 +4427,10 @@ class ChannelManager(
         _channels.value = _channels.value.map {
             if (it.messageStreamId == updated.messageStreamId) updated else it
         }
-        store.save(_channels.value)
+        saveChannels()
         if (_current.value?.messageStreamId == updated.messageStreamId) _current.value = updated
         Log.i(TAG, "Gate authority corrected the local record: " +
             "${messageStreamId.takeLast(20)} → $mode${if (readOnly) " (read-only)" else ""}")
-        onLocalStateChanged()
     }
 
     /** One states() read: is this address the gate's owner or a moderator? */
@@ -4625,7 +4618,7 @@ class ChannelManager(
                     _channels.value = _channels.value.map {
                         if (it.messageStreamId == sid) it.copy(gateAddress = g, wireIdentity = mode) else it
                     }
-                    store.save(_channels.value)
+                    saveChannels()
                     if (_current.value?.messageStreamId == sid) {
                         _current.value = _channels.value.find { it.messageStreamId == sid }
                     }
@@ -4641,6 +4634,8 @@ class ChannelManager(
             _channels.value = _channels.value.map {
                 if (it.messageStreamId == healed.messageStreamId) healed else it
             }
+            // Local only: these ids derive from the stream id, and the web never stores
+            // keysStreamId, so a sync push here would follow each of its pulls.
             store.save(_channels.value)
         }
         return healed
@@ -5103,7 +5098,10 @@ class ChannelManager(
             val leaving = _channels.value.firstOrNull { it.messageStreamId == messageStreamId }
             if (_current.value?.messageStreamId == messageStreamId) closeCurrentInternal()
             _channels.value = _channels.value.filterNot { it.messageStreamId == messageStreamId }
-            store.save(_channels.value)
+            // Tombstone, so a sync pull cannot resurrect the channel from an
+            // older snapshot taken before the user left.
+            store.markLeft(messageStreamId)
+            saveChannels()
             // Rotate the channel pseudonym on a GENUINE leave (never on a mere
             // view switch — closeCurrent keeps it: peers mid-transfer know the
             // current publisher). Rejoining gets a fresh key, so yesterday's
@@ -5137,10 +5135,6 @@ class ChannelManager(
             // The conversation's images have no business staying on disk after
             // the user walks away (web clearImagesForStream on leave).
             blobStore.clearForStream(messageStreamId)
-            // Tombstone, so a sync pull cannot resurrect the channel from an
-            // older snapshot taken before the user left.
-            store.markLeft(messageStreamId)
-            onLocalStateChanged()
         }
     }
 
@@ -7048,7 +7042,13 @@ class ChannelManager(
 
     private fun addChannel(channel: Channel) {
         _channels.value = _channels.value + channel
+        saveChannels()
+    }
+
+    /** Every local change goes through here; a sync import must not, or each pull is pushed back out. */
+    internal fun saveChannels() {
         store.save(_channels.value)
+        onLocalStateChanged()
     }
 
     /**

@@ -4,6 +4,7 @@ import com.pombo.android.core.StreamConstants
 import com.pombo.android.data.Channel
 import io.mockk.coEvery
 import io.mockk.coVerify
+import io.mockk.verify
 import kotlinx.coroutines.runBlocking
 import org.json.JSONArray
 import org.json.JSONObject
@@ -44,12 +45,14 @@ class AccessSweepRecordTest {
         name = "sealed-1", wireIdentity = null, joinedAt = null, exposure = "visible"
     )
 
-    private fun gateAnswers(onRead: () -> Unit = {}) {
+    private fun gateAnswers(withAccess: List<String> = emptyList(), onRead: () -> Unit = {}) {
         coEvery { h.bridge.call("gateInfo", any()) } returns JSONObject().put("mode", 1)
         coEvery { h.bridge.call("gateMembers", any(), any()) } answers {
             onRead()
-            JSONObject().put("members", JSONArray().put(JSONObject()
-                .put("address", h.me).put("isOwner", true).put("access", true)))
+            val members = JSONArray().put(JSONObject()
+                .put("address", h.me).put("isOwner", true).put("access", true))
+            withAccess.forEach { members.put(JSONObject().put("address", it).put("access", true)) }
+            JSONObject().put("members", members)
         }
     }
 
@@ -80,7 +83,26 @@ class AccessSweepRecordTest {
         assertEquals(listOf(h.me), saved.accessSnapshot)
     }
 
+    @Test fun `a sweep saves and schedules a sync push only when the gate changed the record`() = runBlocking {
+        var pushes = 0
+        manager.onLocalStateChanged = { pushes++ }
+        manager._channels.value = listOf(joined)
+        manager._current.value = joined
+        gateAnswers()
+
+        manager.rotateForLostAccess(joined)
+        manager.rotateForLostAccess(joined)
+        assertEquals(1, pushes)
+
+        gateAnswers(withAccess = listOf(MEMBER))
+        manager.rotateForLostAccess(joined)
+        manager.rotateForLostAccess(joined)
+        assertEquals(2, pushes)
+        verify(exactly = 2) { h.store.save(any()) }
+    }
+
     private companion object {
         const val GATE = "0x7a3ee479b790578fb9ce885aa3356f79c4df0305"
+        const val MEMBER = "0x70997970c51812dc3a010c7d01b50e0d17dc79c8"
     }
 }
