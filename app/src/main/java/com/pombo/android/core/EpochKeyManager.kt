@@ -334,10 +334,11 @@ class EpochKeyManager(
         private const val RANK_STEP_MS = 2_000L
         private const val RANK_MAX = 8
         // Stored requests WITHOUT a static pubkey older than this are dead —
-        // their ephemeral pair lives in memory only. Requests carrying `spk`
-        // have no window: the v2 wrap opens in any later session.
+        // their ephemeral pair lives in memory only.
         private const val REQUEST_ANSWER_WINDOW_MS = 10 * 60 * 1000L
-        private const val SEEN_WRAPS_MAX = 100
+        // Must hold every request one -4 read (the last 1000 rows) can return,
+        // or a new session answers the rest again.
+        private const val SEEN_WRAPS_MAX = 1000
         /** Wraps held for an announce that has not arrived; memory only. */
         private const val MAX_PARKED_WRAPS_PER_EPOCH = 4
         private const val MAX_PARKED_EPOCHS = 8
@@ -671,24 +672,16 @@ class EpochKeyManager(
 
         // N-B: answer stored requests no wrap covers yet — a member arriving
         // later serves whoever is still waiting, so requester and key-holder
-        // no longer have to coincide in time. Requests carrying a static
-        // pubkey have no age limit (the v2 wrap opens in any later session);
-        // without one, only recent requests are alive.
+        // no longer have to coincide in time.
         if (haveKeys) {
-            val now = System.currentTimeMillis()
-            for (entry in storedRequests) {
-                if (isOwnRequestLocked(messageStreamId, entry.data.optString("requestId"))) continue
-                val spk = entry.data.optString("spk").ifEmpty { null }
-                if (spk == null && now - entry.timestamp > REQUEST_ANSWER_WINDOW_MS) continue
+            for (entry in storedRequestsToAnswer(messageStreamId, storedRequests)) {
                 val requestId = entry.data.optString("requestId")
-                val pubkey = entry.data.optString("pubkey")
-                if (requestId.isEmpty() || pubkey.isEmpty()) continue
                 scheduleAnswer(
                     messageStreamId, keysStreamId,
-                    requestId, pubkey, entry.data.optInt("fromEpoch", 1),
+                    requestId, entry.data.optString("pubkey"), entry.data.optInt("fromEpoch", 1),
                     rankFor(requestId, memberCount) * RANK_STEP_MS,
                     requester = entry.publisherId,
-                    spk = spk
+                    spk = entry.data.optString("spk").ifEmpty { null }
                 )
             }
         }
@@ -1339,6 +1332,34 @@ class EpochKeyManager(
      * on-chain permission check.
      */
     /** A request this session sent: answering it would be talking to itself. */
+    /**
+     * The stored requests worth an answer. Without a static pubkey only a
+     * recent one: the ephemeral pair lives in memory, so a wrap for an old
+     * request is dead bytes. With one, only each account's newest: its v2
+     * wrap opens on any of that account's devices, and answering every older
+     * request too sends each new key once per request the account ever made.
+     */
+    internal suspend fun storedRequestsToAnswer(
+        messageStreamId: String, storedRequests: List<Entry>, now: Long = System.currentTimeMillis()
+    ): List<Entry> {
+        val answerable = storedRequests.filter {
+            val requestId = it.data.optString("requestId")
+            requestId.isNotEmpty() && it.data.optString("pubkey").isNotEmpty() &&
+                !isOwnRequestLocked(messageStreamId, requestId)
+        }
+        val newest = HashMap<String, Entry>()
+        for (entry in answerable) {
+            if (entry.data.optString("spk").isEmpty()) continue
+            val account = entry.publisherId?.lowercase().orEmpty()
+            val held = newest[account]
+            if (held == null || entry.timestamp >= held.timestamp) newest[account] = entry
+        }
+        return answerable.filter { entry ->
+            if (entry.data.optString("spk").isNotEmpty()) newest[entry.publisherId?.lowercase().orEmpty()] === entry
+            else now - entry.timestamp <= REQUEST_ANSWER_WINDOW_MS
+        }
+    }
+
     private suspend fun isOwnRequestLocked(messageStreamId: String, requestId: String): Boolean {
         if (requestId.isEmpty()) return false
         return mutex.withLock {
