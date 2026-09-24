@@ -1170,11 +1170,19 @@ class AppViewModel(app: Application) : AndroidViewModel(app), PomboBridge.Listen
     /** Owner-only: revokes all permissions for an address. */
     fun removeMember(address: String, onDone: () -> Unit = {}) = viewModelScope.launch {
         chainAction("Remove member", "Revokes their access on the channel's streams.") {
-            runWithToast("Removing member…", "Member removed", "Failed to remove member") {
-                manager.removeMember(address)
+            var rotated = true
+            val removed = runWithToast("Removing member…", null, "Failed to remove member") {
+                rotated = manager.removeMember(address)
             }
+            if (removed) cutToast("Member removed", rotated)
         }
         onDone()
+    }
+
+    private fun cutToast(done: String, rotated: Boolean) {
+        if (rotated) toast(done, com.pombo.android.ui.ToastKind.SUCCESS)
+        else toast("$done. The channel key rotates the next time the app connects.",
+            com.pombo.android.ui.ToastKind.WARNING, 5000L)
     }
 
     val ensNames get() = manager.ensNames
@@ -1375,11 +1383,11 @@ class AppViewModel(app: Application) : AndroidViewModel(app), PomboBridge.Listen
         if (!client && !protocol) return@launch
         if (protocol) {
             chainAction("Ban member", "Cuts their access on the gate and rotates the channel key (1 transaction).") {
-                var banned = false
-                runWithToast("Banning…", "Member banned", "Failed to ban") {
-                    manager.banMemberLevels(address, client, protocol = true)
-                    banned = true
+                var rotated = true
+                val banned = runWithToast("Banning…", null, "Failed to ban") {
+                    rotated = manager.banMemberLevels(address, client, protocol = true)
                 }
+                if (banned) cutToast("Member banned", rotated)
                 if (banned && purge && client) eraseAuthorToast(address)
             }
         } else {
@@ -3666,6 +3674,7 @@ class AppViewModel(app: Application) : AndroidViewModel(app), PomboBridge.Listen
         // looking at. A short stagger lets Explore's burst dispatch first.
         viewModelScope.launch {
             kotlinx.coroutines.delay(BRIDGE_CONNECT_BACKGROUND_DELAY_MS)
+            manager.resumeOwedRotations()
             // force: a (re)connect rebuilds the bridge's JS world, so whatever
             // the previous session subscribed no longer exists there. This is
             // the one place the inbox replay is supposed to run.
