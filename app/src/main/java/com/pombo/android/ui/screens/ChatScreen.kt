@@ -310,6 +310,7 @@ fun ChatScreen(vm: AppViewModel) {
         val purgeProviders by vm.purgeProviders.collectAsState()
         val inboxPurgeProviders by vm.inboxPurgeProviders.collectAsState()
         val erasedIds by vm.erasedIds.collectAsState()
+        val erasingIds by vm.erasingIds.collectAsState()
         val visible = remember(messages, hidden, banned, loadingInitial, restoredTimeline, moderates) {
             visibleTimeline(messages, hidden, banned, moderates, loadingInitial, restoredTimeline)
         }
@@ -848,6 +849,7 @@ fun ChatScreen(vm: AppViewModel) {
                         itemIndex = (groups.size - 1 - gi) * 2,
                         hidden = hidden,
                         erased = erasedIds,
+                        erasing = erasingIds,
                         canErase = if (ch.type == "dm") inboxPurgeProviders > 0 else purgeProviders > 0,
                         onErase = { id -> vm.eraseMessage(id) },
                         isDm = ch.type == "dm",

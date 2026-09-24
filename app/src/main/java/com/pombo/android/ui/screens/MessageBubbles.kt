@@ -369,6 +369,7 @@ internal fun MessageGroup(
     hidden: Set<String>,
     /** Erased from storage this session (a subset of `hidden`). */
     erased: Set<String> = emptySet(),
+    erasing: Set<String> = emptySet(),
     /** Some storage provider of this channel announces `purge`. */
     canErase: Boolean = false,
     onErase: (String) -> Unit = {},
@@ -558,6 +559,7 @@ internal fun MessageGroup(
                     onPin = { pin -> onPin(msg.id, pin) },
                     onHide = { hide -> onHide(msg.id, hide) },
                     isErased = msg.id in erased,
+                    isErasing = msg.id in erasing,
                     canErase = canErase,
                     onErase = { onErase(msg.id) },
                     isDm = isDm,
@@ -618,6 +620,7 @@ private fun MessageBubble(
     onHide: (Boolean) -> Unit = {},
     /** Erased from storage this session: stays hidden, nothing left to unhide. */
     isErased: Boolean = false,
+    isErasing: Boolean = false,
     /** Some storage provider of this channel announces `purge`. */
     canErase: Boolean = false,
     onErase: () -> Unit = {},
@@ -778,10 +781,20 @@ private fun MessageBubble(
                             }
                         )
                 ) {
-                    if (isHidden) Text(
-                        if (isErased) "Hidden · erased from storage" else "Hidden by moderation",
-                        color = Color(0xFFFBBF24).copy(alpha = 0.80f), fontSize = 11.sp
-                    )
+                    if (isHidden) Row(verticalAlignment = Alignment.CenterVertically) {
+                        Text(
+                            if (isErased) "Hidden · erased from storage" else "Hidden by moderation",
+                            color = Color(0xFFFBBF24).copy(alpha = 0.80f), fontSize = 11.sp
+                        )
+                        if (isErasing && !isErased) {
+                            Spacer(Modifier.width(6.dp))
+                            CircularProgressIndicator(
+                                modifier = Modifier.size(10.dp),
+                                color = Color.White.copy(alpha = 0.55f),
+                                strokeWidth = 1.5.dp
+                            )
+                        }
+                    }
                     if (showSender) {
                         // Web getVerificationBadge: ENS → circled green check,
                         // trusted contact → amber star, plain valid → ✓.
@@ -1066,7 +1079,7 @@ private fun MessageBubble(
                                 Icons.Outlined.VisibilityOff,
                                 iconTint = red, labelColor = red
                             ) { menu = false; onHide(!isHidden) }
-                            if (canErase && !isErased) com.pombo.android.ui.ContextMenuItem(
+                            if (canErase && !isErased && !isErasing) com.pombo.android.ui.ContextMenuItem(
                                 "Erase from storage", Icons.Outlined.Delete,
                                 iconTint = red, labelColor = red
                             ) { menu = false; confirmErase = true }

@@ -1333,6 +1333,7 @@ class AppViewModel(app: Application) : AndroidViewModel(app), PomboBridge.Listen
     val purgeProviders get() = manager.purgeProviders
     val inboxPurgeProviders get() = manager.inboxPurgeProviders
     val erasedIds get() = manager.erasedIds
+    val erasingIds get() = manager.erasingIds
 
     /** Hide, then remove the bytes from every provider that can; the toast says on how many. */
     fun eraseMessage(id: String) = viewModelScope.launch {

@@ -1001,6 +1001,10 @@ class ChannelManager(
     private val _erasedIds = MutableStateFlow<Set<String>>(emptySet())
     val erasedIds: StateFlow<Set<String>> = _erasedIds.asStateFlow()
 
+    /** Messages whose erase from storage has not answered yet. */
+    private val _erasingIds = MutableStateFlow<Set<String>>(emptySet())
+    val erasingIds: StateFlow<Set<String>> = _erasingIds.asStateFlow()
+
     private val _hasMoreHistory = MutableStateFlow(false)
     val hasMoreHistory: StateFlow<Boolean> = _hasMoreHistory.asStateFlow()
     private val _loadingHistory = MutableStateFlow(false)
@@ -2863,10 +2867,15 @@ class ChannelManager(
         val key = myPrivateKey() ?: throw IllegalStateException("No identity")
         if (channel.type == "dm") return eraseReceivedDm(channel, msg, key)
         val groups = messageGroups(channel, msg)
-        if (messageId !in _hiddenIds.value) admin.hideMessage(messageId, true)
-        val outcome = com.pombo.android.core.StoragePurge.purgeGroups(storageEndpoints, channel.messageStreamId, groups, key)
-        if (outcome.erasedOn > 0) _erasedIds.value = _erasedIds.value + messageId
-        return outcome
+        _erasingIds.value = _erasingIds.value + messageId
+        try {
+            if (messageId !in _hiddenIds.value) admin.hideMessage(messageId, true)
+            val outcome = com.pombo.android.core.StoragePurge.purgeGroups(storageEndpoints, channel.messageStreamId, groups, key)
+            if (outcome.erasedOn > 0) _erasedIds.value = _erasedIds.value + messageId
+            return outcome
+        } finally {
+            _erasingIds.value = _erasingIds.value - messageId
+        }
     }
 
     /** The storage rows a message occupies: its own, plus the chunks of a storage-shared file. */
