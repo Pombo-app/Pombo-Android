@@ -101,8 +101,27 @@ class AccessSweepRecordTest {
         verify(exactly = 2) { h.store.save(any()) }
     }
 
+    @Test fun `the gate is asked about everyone the last sweep saw, even without a roster`() = runBlocking {
+        var asked = emptyList<String>()
+        coEvery { h.bridge.call("gateInfo", any()) } returns JSONObject().put("mode", 1)
+        coEvery { h.bridge.call("gateMembers", any(), any()) } answers {
+            val arr = secondArg<JSONObject>().optJSONArray("candidates") ?: JSONArray()
+            asked = (0 until arr.length()).map { arr.getString(it) }
+            JSONObject().put("members", JSONArray())
+        }
+        val seen = joined.copy(accessSnapshot = listOf(h.me, MEMBER), rotatedForNoAccess = listOf(COVERED))
+        manager._channels.value = listOf(seen)
+        manager._current.value = seen
+
+        manager.gateMemberFlags()
+
+        assertTrue(MEMBER in asked)
+        assertTrue(COVERED in asked)
+    }
+
     private companion object {
         const val GATE = "0x7a3ee479b790578fb9ce885aa3356f79c4df0305"
         const val MEMBER = "0x70997970c51812dc3a010c7d01b50e0d17dc79c8"
+        const val COVERED = "0x3c44cdddb6a900fa2b585dd299e03d12fa4293bc"
     }
 }

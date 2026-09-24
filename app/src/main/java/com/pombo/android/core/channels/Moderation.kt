@@ -189,7 +189,10 @@ internal class Moderation(private val manager: ChannelManager) {
                 (0 until (arr?.length() ?: 0)).mapNotNull { arr?.optString(it)?.ifEmpty { null } }
             } else emptyList()
         } catch (e: Exception) { emptyList() }
+        // A failed roster read must not drop anyone the last sweep saw, or the
+        // snapshot shrinks and a later loss of access never rotates.
         val candidates = (channel.members + channel.knownBanned +
+            channel.accessSnapshot + channel.rotatedForNoAccess +
             epochKeys.seenRequesters(channel.messageStreamId) + roster + onChain)
             .map { it.lowercase() }.distinct()
         return try {
