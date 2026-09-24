@@ -37,6 +37,8 @@ class ChannelManagerHarness(
     val me: String = com.pombo.android.core.EthereumSigner.address(myKey).lowercase()
     /** What the manager's `myAddress` answers; a test switches accounts by changing it. */
     @Volatile var address: String = me
+    /** What the manager's `isOnline` answers; a test cuts the network by clearing it. */
+    @Volatile var online: Boolean = true
     val bridge: com.pombo.android.bridge.PomboBridge = mockk(relaxed = true)
     val store: com.pombo.android.data.ChannelStore = mockk(relaxed = true)
     val ensStore: com.pombo.android.core.EnsStore = mockk(relaxed = true)
@@ -81,7 +83,8 @@ class ChannelManagerHarness(
             epochKeyStore = mockk(relaxed = true),
             adminFloorStore = adminFloorStore,
             transferDir = java.io.File(System.getProperty("java.io.tmpdir"), "pombo-tests"),
-            isTrustedContact = { addr -> addr.lowercase() in trustedContacts }
+            isTrustedContact = { addr -> addr.lowercase() in trustedContacts },
+            isOnline = { online }
         )
     }
 

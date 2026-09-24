@@ -140,6 +140,11 @@ class AppViewModel(app: Application) : AndroidViewModel(app), PomboBridge.Listen
             // Latest-wins slice: without bumping the timestamp another device's
             // older snapshot would win the merge and silently unblock them.
             settingsStore.setSliceTs("blockedPeers", System.currentTimeMillis())
+        },
+        isOnline = {
+            val cm = app.getSystemService(android.net.ConnectivityManager::class.java)
+            cm == null || cm.getNetworkCapabilities(cm.activeNetwork)
+                ?.hasCapability(android.net.NetworkCapabilities.NET_CAPABILITY_INTERNET) == true
         }
     )
 
