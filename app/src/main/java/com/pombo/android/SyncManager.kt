@@ -92,6 +92,8 @@ class SyncManager(
     private var autoPushJob: Job? = null
     private var autoPushRetries = 0
     private var pushQueued = false
+    /** Bumped on every change; a push clears `dirty` only if none came after its export. */
+    private val changeSeq = java.util.concurrent.atomic.AtomicLong()
 
     private fun inboxId(): String? = myAddress()?.lowercase()?.let { "$it/Pombo-DM-1" }
 
@@ -103,6 +105,7 @@ class SyncManager(
         if (isGuest()) return
         // Dirty is recorded whatever the mode: "Manual only" defers the publish,
         // it does not discard the change. The next "Sync devices" still carries it.
+        changeSeq.incrementAndGet()
         store.dirty = true
         if (syncMode() == com.pombo.android.data.SyncMode.MANUAL_ONLY) return
         autoPushJob?.cancel()
@@ -135,11 +138,12 @@ class SyncManager(
 
         _syncing.value = true
         try {
+            val seq = changeSeq.get()
             val data = exportLocal()
             val hash = stateHash(data)
             if (isConfirmedState(hash)) {
                 Log.d(TAG, "push skipped: state unchanged since the last confirmed push")
-                if (autoPushJob == null && !pushQueued) store.dirty = false
+                if (changeSeq.get() == seq) store.dirty = false
                 return null
             }
             val ts = System.currentTimeMillis()
@@ -175,7 +179,7 @@ class SyncManager(
             store.recordApplied(listOf(ts))
             store.lastSyncTs = ts
             _lastSyncTs.value = ts
-            if (autoPushJob == null && !pushQueued) store.dirty = false
+            if (changeSeq.get() == seq) store.dirty = false
             return ts
         } finally {
             _syncing.value = false
