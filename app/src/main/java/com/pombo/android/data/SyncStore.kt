@@ -28,6 +28,15 @@ class SyncStore(context: Context) {
         get() = prefs.getLong(key("last_sync_ts"), 0L)
         set(v) = prefs.edit().putLong(key("last_sync_ts"), v).apply()
 
+    /** The state storage was last confirmed to hold, and when (web syncConfirmed). */
+    var confirmedHash: String?
+        get() = prefs.getString(key("confirmed_hash"), null)
+        set(v) = prefs.edit().putString(key("confirmed_hash"), v).apply()
+
+    var confirmedAt: Long
+        get() = prefs.getLong(key("confirmed_at"), 0L)
+        set(v) = prefs.edit().putLong(key("confirmed_at"), v).apply()
+
     fun appliedTs(): Set<Long> = try {
         val raw = prefs.getString(key("applied_ts"), null) ?: return emptySet()
         val arr = JSONArray(raw)
@@ -49,6 +58,8 @@ class SyncStore(context: Context) {
             .remove(key("applied_ts"))
             .remove(key("dirty"))
             .remove(key("last_sync_ts"))
+            .remove(key("confirmed_hash"))
+            .remove(key("confirmed_at"))
             .apply()
     }
 

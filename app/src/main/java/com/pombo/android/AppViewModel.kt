@@ -65,6 +65,7 @@ class AppViewModel(app: Application) : AndroidViewModel(app), PomboBridge.Listen
         if (!transferBusy()) MediaTransferService.stop(getApplication())
         if (_status.value == NetStatus.CONNECTED) {
             viewModelScope.launch { sync.autoSync() }
+            sync.startSnapshotWatch()
         }
     }
 
@@ -100,6 +101,7 @@ class AppViewModel(app: Application) : AndroidViewModel(app), PomboBridge.Listen
     fun onAppBackground() {
         appInForeground = false
         com.pombo.android.push.ForegroundGate.inForeground = false
+        sync.stopSnapshotWatch()
         sync.flushIfDirty()
         // Fallback: if a transfer is live and the service was not already started at
         // transfer-start (e.g. it began while backgrounded), carry it now. Transfers
@@ -1578,6 +1580,7 @@ class AppViewModel(app: Application) : AndroidViewModel(app), PomboBridge.Listen
         contactsStore.memoryOnly = guest
         settingsStore.scopeAddress = address
         syncStore.scopeAddress = address
+        sync.cancelPushConfirmation()
         epochKeyStore.scopeAddress = address
         epochKeyStore.memoryOnly = guest
         manager.reloadChannels()
@@ -3709,6 +3712,7 @@ class AppViewModel(app: Application) : AndroidViewModel(app), PomboBridge.Listen
                 sync.autoSync(force = true)
             }
         }
+        if (appInForeground) sync.startSnapshotWatch()
     }
 
     override fun onBridgeMessage(streamId: String, partition: Int, contentJson: String, metaJson: String) {

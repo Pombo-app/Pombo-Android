@@ -47,7 +47,13 @@ class SyncManager(
         { com.pombo.android.data.SyncMode.AUTOMATIC },
     /** Fired after a blob pull imports images, with their ids — lets the open
      *  channel swap "Loading image" placeholders for the pixels right away. */
-    private val onBlobsImported: (List<String>) -> Unit = {}
+    private val onBlobsImported: (List<String>) -> Unit = {},
+    /** How often an open, foreground app asks storage whether another device pushed. */
+    private val checkIntervalMs: Long = 60_000L,
+    /** Storage re-reads after a push, measured from the publish. */
+    private val confirmAtMs: LongArray = longArrayOf(5_000L, 10_000L, 20_000L, 40_000L),
+    /** Blob pushes are not read back; the overlay is kept this long for them to leave. */
+    private val blobLeaveAfterMs: Long = 30_000L
 ) {
 
     private val TAG = "PomboSync"
@@ -58,9 +64,24 @@ class SyncManager(
     /** A snapshot is a RUN of messages, so the window must hold several. */
     private val maxPayloads = 60
 
-    /** Floor between lifecycle-triggered syncs (foreground churn is the enemy). */
-    private val autoSyncMinIntervalMs = 5 * 60_000L
-    @Volatile private var lastAutoSyncAt = 0L
+    /** Rows beyond our own read back with them: pushes from other devices in between. */
+    private val confirmSlack = 10
+
+    /** A confirmed state is sent again after this long: storage keeps rows only for the inbox retention. */
+    private val confirmedMaxAgeMs = 7L * 24 * 60 * 60 * 1000
+
+    private val ownRowsKept = 64
+
+    @Volatile private var pulledRowTs = 0L
+    @Volatile private var publishing = false
+    private val ownRowKeys = LinkedHashSet<String>()
+    private var confirmJob: Job? = null
+    private var blobLeaveJob: Job? = null
+    private var watchJob: Job? = null
+
+    /** Every sync message has its own throwaway publisher, so this names one row. */
+    private fun rowKey(timestamp: Long, publisherId: String?) =
+        "$timestamp:${(publisherId ?: "").lowercase()}"
 
     private val _syncing = MutableStateFlow(false)
     val syncing: StateFlow<Boolean> = _syncing.asStateFlow()
@@ -114,12 +135,19 @@ class SyncManager(
 
         _syncing.value = true
         try {
+            val data = exportLocal()
+            val hash = stateHash(data)
+            if (isConfirmedState(hash)) {
+                Log.d(TAG, "push skipped: state unchanged since the last confirmed push")
+                if (autoPushJob == null && !pushQueued) store.dirty = false
+                return null
+            }
             val ts = System.currentTimeMillis()
             val payload = JSONObject()
                 .put("type", "sync")
                 .put("v", 1)
                 .put("ts", ts)
-                .put("data", exportLocal())
+                .put("data", data)
 
             // Sealed-to-self v2 under a throwaway publisher (web pushSync):
             // only this account's static key opens it, and the proof inside
@@ -129,7 +157,19 @@ class SyncManager(
             Log.d(TAG, "push: ${payload.toString().length} B, " +
                 "${payload.optJSONObject("data")?.optJSONArray("channels")?.length() ?: 0} channel(s), " +
                 "${messages.size} message(s)")
-            for (message in messages) sealPublishToSelf(inbox, StreamConstants.P_SYNC, message)
+            val rows = mutableListOf<String>()
+            publishing = true
+            try {
+                for (message in messages) {
+                    sealPublishToSelf(inbox, StreamConstants.P_SYNC, message)?.let {
+                        rows.add(rowKey(it.optLong("timestamp"), it.optString("publisherId")))
+                    }
+                }
+            } finally {
+                publishing = false
+            }
+            noteOwnRows(rows)
+            confirmPush(inbox, hash, rows)
 
             // Our own snapshot is by definition already applied locally.
             store.recordApplied(listOf(ts))
@@ -141,6 +181,131 @@ class SyncManager(
             _syncing.value = false
             if (pushQueued) { pushQueued = false; scheduleAutoPush(0L) }
         }
+    }
+
+    private fun stateHash(data: JSONObject): String =
+        java.security.MessageDigest.getInstance("SHA-256")
+            .digest(data.toString().toByteArray(Charsets.UTF_8))
+            .joinToString("") { "%02x".format(it) }
+
+    /** True when storage already holds this exact state from a recent push of ours. */
+    private fun isConfirmedState(hash: String): Boolean =
+        store.confirmedHash == hash && System.currentTimeMillis() - store.confirmedAt < confirmedMaxAgeMs
+
+    private fun noteOwnRows(rows: List<String>) {
+        ownRowKeys.addAll(rows)
+        while (ownRowKeys.size > ownRowsKept) ownRowKeys.remove(ownRowKeys.first())
+    }
+
+    /**
+     * Reads a push back from storage, then takes the node out of the sync
+     * partition (web _confirmPush): the overlay is only needed to publish. An
+     * unconfirmed push leaves it all the same and marks the state dirty, so the
+     * next trigger sends it again. Rows from another device met on the way are
+     * pulled.
+     */
+    private fun confirmPush(inbox: String, hash: String, rows: List<String>) {
+        confirmJob?.cancel()
+        val wanted = rows.toSet()
+        confirmJob = scope.launch {
+            var held = emptyList<Pair<Long, String>>()
+            var confirmed = false
+            var waited = 0L
+            for (at in confirmAtMs) {
+                delay(at - waited)
+                waited = at
+                held = readRows(inbox, StreamConstants.P_SYNC, wanted.size + confirmSlack) ?: emptyList()
+                confirmed = wanted.isNotEmpty() && held.map { rowKey(it.first, it.second) }.containsAll(wanted)
+                if (confirmed) break
+            }
+            if (confirmed) {
+                store.confirmedHash = hash
+                store.confirmedAt = System.currentTimeMillis()
+                Log.d(TAG, "push confirmed by storage")
+            } else if (wanted.isNotEmpty()) {
+                Log.w(TAG, "push not confirmed by storage, it will be sent again")
+                store.dirty = true
+            }
+            val foreign = held.any { rowKey(it.first, it.second) !in ownRowKeys && it.first > pulledRowTs }
+            // A push in flight re-joins the partition and leaves it when confirmed.
+            if (!publishing) leaveStreamPart(inbox, StreamConstants.P_SYNC)
+            if (foreign && syncMode() != com.pombo.android.data.SyncMode.MANUAL_ONLY) {
+                val applied = try { pullSync() } catch (e: Exception) { 0 }
+                if (applied > 0) try { pullImageBlobs() } catch (e: Exception) { /* next pull */ }
+            }
+        }
+    }
+
+    /** (timestamp, publisher) of a partition's newest rows; null when the read failed. */
+    private suspend fun readRows(inbox: String, partition: Int, last: Int): List<Pair<Long, String>>? = try {
+        val res = bridge.call("resend", JSONObject()
+            .put("streamId", inbox)
+            .put("partition", partition)
+            .put("last", last), 60_000)
+        val arr = res.optJSONArray("messages") ?: JSONArray()
+        (0 until arr.length()).mapNotNull { i ->
+            arr.optJSONObject(i)?.optJSONObject("meta")?.let { it.optLong("timestamp") to it.optString("publisherId") }
+        }
+    } catch (e: Exception) {
+        null
+    }
+
+    private suspend fun leaveStreamPart(inbox: String, partition: Int) {
+        try {
+            val res = bridge.call("leaveStreamPart", JSONObject()
+                .put("streamId", inbox)
+                .put("partition", partition))
+            Log.d(TAG, "left sync partition $partition: $res")
+        } catch (e: Exception) {
+            Log.d(TAG, "leaving sync partition $partition failed: ${e.message}")
+        }
+    }
+
+    /**
+     * Pulls when storage holds a row from another device newer than anything
+     * read here (web checkForNewSnapshot): one `last: 1` read, no overlay, since
+     * the last row of a chunked push is its small manifest. Returns payloads
+     * applied.
+     */
+    suspend fun checkForNewSnapshot(): Int {
+        if (isGuest() || _syncing.value) return 0
+        if (syncMode() == com.pombo.android.data.SyncMode.MANUAL_ONLY) return 0
+        val inbox = inboxId() ?: return 0
+        val newest = readRows(inbox, StreamConstants.P_SYNC, 1)?.maxByOrNull { it.first } ?: return 0
+        if (rowKey(newest.first, newest.second) in ownRowKeys || newest.first <= pulledRowTs) return 0
+        return pullSync()
+    }
+
+    /** Checks every [checkIntervalMs] until stopped; run it only while the app is in the foreground. */
+    fun startSnapshotWatch() {
+        watchJob?.cancel()
+        watchJob = scope.launch {
+            var tickStart = System.currentTimeMillis()
+            while (true) {
+                delay((tickStart + checkIntervalMs - System.currentTimeMillis()).coerceAtLeast(0L))
+                tickStart = System.currentTimeMillis()
+                try {
+                    if (checkForNewSnapshot() > 0) pullImageBlobs()
+                } catch (e: Exception) {
+                    Log.d(TAG, "snapshot check failed: ${e.message}")
+                }
+            }
+        }
+    }
+
+    fun stopSnapshotWatch() {
+        watchJob?.cancel()
+        watchJob = null
+    }
+
+    /** On an account switch: a confirmation still running would act on the next account. */
+    fun cancelPushConfirmation() {
+        confirmJob?.cancel()
+        confirmJob = null
+        blobLeaveJob?.cancel()
+        blobLeaveJob = null
+        pulledRowTs = 0L
+        ownRowKeys.clear()
     }
 
     /** Fetches remote snapshots, merges them into local state. Returns payloads applied. */
@@ -205,8 +370,9 @@ class SyncManager(
     /**
      * Lifecycle-triggered sync (bridge connect, app foreground). Unlike the
      * manual [fullSync] this is built to be cheap enough to run unprompted:
-     * - throttled to one run per [autoSyncMinIntervalMs] unless forced
-     *   (connect is forced: it is rare and is exactly when state is stalest);
+     * - a foreground run pulls only when storage holds something newer
+     *   ([checkForNewSnapshot]); connect is forced to a full pull, since it is
+     *   rare and is exactly when state is stalest;
      * - push runs only when local state is actually dirty — but always BEFORE
      *   the pull, so a pending leave/block cannot be resurrected by the merge;
      * - blob pull (the expensive resend) always runs on a forced sync (once
@@ -226,19 +392,17 @@ class SyncManager(
             Log.d(TAG, "autoSync skipped (manual only)")
             return 0
         }
-        val now = System.currentTimeMillis()
-        if (!force && now - lastAutoSyncAt < autoSyncMinIntervalMs) {
-            Log.d(TAG, "autoSync skipped (throttled)")
-            return 0
-        }
         if (_syncing.value) return 0
-        lastAutoSyncAt = now
         if (store.dirty) {
             // The debounced auto-push would only republish the same snapshot.
             cancelAutoPush()
             try { pushSync() } catch (e: Exception) { Log.w(TAG, "autoSync push failed (dirty kept): ${e.message}") }
         }
-        val applied = try { pullSync() } catch (e: Exception) { Log.w(TAG, "autoSync pull failed: ${e.message}"); 0 }
+        val applied = try {
+            if (force) pullSync() else checkForNewSnapshot()
+        } catch (e: Exception) {
+            Log.w(TAG, "autoSync pull failed: ${e.message}"); 0
+        }
         try { pushImageBlobs() } catch (e: Exception) { Log.w(TAG, "autoSync blob push failed: ${e.message}") }
         if (force || applied > 0) {
             try { pullImageBlobs() } catch (e: Exception) { Log.w(TAG, "autoSync blob pull failed: ${e.message}") }
@@ -283,6 +447,7 @@ class SyncManager(
             sealPublishToSelf(inbox, StreamConstants.P_SYNC_BLOBS, payload)
         }
 
+        var published = 0
         for (record in pending) {
             val data = blobStore.load(record.imageId)
             if (data.isNullOrEmpty()) {
@@ -324,12 +489,20 @@ class SyncManager(
                         .put("totalLength", data.length))
                 }
                 blobStore.markSynced(record.imageId)
+                published++
             } catch (e: Exception) {
                 // Leave it unsynced so the next run retries this one blob.
                 Log.w(TAG, "blob push failed for ${record.imageId}: ${e.message}")
             }
         }
         Log.d(TAG, "blob push: ${pending.size} pending processed")
+        if (published > 0) {
+            blobLeaveJob?.cancel()
+            blobLeaveJob = scope.launch {
+                delay(blobLeaveAfterMs)
+                leaveStreamPart(inbox, StreamConstants.P_SYNC_BLOBS)
+            }
+        }
     }
 
     /**
@@ -414,6 +587,10 @@ class SyncManager(
             .put("partition", StreamConstants.P_SYNC)
             .put("last", maxPayloads), 60_000)
         val arr = res.optJSONArray("messages") ?: JSONArray()
+        for (i in 0 until arr.length()) {
+            val ts = arr.optJSONObject(i)?.optJSONObject("meta")?.optLong("timestamp") ?: 0L
+            if (ts > pulledRowTs) pulledRowTs = ts
+        }
         // The old "publisherId == me" gate is trap 1 of the migration: sealed
         // pushes ride a throwaway publisher, so that filter rejected every one
         // of our own payloads. Opening decides ownership instead — but opening
@@ -460,9 +637,9 @@ class SyncManager(
      * WebView; the throwaway key crosses because it is also the publishing
      * identity (bridge publishAs).
      */
-    private suspend fun sealPublishToSelf(streamId: String, partition: Int, payload: JSONObject) {
-        val myPk = myPrivateKey() ?: return
-        val me = myAddress()?.lowercase() ?: return
+    private suspend fun sealPublishToSelf(streamId: String, partition: Int, payload: JSONObject): JSONObject? {
+        val myPk = myPrivateKey() ?: return null
+        val me = myAddress()?.lowercase() ?: return null
         val recipientPub = com.pombo.android.core.EthereumSigner.compressedPublicKey(myPk)
         val (envelope, ephemeralPk) = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.Default) {
             com.pombo.android.core.SealedSenderCrypto.seal(payload, myPk, me, recipientPub)
@@ -472,7 +649,7 @@ class SyncManager(
         // 150 KB slice lands near 227 KB.
         val wire = envelope.toString().length
         if (wire > WIRE_WARN_BYTES) Log.w(TAG, "wire message $wire B — near the network ceiling")
-        bridge.call("publishAs", JSONObject()
+        return bridge.call("publishAs", JSONObject()
             .put("streamId", streamId)
             .put("partition", partition)
             .put("content", envelope)
