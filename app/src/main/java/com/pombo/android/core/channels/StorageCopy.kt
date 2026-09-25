@@ -27,7 +27,8 @@ class StorageCopy(private val scope: CoroutineScope, private val host: Host) {
         suspend fun readImage(channel: Channel): JSONObject?
         /** Each publish returns the timestamp it went out with (0 when unknown). */
         suspend fun republishAnchors(channel: Channel): List<Long>
-        suspend fun publishAdminState(channel: Channel): Long
+        /** One timestamp per row the snapshot went out as. */
+        suspend fun publishAdminState(channel: Channel): List<Long>
         suspend fun republishImage(channel: Channel, payload: JSONObject): Long
         suspend fun publishPasswordChallenge(channel: Channel): Long
         suspend fun currentAnchorKeyIds(channel: Channel): List<String>
@@ -266,7 +267,9 @@ class StorageCopy(private val scope: CoroutineScope, private val host: Host) {
         }
         if ("admin" in items && host.adminRev(channel) > 0) {
             attempt("admin") {
-                listOf(row("admin", channel.adminStreamId, StreamConstants.ADMIN_MODERATION, host.publishAdminState(channel)))
+                host.publishAdminState(channel).map {
+                    row("admin", channel.adminStreamId, StreamConstants.ADMIN_MODERATION, it)
+                }.ifEmpty { listOf(Row("admin", failed = true)) }
             }
         }
         val image = snapshot?.image

@@ -64,9 +64,16 @@ class StorageCopyTest {
             onRepublishAnchors()
             return listOf(publish("keys", keys, StreamConstants.P_KEY_EXCHANGE))
         }
-        override suspend fun publishAdminState(channel: Channel): Long {
+        /** Rows the snapshot goes out as; above one it went out split. */
+        var adminRows = 1
+        /** Row of the next admin publish the provider does not keep, once. */
+        var adminRowLost: Int? = null
+        override suspend fun publishAdminState(channel: Channel): List<Long> {
             if (failAdminOnce) { failAdminOnce = false; error("channel not open") }
-            return publish("admin", admin, StreamConstants.ADMIN_MODERATION)
+            val stamps = (0 until adminRows).map { publish("admin", admin, StreamConstants.ADMIN_MODERATION) }
+            adminRowLost?.let { held -= "$admin|${StreamConstants.ADMIN_MODERATION}|${stamps[it]}" }
+            adminRowLost = null
+            return stamps
         }
         override suspend fun republishImage(channel: Channel, payload: JSONObject) =
             publish("image", admin, StreamConstants.ADMIN_CHANNEL_IMAGE)
@@ -134,6 +141,18 @@ class StorageCopyTest {
 
         assertEquals(StorageCopy.Outcome.PRESENT, outcome)
         assertEquals(listOf("keys", "admin"), host.published)
+    }
+
+    @Test
+    fun `confirms every row of a snapshot that went out split`() = runBlocking {
+        host.storesEverything = true
+        host.adminRows = 3
+        host.adminRowLost = 1
+
+        val outcome = copy.copyTo(stream, newNode, null).await()
+
+        assertEquals(StorageCopy.Outcome.PRESENT, outcome)
+        assertEquals(6, host.published.count { it == "admin" })
     }
 
     @Test
