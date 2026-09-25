@@ -2644,6 +2644,9 @@ class ChannelManager(
     /** The ADMIN_STATE publish of this channel storage has not confirmed yet, or null. */
     internal fun pendingAdminConfirmation(channel: Channel): JSONObject? = admin.pendingConfirmationOf(channel)
 
+    /** One tick of the open channel's moderation poll. */
+    internal suspend fun pollAdminState(channel: Channel) = admin.pollAdminState(channel, switchGeneration)
+
     /**
      * Whether the current account may moderate the open channel: an on-chain
      * DELETE-permission check (web: MessageContextMenuUI.js:211-214), not

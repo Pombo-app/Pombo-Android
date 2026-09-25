@@ -1196,9 +1196,30 @@ internal class Moderation(private val manager: ChannelManager) {
             while (isActive) {
                 delay(ADMIN_POLL_INTERVAL_MS)
                 if (!stillCurrent(generation)) return@launch
-                loadAdminState(channel, generation)
+                pollAdminState(channel, generation)
             }
         }
+    }
+
+    /**
+     * One poll. The newest row alone answers most of them: the owner's
+     * snapshot or manifest at a rev already held means nothing changed.
+     * Anything else reads the window as before.
+     */
+    internal suspend fun pollAdminState(channel: Channel, generation: Int) {
+        if (newestRowUnchanged(channel)) return
+        loadAdminState(channel, generation)
+    }
+
+    private suspend fun newestRowUnchanged(channel: Channel): Boolean {
+        val (content, meta) = runCatching { readAdminWindow(channel, 1) }.getOrNull()?.singleOrNull() ?: return false
+        val data = openAdminContent(channel, content) ?: return false
+        val type = data.optString("type")
+        if (type != "ADMIN_STATE" && type != SyncChunks.ADMIN.manifest) return false
+        val author = (if (channel.type == "gated") gatedAuthor(channel, channel.adminStreamId, meta)
+            else data.optString("account").ifEmpty { meta.optString("publisherId") }).orEmpty().lowercase()
+        return author.isNotEmpty() && author == channelOwner(channel) &&
+            data.optInt("rev", 0) <= (adminRevs[channel.adminStreamId] ?: 0)
     }
     internal fun applyAdminMessage(
         channel: Channel,
