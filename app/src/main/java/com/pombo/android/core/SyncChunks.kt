@@ -34,7 +34,7 @@ object SyncChunks {
         val keepPairs: Boolean
     )
 
-    private val SYNC = Frame("sync_chunk", "sync_manifest", "syncId", listOf("ts"), keepPairs = false)
+    private val SYNC = Frame("sync_chunk", "sync_manifest", "syncId", listOf("ts"), keepPairs = true)
 
     /**
      * An ADMIN_STATE too big for one message. Its own row types, so a reader

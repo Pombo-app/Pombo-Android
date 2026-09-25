@@ -67,6 +67,8 @@ class SyncChunksTest {
                 chunks.indices.toList(), chunks.map { it.optInt("chunkIndex") })
             assertTrue("$what — a chunk went over the budget",
                 chunks.all { it.getString("data").length <= limit })
+            assertTrue("$what — a chunk ends in half a surrogate pair",
+                chunks.none { Character.isHighSurrogate(it.getString("data").last()) })
             got.lastOrNull()?.takeIf { it.optString("type") == "sync_manifest" }?.let {
                 assertEquals("$what — manifest count", chunks.size, it.optInt("chunkCount"))
             }
@@ -116,6 +118,24 @@ class SyncChunksTest {
             if (m.optString("type") != "sync_chunk") continue
             assertTrue("a chunk went over the budget", m.getString("data").length <= 300)
         }
+    }
+
+    @Test
+    fun `never cuts an emoji in half, which sealing would turn into ?`() {
+        val limit = 50
+        // {"t":" is six characters: the emoji's high half lands on the last slot of the first cut.
+        val text = "p".repeat(limit - 1 - 6) + "🐦".repeat(40)
+        val payload = JSONObject().put("t", text)
+
+        val chunks = SyncChunks.split(payload, "run1", limit).filter { it.optString("type") == "sync_chunk" }
+
+        assertEquals(limit - 1, chunks[0].getString("data").length)
+        for (c in chunks) {
+            val data = c.getString("data")
+            assertTrue("chunk ${c.optInt("chunkIndex")} ends in half a pair", !Character.isHighSurrogate(data.last()))
+            assertTrue("chunk ${c.optInt("chunkIndex")} starts with half a pair", !Character.isLowSurrogate(data.first()))
+        }
+        assertEquals(text, JSONObject(chunks.joinToString("") { it.getString("data") }).getString("t"))
     }
 
     @Test
