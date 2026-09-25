@@ -54,6 +54,23 @@ class SyncMergeVectorsTest {
     }
 
     @Test
+    fun `sent DMs carry deletions and edits as on the web`() {
+        val cases = vectors().getJSONArray("sent")
+        assertTrue(cases.length() > 0)
+        for (i in 0 until cases.length()) {
+            val case = cases.getJSONObject(i)
+            val merged = SyncMerge.mergeState(case.getJSONObject("base"), case.getJSONObject("incoming"))
+            val expected = case.getJSONObject("expected")
+            for (key in listOf("sentMessages", "sentDeletedAt")) {
+                assertTrue(
+                    "${case.getString("what")}: $key was ${merged.opt(key)}, expected ${expected.opt(key)}",
+                    same(merged.opt(key), expected.opt(key))
+                )
+            }
+        }
+    }
+
+    @Test
     fun `unstamped values are stamped as on the web`() {
         val cases = vectors().getJSONArray("stamp")
         assertTrue(cases.length() > 0)

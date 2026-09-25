@@ -5983,7 +5983,7 @@ class ChannelManager(
         // A DM's sent half is only in local storage, so the edit has to land
         // there too or it reverts the next time the chat is opened.
         if (channel.type == "dm") {
-            sentDmStore.edit(channel.messageStreamId, targetId, text)
+            sentDmStore.edit(channel.messageStreamId, targetId, text, timestamp)
             onLocalStateChanged()
         }
     }
@@ -6004,7 +6004,7 @@ class ChannelManager(
         if (original.isImage) original.imageId?.let { tombstoneImage(it) }
         _messages.value = _messages.value.filterNot { it.id == targetId }
         if (channel.type == "dm") {
-            sentDmStore.remove(channel.messageStreamId, targetId)
+            sentDmStore.delete(channel.messageStreamId, targetId)
             onLocalStateChanged()
         }
         return purgeOwnMessage(channel, original)
