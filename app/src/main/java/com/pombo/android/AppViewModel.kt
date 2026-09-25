@@ -651,13 +651,20 @@ class AppViewModel(app: Application) : AndroidViewModel(app), PomboBridge.Listen
         // MERGED with the base slice, not a replace: the web also keeps
         // write-only group-channel entries under sentMessages, which Android
         // does not model — a replace wiped them from every device on each push.
+        // The deletions are applied after the union: the base still holds
+        // every message deleted here since the last pull.
+        val sentDeletedAt = com.pombo.android.core.SyncMerge.mergeSentDeletedAt(
+            base.optJSONObject("sentDeletedAt"), sentDmStore.deleted()
+        )
+        base.put("sentDeletedAt", sentDeletedAt)
         base.put(
             "sentMessages",
             com.pombo.android.core.SyncMerge.mergeSentMessages(
                 base.optJSONObject("sentMessages"),
                 sentDmStore.exportAll(
                     manager.channels.value.filter { it.type == "dm" }.map { it.messageStreamId }
-                )
+                ),
+                sentDeletedAt
             )
         )
         // Reactions made here in DMs/write-only channels exist only in the
@@ -690,6 +697,7 @@ class AppViewModel(app: Application) : AndroidViewModel(app), PomboBridge.Listen
         val base = settingsStore.syncBase?.let {
             runCatching { JSONObject(it) }.getOrNull()
         } ?: return
+        base.optJSONObject("sentDeletedAt")?.let { sentDmStore.importDeleted(it) }
         base.optJSONObject("sentMessages")?.let { sentDmStore.importAll(it) }
         // Union-seed, local-wins per message: the base is the LAST merged
         // payload, so a reaction removed locally since then must not come back.
@@ -744,6 +752,7 @@ class AppViewModel(app: Application) : AndroidViewModel(app), PomboBridge.Listen
         merged.optJSONObject("ensCache")?.let { slice ->
             if (ensStore.importSyncSlice(slice)) viewModelScope.launch { ensStore.persistNow() }
         }
+        merged.optJSONObject("sentDeletedAt")?.let { sentDmStore.importDeleted(it) }
         merged.optJSONObject("sentMessages")?.let { sentDmStore.importAll(it) }
         // Post-merge the slice is the union of every device's record — replace.
         merged.optJSONObject("sentReactions")?.let { sentReactionsStore.importAll(it) }

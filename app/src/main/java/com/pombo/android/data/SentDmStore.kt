@@ -50,9 +50,43 @@ class SentDmStore(context: Context) {
         save(streamId, kept.sortedBy { it.optLong("timestamp") }.takeLast(maxPerConversation))
     }
 
-    fun remove(streamId: String, messageId: String) {
+    /**
+     * Delete a sent message: drop it here and record the deletion, which the
+     * sync carries to the account's other devices.
+     */
+    fun delete(streamId: String, messageId: String) {
         if (memoryOnly) return
+        val deleted = deleted()
+        val gone = deleted.optJSONObject(streamId) ?: JSONObject().also { deleted.put(streamId, it) }
+        gone.put(messageId, System.currentTimeMillis())
+        saveDeleted(deleted)
         save(streamId, load(streamId).filterNot { it.optString("id") == messageId })
+    }
+
+    /** Every recorded deletion, { streamId: { messageId: deletedAt } }. */
+    fun deleted(): JSONObject {
+        if (memoryOnly) return JSONObject()
+        val raw = prefs.getString(deletedKey(), null) ?: return JSONObject()
+        return runCatching { JSONObject(raw) }.getOrDefault(JSONObject())
+    }
+
+    /** Joins synced deletions into the local record and drops what they name. */
+    fun importDeleted(sentDeletedAt: JSONObject) {
+        if (memoryOnly) return
+        val deleted = com.pombo.android.core.SyncMerge.mergeSentDeletedAt(deleted(), sentDeletedAt)
+        saveDeleted(deleted)
+        sentDeletedAt.keys().forEach { streamId ->
+            val gone = deleted.optJSONObject(streamId) ?: return@forEach
+            val messages = load(streamId)
+            val kept = messages.filterNot { gone.has(it.optString("id")) }
+            if (kept.size != messages.size) save(streamId, kept)
+        }
+    }
+
+    private fun deletedKey(): String = "deleted_${scopeAddress?.lowercase() ?: "none"}"
+
+    private fun saveDeleted(deleted: JSONObject) {
+        prefs.edit().putString(deletedKey(), deleted.toString()).apply()
     }
 
     /**
@@ -68,12 +102,15 @@ class SentDmStore(context: Context) {
         prefs.edit().remove(key(streamId)).apply()
     }
 
-    /** Applies an edit in place so the stored copy matches what was published. */
-    fun edit(streamId: String, messageId: String, newText: String) {
+    /**
+     * Applies an edit in place so the stored copy matches what was published.
+     * [at] is the edit's own timestamp: the sync keeps the latest edit.
+     */
+    fun edit(streamId: String, messageId: String, newText: String, at: Long) {
         if (memoryOnly) return
         save(streamId, load(streamId).map {
             if (it.optString("id") == messageId) {
-                JSONObject(it.toString()).put("text", newText).put("_edited", true)
+                JSONObject(it.toString()).put("text", newText).put("_edited", true).put("_editedAt", at)
             } else it
         })
     }
@@ -100,20 +137,20 @@ class SentDmStore(context: Context) {
      * Union by id, never replace: this runs on every start, and overwriting
      * would delete every message sent since the snapshot was taken — the local
      * copy is the ONLY copy of an outgoing DM, so that loss is permanent.
-     * Local wins a collision because it may carry an edit not yet pushed.
+     * Local wins a collision unless the incoming copy was edited later, and a
+     * message recorded as deleted is never brought back.
      */
     fun importAll(sentMessages: JSONObject) {
         if (memoryOnly) return
+        val deleted = deleted()
         sentMessages.keys().forEach { streamId ->
             val arr = sentMessages.optJSONArray(streamId) ?: return@forEach
-            val incoming = (0 until arr.length()).mapNotNull { arr.optJSONObject(it) }
-            val byId = LinkedHashMap<String, JSONObject>()
-            incoming.forEach { m -> m.optString("id").takeIf { it.isNotEmpty() }?.let { byId[it] = m } }
-            load(streamId).forEach { m -> m.optString("id").takeIf { it.isNotEmpty() }?.let { byId[it] = m } }
-            save(
-                streamId,
-                byId.values.sortedBy { it.optLong("timestamp") }.takeLast(maxPerConversation)
-            )
+            val merged = com.pombo.android.core.SyncMerge.mergeSentMessages(
+                JSONObject().put(streamId, JSONArray().also { a -> load(streamId).forEach { a.put(it) } }),
+                JSONObject().put(streamId, arr),
+                deleted
+            ).optJSONArray(streamId) ?: return@forEach
+            save(streamId, (0 until merged.length()).mapNotNull { merged.optJSONObject(it) })
         }
     }
 }

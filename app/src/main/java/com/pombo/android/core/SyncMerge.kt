@@ -83,10 +83,16 @@ object SyncMerge {
             )
         )
 
+        val sentDeletedAt = mergeSentDeletedAt(
+            base?.optJSONObject("sentDeletedAt"), incoming?.optJSONObject("sentDeletedAt")
+        )
         out.put(
             "sentMessages",
-            mergeSentMessages(base?.optJSONObject("sentMessages"), incoming?.optJSONObject("sentMessages"))
+            mergeSentMessages(
+                base?.optJSONObject("sentMessages"), incoming?.optJSONObject("sentMessages"), sentDeletedAt
+            )
         )
+        out.put("sentDeletedAt", sentDeletedAt)
         out.put(
             "sentReactions",
             mergeSentReactions(base?.optJSONObject("sentReactions"), incoming?.optJSONObject("sentReactions"))
@@ -254,8 +260,16 @@ object SyncMerge {
         return result
     }
 
-    /** Exposed so the export can union the local DM slice with the sync base. */
-    fun mergeSentMessages(local: JSONObject?, remote: JSONObject?): JSONObject {
+    private fun editedAt(message: JSONObject): Long =
+        (message.opt("_editedAt") as? Number)?.toLong() ?: 0L
+
+    /**
+     * Union of sent messages by id (web mergeSentMessages). A copy edited later
+     * than the other replaces it, and any message [deleted] names is left out,
+     * whichever side still holds it. Exposed so the export can union the local
+     * DM slice with the sync base.
+     */
+    fun mergeSentMessages(local: JSONObject?, remote: JSONObject?, deleted: JSONObject? = null): JSONObject {
         val result = JSONObject()
         local?.keys()?.forEach { streamId ->
             result.put(streamId, local.optJSONArray(streamId) ?: JSONArray())
@@ -278,6 +292,14 @@ object SyncMerge {
                 val existing = byId[id]
                 if (existing == null) {
                     byId[id] = m
+                } else if (editedAt(m) > editedAt(existing)) {
+                    val edited = JSONObject()
+                    existing.keys().forEach { edited.put(it, existing.get(it)) }
+                    m.keys().forEach { edited.put(it, m.get(it)) }
+                    if (m.isNull("imageData") && !existing.isNull("imageData")) {
+                        edited.put("imageData", existing.get("imageData"))
+                    }
+                    byId[id] = edited
                 } else if (m.optString("type") == "image" &&
                     !m.isNull("imageData") && existing.isNull("imageData")
                 ) {
@@ -289,7 +311,49 @@ object SyncMerge {
                 .takeLast(MAX_SENT_MESSAGES)
             result.put(streamId, JSONArray(sorted))
         }
+        return withoutDeleted(result, deleted)
+    }
+
+    /**
+     * Union of two sent-message deletion maps ({ streamId: { messageId:
+     * deletedAt } }), the latest time per message (web mergeSentDeletedAt). A
+     * message id is never reused, so an entry is never retracted and never
+     * pruned.
+     */
+    fun mergeSentDeletedAt(base: JSONObject?, incoming: JSONObject?): JSONObject {
+        val result = JSONObject()
+        listOfNotNull(base, incoming).forEach { src ->
+            src.keys().forEach { streamId ->
+                val ids = src.optJSONObject(streamId) ?: return@forEach
+                val out = result.optJSONObject(streamId) ?: JSONObject().also { result.put(streamId, it) }
+                ids.keys().forEach { messageId ->
+                    val ts = (ids.opt(messageId) as? Number)?.toLong() ?: return@forEach
+                    if (!out.has(messageId) || ts > out.optLong(messageId)) out.put(messageId, ts)
+                }
+            }
+        }
         return result
+    }
+
+    /** The sent messages without every one the deletion map names. */
+    fun withoutDeleted(sentMessages: JSONObject, deleted: JSONObject?): JSONObject {
+        if (deleted == null) return sentMessages
+        val out = JSONObject()
+        sentMessages.keys().forEach { streamId ->
+            val messages = sentMessages.optJSONArray(streamId) ?: return@forEach
+            val gone = deleted.optJSONObject(streamId)
+            if (gone == null) {
+                out.put(streamId, messages)
+                return@forEach
+            }
+            val kept = JSONArray()
+            for (i in 0 until messages.length()) {
+                val m = messages.optJSONObject(i) ?: continue
+                if (m.optStringOrNull("id")?.let { gone.has(it) } != true) kept.put(m)
+            }
+            out.put(streamId, kept)
+        }
+        return out
     }
 
     /**
