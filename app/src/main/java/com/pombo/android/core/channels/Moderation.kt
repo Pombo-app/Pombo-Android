@@ -82,8 +82,12 @@ internal class Moderation(private val manager: ChannelManager) {
         private const val MAX_CHUNKS = 4
         /** Longest run a reader reassembles (web adminReadMaxChunks). */
         private const val READ_MAX_CHUNKS = 64
-        /** Wait before the -3 read a snapshot-less admin_invalidate asks for (web adminSignalReadDelayMs). */
-        private const val SIGNAL_READ_DELAY_MS = 5_000L
+        /**
+         * Waits before each -3 read a snapshot-less admin_invalidate asks for,
+         * the later ones only while the announced rev has not landed (web
+         * adminSignalReadDelaysMs).
+         */
+        private val SIGNAL_READ_DELAYS_MS = longArrayOf(5_000L, 10_000L)
     }
 
     internal val rotations by lazy {
@@ -1466,18 +1470,23 @@ internal class Moderation(private val manager: ChannelManager) {
 
     /**
      * An admin_invalidate announced a snapshot too big to ride along: read
-     * the -3 once storage has had time to hold it. Signals arriving while a
-     * read is pending share it.
+     * the -3 once storage has had time to hold it, and once more later while
+     * the announced rev has still not landed. Signals arriving while reads
+     * are pending share them.
      */
     internal fun readAfterSignal(channel: Channel, data: JSONObject, sender: String?, generation: Int) {
         if (channel.adminStreamId != _current.value?.adminStreamId) return
         val owner = channelOwner(channel)
         if (owner != null && sender != null && sender.lowercase() != owner) return
-        if (data.optInt("rev", 0) <= (adminRevs[channel.adminStreamId] ?: 0)) return
+        val rev = data.optInt("rev", 0)
+        if (rev <= (adminRevs[channel.adminStreamId] ?: 0)) return
         if (signalRead?.isActive == true) return
         signalRead = scope.launch {
-            manager.adminConfirmSleep(SIGNAL_READ_DELAY_MS)
-            if (stillCurrent(generation)) loadAdminState(channel, generation)
+            for (wait in SIGNAL_READ_DELAYS_MS) {
+                manager.adminConfirmSleep(wait)
+                if (!stillCurrent(generation) || (adminRevs[channel.adminStreamId] ?: 0) >= rev) return@launch
+                loadAdminState(channel, generation)
+            }
         }
     }
     private var signalRead: Job? = null

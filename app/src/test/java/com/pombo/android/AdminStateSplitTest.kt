@@ -213,6 +213,30 @@ class AdminStateSplitTest {
     }
 
     @Test
+    fun `a run that lands on the first read is not read again`() {
+        storage += snapshot(1, 5) to me
+        open()
+        storage += SyncChunks.splitFramed(snapshot(2, 40), "r1", SyncChunks.ADMIN, 800).map { it to me }
+
+        h.deliver(room.ephemeralStreamId, StreamConstants.EPH_CONTROL,
+            JSONObject().put("type", "admin_invalidate").put("rev", 2).put("ts", 2_000L), from = me)
+
+        assertEquals(1, reads.size)
+    }
+
+    @Test
+    fun `a run not on storage yet is read once more, and no more`() {
+        storage += snapshot(1, 5) to me
+        open()
+
+        h.deliver(room.ephemeralStreamId, StreamConstants.EPH_CONTROL,
+            JSONObject().put("type", "admin_invalidate").put("rev", 2).put("ts", 2_000L), from = me)
+
+        assertEquals(2, reads.size)
+        assertEquals(5, manager.hiddenIds.value.size)
+    }
+
+    @Test
     fun `a signal for a rev already held reads nothing`() {
         storage += snapshot(3, 5) to me
         open()
