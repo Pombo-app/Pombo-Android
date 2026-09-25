@@ -41,12 +41,15 @@ class SyncChunksTest {
             }
         }
 
+    private fun quotedBytes(s: String) = JSONObject.quote(s).toByteArray(Charsets.UTF_8).size
+
     /**
      * Field ORDER is not part of the format — org.json does not keep insertion
-     * order and JSON.stringify does, so the two clients slice their own
-     * serialisation at different points. What has to match is the framing: how
-     * many messages, of which types, numbered how, and that the run still
-     * carries the whole snapshot.
+     * order and JSON.stringify does — and the two serialisers escape different
+     * characters, so each client slices its own serialisation at its own
+     * points. What has to match is the framing: which messages, numbered how,
+     * each within the budget, and that the run still carries the whole
+     * snapshot.
      */
     @Test
     fun `frames a snapshot the same way the web does`() {
@@ -58,15 +61,18 @@ class SyncChunksTest {
             val payload = case.getJSONObject("payload")
             val got = SyncChunks.split(payload, "runA", limit)
 
-            assertEquals("$what — message count", expected.size, got.size)
             assertEquals("$what — message types",
-                expected.map { it.optString("type") }, got.map { it.optString("type") })
+                expected.map { it.optString("type") }.toSet(), got.map { it.optString("type") }.toSet())
+            if (expected.size == 1) {
+                assertEquals("$what — a snapshot that fits stays whole", 1, got.size)
+                continue
+            }
 
             val chunks = got.filter { it.optString("type") == "sync_chunk" }
             assertEquals("$what — chunk numbering",
                 chunks.indices.toList(), chunks.map { it.optInt("chunkIndex") })
             assertTrue("$what — a chunk went over the budget",
-                chunks.all { it.getString("data").length <= limit })
+                chunks.all { quotedBytes(it.getString("data")) <= limit })
             assertTrue("$what — a chunk ends in half a surrogate pair",
                 chunks.none { Character.isHighSurrogate(it.getString("data").last()) })
             got.lastOrNull()?.takeIf { it.optString("type") == "sync_manifest" }?.let {
@@ -109,27 +115,60 @@ class SyncChunksTest {
     }
 
     @Test
-    fun `no chunk carries more than the budget`() {
-        val payload = JSONObject()
-            .put("type", "sync").put("v", 1).put("ts", 1L)
-            .put("data", JSONObject().put("note", "z".repeat(5000)))
+    fun `no chunk carries more than the budget, counted as JSON writes it`() {
+        for (fill in listOf("z".repeat(5000), "\"\\/".repeat(1500), "ação coração ".repeat(400),
+                "🐦".repeat(2000), "\u0001\n".repeat(1500))) {
+            val payload = JSONObject()
+                .put("type", "sync").put("v", 1).put("ts", 1L)
+                .put("data", JSONObject().put("note", fill))
 
-        for (m in SyncChunks.split(payload, "run1", 300)) {
-            if (m.optString("type") != "sync_chunk") continue
-            assertTrue("a chunk went over the budget", m.getString("data").length <= 300)
+            val out = SyncChunks.split(payload, "run1", 300)
+            for (m in out) {
+                if (m.optString("type") != "sync_chunk") continue
+                assertTrue("a chunk went over the budget", quotedBytes(m.getString("data")) <= 300)
+            }
+            assertTrue(same(payload, SyncChunks.reassemble(out).single()))
+        }
+    }
+
+    @Test
+    fun `cuts accented text into more, shorter chunks than the same length of ASCII`() {
+        fun count(fill: String) = SyncChunks.split(
+            JSONObject().put("type", "sync").put("v", 1).put("ts", 1L).put("data", JSONObject().put("n", fill)),
+            "run1", 300).size
+        assertTrue(count("ç".repeat(3000)) > count("c".repeat(3000)))
+    }
+
+    @Test
+    fun `keeps every sealed chunk under the wire budget, whatever the text is made of`() {
+        val me = "0x8f2a559490d8e9bb4e0e7b53e1c6e4c2b1a0d9c8b7a6958473625140fedcba98"
+        val address = EthereumSigner.address(me)
+        val pub = EthereumSigner.compressedPublicKey(me)
+        // config.media.imagePayloadMaxBytes less its safety margin
+        val wireBudget = 220 * 1024 - 1024
+        for (fill in listOf("🐦".repeat(90000), "\"".repeat(200000), "ç".repeat(160000),
+                "/".repeat(200000), "\u0001".repeat(60000))) {
+            val payload = JSONObject().put("type", "sync").put("v", 1).put("ts", 1L)
+                .put("data", JSONObject().put("n", fill))
+            val chunks = SyncChunks.split(payload, "run1").filter { it.optString("type") == "sync_chunk" }
+            assertTrue(chunks.size > 1)
+            for (chunk in chunks) {
+                val (envelope, _) = SealedSenderCrypto.seal(chunk, me, address, pub)
+                assertTrue("a sealed chunk went over the wire budget",
+                    envelope.toString().toByteArray(Charsets.UTF_8).size <= wireBudget)
+            }
         }
     }
 
     @Test
     fun `never cuts an emoji in half, which sealing would turn into ?`() {
         val limit = 50
-        // {"t":" is six characters: the emoji's high half lands on the last slot of the first cut.
-        val text = "p".repeat(limit - 1 - 6) + "🐦".repeat(40)
+        val text = "p" + "🐦".repeat(60)
         val payload = JSONObject().put("t", text)
 
         val chunks = SyncChunks.split(payload, "run1", limit).filter { it.optString("type") == "sync_chunk" }
 
-        assertEquals(limit - 1, chunks[0].getString("data").length)
+        assertTrue(chunks.size > 2)
         for (c in chunks) {
             val data = c.getString("data")
             assertTrue("chunk ${c.optInt("chunkIndex")} ends in half a pair", !Character.isHighSurrogate(data.last()))
@@ -154,7 +193,8 @@ class SyncChunksTest {
     }
 
     @Test
-    fun `the budget is the measured one`() {
+    fun `the budgets match the web's`() {
         assertEquals(150 * 1024, SyncChunks.CHUNK_CHARS)
+        assertEquals(150 * 1024, SyncChunks.CHUNK_BYTES)
     }
 }
