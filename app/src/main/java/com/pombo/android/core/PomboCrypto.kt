@@ -56,6 +56,13 @@ object PomboCrypto {
         return Base64.encodeToString(combined, Base64.NO_WRAP)
     }
 
+    /**
+     * Length of what [encryptString] returns for a plaintext of this many
+     * UTF-8 bytes. Deterministic, so sizing a payload does not pay a PBKDF2.
+     */
+    fun encryptedLength(plaintextBytes: Int): Int =
+        4 * ((SALT_LEN + IV_LEN + plaintextBytes + TAG_BITS / 8 + 2) / 3)
+
     /** base64(salt||iv||ct) -> text; throws on wrong password (GCM tag fails). */
     fun decryptString(encoded: String, password: String): String {
         val combined = Base64.decode(encoded, Base64.DEFAULT)

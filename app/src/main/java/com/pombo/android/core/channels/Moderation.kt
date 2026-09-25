@@ -20,6 +20,7 @@ import com.pombo.android.core.ModAction
 import com.pombo.android.core.ModComposition
 import com.pombo.android.core.PomboCrypto
 import com.pombo.android.core.StreamConstants
+import com.pombo.android.core.SyncChunks
 import com.pombo.android.data.Channel
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
@@ -73,6 +74,16 @@ internal class Moderation(private val manager: ChannelManager) {
         /** Delays before each read-back of a published ADMIN_STATE (web adminConfirmDelaysMs). */
         private val CONFIRM_DELAYS_MS = longArrayOf(5_000L, 10_000L, 20_000L, 40_000L)
         private const val CONFIRM_REPUBLISH_LIMIT = 3
+        /** Wire bytes one -3 or -2 message may take (web imagePayloadMaxBytes less its margin). */
+        private const val WIRE_BUDGET = ChannelManager.MAX_CHUNK_BYTES - 1024
+        /** Rows of the -3 each read asks for. */
+        private const val ADMIN_WINDOW = 5
+        /** Chunks an ADMIN_STATE may go out as (web adminStateMaxChunks); must stay below ADMIN_WINDOW. */
+        private const val MAX_CHUNKS = 4
+        /** Longest run a reader reassembles (web adminReadMaxChunks). */
+        private const val READ_MAX_CHUNKS = 64
+        /** Wait before the -3 read a snapshot-less admin_invalidate asks for (web adminSignalReadDelayMs). */
+        private const val SIGNAL_READ_DELAY_MS = 5_000L
     }
 
     internal val rotations by lazy {
@@ -880,9 +891,73 @@ internal class Moderation(private val manager: ChannelManager) {
     /**
      * The retained -3/P0 entries the storage node serves, as (content, meta)
      * pairs with epoch envelopes already opened and, on gated, only the
-     * owner-signed ones. Null when the read itself brought nothing back.
+     * owner-signed ones. A snapshot that went out split comes back joined,
+     * under its manifest's meta. Null when the read itself brought nothing back.
      */
     private suspend fun readAdminEntries(channel: Channel): List<Pair<Any?, JSONObject>>? {
+        val (entries, cut) = joinRuns(channel, readAdminWindow(channel, ADMIN_WINDOW) ?: return null)
+        if (cut + 1 <= ADMIN_WINDOW) return entries
+        // The newest snapshot went out split and its run reaches further
+        // back than the window: read once more, wide enough to hold it.
+        val wide = readAdminWindow(channel, ADMIN_WINDOW + cut + 1) ?: return entries
+        return joinRuns(channel, wide).first
+    }
+
+    /**
+     * Whole rows as they came, runs joined into the snapshot they carry, and
+     * the chunk count of a run the window cut short that is newer than every
+     * snapshot here (0 when there is none). Rows only join a run of their own
+     * author.
+     */
+    private fun joinRuns(
+        channel: Channel,
+        entries: List<Pair<Any?, JSONObject>>
+    ): Pair<List<Pair<Any?, JSONObject>>, Int> {
+        val out = ArrayList<Pair<Any?, JSONObject>>()
+        val framed = LinkedHashMap<String, MutableList<Pair<JSONObject, JSONObject>>>()
+        var best: JSONObject? = null
+        fun newer(a: JSONObject, b: JSONObject?) = b == null ||
+            a.optInt("rev", 0) > b.optInt("rev", 0) ||
+            (a.optInt("rev", 0) == b.optInt("rev", 0) && a.optLong("ts", 0L) > b.optLong("ts", 0L))
+
+        for ((content, meta) in entries) {
+            val data = openAdminContent(channel, content)
+            val type = data?.optString("type")
+            if (data == null || (type != SyncChunks.ADMIN.chunk && type != SyncChunks.ADMIN.manifest)) {
+                out += (data ?: content) to meta
+                if (data != null && type == "ADMIN_STATE" && newer(data, best)) best = data
+                continue
+            }
+            val author = (if (channel.type == "gated") gatedAuthor(channel, channel.adminStreamId, meta)
+                else meta.optString("publisherId")).orEmpty().lowercase()
+            if (author.isEmpty()) continue
+            framed.getOrPut(author) { mutableListOf() } += data to meta
+        }
+
+        var cutRun: JSONObject? = null
+        for ((author, rows) in framed) {
+            val dropped = ArrayList<SyncChunks.Dropped>()
+            for (run in SyncChunks.joinFramed(rows.map { it.first }, SyncChunks.ADMIN) { dropped += it }) {
+                val payload = run.payload
+                if (payload.optString("type") != "ADMIN_STATE" ||
+                    payload.optInt("rev") != run.manifest.optInt("rev") ||
+                    payload.optLong("ts") != run.manifest.optLong("ts")) continue
+                out += payload.put("account", author) to rows.first { it.first === run.manifest }.second
+                if (newer(payload, best)) best = payload
+            }
+            for (d in dropped) {
+                if (d.reason != "incomplete") continue
+                val manifest = rows.firstOrNull {
+                    it.first.optString("type") == SyncChunks.ADMIN.manifest && it.first.optString("runId") == d.syncId
+                }?.first ?: continue
+                if (newer(manifest, cutRun)) cutRun = manifest
+            }
+        }
+        val cut = cutRun?.takeIf { newer(it, best) }?.optInt("chunkCount", 0) ?: 0
+        return out to (if (cut in 1..READ_MAX_CHUNKS) cut else 0)
+    }
+
+    private suspend fun readAdminWindow(channel: Channel, last: Int): List<Pair<Any?, JSONObject>>? {
         // Password channels seal ADMIN_STATE too, and applyAdminMessage's
         // fallback opens it with PomboCrypto — Bouncy Castle PBKDF2, ~1s per
         // message on a phone, up to 5 of them, all inside the render gate.
@@ -891,7 +966,7 @@ internal class Moderation(private val manager: ChannelManager) {
         val args = JSONObject()
             .put("streamId", channel.adminStreamId)
             .put("partition", StreamConstants.ADMIN_MODERATION)
-            .put("last", 5)
+            .put("last", last)
         channel.password?.let { args.put("password", it) }
         // Raw envelopes for gated, same as message history: authority on
         // -3 is the recovered envelope signer, never the present gate.
@@ -1052,6 +1127,11 @@ internal class Moderation(private val manager: ChannelManager) {
             Log.w(TAG, "$label not on storage, republishing")
             try {
                 publishAdminState(channel)
+            } catch (e: AdminStateTooLarge) {
+                setPendingConfirmation(channel, null)
+                Log.w(TAG, "$label cannot be republished: ${e.message}")
+                manager.onModerationWarning?.invoke(e.message.orEmpty())
+                return
             } catch (e: Exception) {
                 Log.w(TAG, "$label republish failed, kept pending: ${e.message}")
                 return
@@ -1299,10 +1379,11 @@ internal class Moderation(private val manager: ChannelManager) {
 
     /**
      * Publishes the full ADMIN_STATE with an incremented rev (owner only).
-     * @return the publish timestamp, 0 when there is no account to publish as
+     * @return the publish timestamp of each row it went out as, the last one
+     *   closing the run; empty when there is no account to publish as
      */
-    internal suspend fun publishAdminState(channel: Channel): Long {
-        val addr = myAddress() ?: return 0L
+    internal suspend fun publishAdminState(channel: Channel): List<Long> {
+        val addr = myAddress() ?: return emptyList()
         // Never compute a rev off an unscanned stream (web gates publish on
         // adminLoaded): moderating fast, before the on-open load finished,
         // published rev=1 over a channel already at rev N — every peer with
@@ -1323,7 +1404,12 @@ internal class Moderation(private val manager: ChannelManager) {
             .put("type", "ADMIN_STATE").put("rev", rev)
             .put("ts", System.currentTimeMillis()).put("createdBy", addr)
             .put("state", state)
-        val envelopeTs = publishForChannel(channel, channel.adminStreamId, StreamConstants.ADMIN_MODERATION, msg)
+        val rows = frameForWire(channel, msg)
+        val stamps = rows.map {
+            publishForChannel(channel, channel.adminStreamId, StreamConstants.ADMIN_MODERATION, it)
+        }
+        if (rows.size > 1) Log.i(TAG, "ADMIN_STATE rev $rev split in ${rows.size - 1} chunks")
+        val envelopeTs = stamps.last()
         // Commit the revision only once it is on the wire. Incrementing up
         // front meant a failed publish — which [moderate] rolls back — still
         // burned a revision, so the next attempt skipped a number.
@@ -1333,22 +1419,68 @@ internal class Moderation(private val manager: ChannelManager) {
         // storage until it is there, and republished when it is not.
         trackPublished(channel, rev, msg.optLong("ts"), envelopeTs)
         // Low-latency fan-out (web channels.js publishAdminState): nobody —
-        // web or Android — subscribes -3 live, so this ephemeral signal with
-        // the full snapshot is what makes a ban/pin/hide reach open channels
-        // immediately; the 30s pollers are the fallback. Best-effort: the
-        // canonical -3 publish above already succeeded.
+        // web or Android — subscribes -3 live, so this ephemeral signal is
+        // what makes a ban/pin/hide reach open channels immediately; the 30s
+        // pollers are the fallback. It carries the full snapshot when that
+        // fits one message, else only the rev, and receivers read the -3.
+        // Best-effort: the canonical -3 publish above already succeeded.
         try {
             val signal = JSONObject()
                 .put("type", "admin_invalidate")
                 .put("rev", rev)
                 .put("ts", msg.optLong("ts"))
-                .put("snapshot", msg)
-            publishForChannel(channel, channel.ephemeralStreamId, StreamConstants.EPH_CONTROL, signal)
+            val full = JSONObject(signal.toString()).put("snapshot", msg)
+            val fits = rows.size == 1 && runCatching {
+                manager.wireBytes(channel, channel.ephemeralStreamId, full) <= WIRE_BUDGET
+            }.getOrDefault(false)
+            publishForChannel(channel, channel.ephemeralStreamId, StreamConstants.EPH_CONTROL,
+                if (fits) full else signal)
         } catch (e: Exception) {
             Log.d(TAG, "admin_invalidate publish failed (non-fatal): ${e.message}")
         }
-        return envelopeTs
+        return stamps
     }
+
+    /** A snapshot past [MAX_CHUNKS]: never published, the owner is told instead. */
+    internal class AdminStateTooLarge : IllegalStateException(
+        "This channel's moderation state is too large to publish. Unpin some messages and try again.")
+
+    /**
+     * The rows this snapshot goes out as: itself when it fits the wire once
+     * encrypted, as it always did, else a run of chunks closed by a manifest,
+     * each cut to fit. Past [MAX_CHUNKS] nothing goes out, and the owner is
+     * told instead of the transport dropping it unseen.
+     */
+    private suspend fun frameForWire(channel: Channel, msg: JSONObject): List<JSONObject> {
+        if (manager.wireBytes(channel, channel.adminStreamId, msg) <= WIRE_BUDGET) return listOf(msg)
+        val runId = PomboCrypto.randomHex(8)
+        var limit = SyncChunks.CHUNK_CHARS
+        while (limit >= 1024) {
+            val run = SyncChunks.splitFramed(msg, runId, SyncChunks.ADMIN, limit)
+            if (run.size - 1 > MAX_CHUNKS) break
+            if (run.all { manager.wireBytes(channel, channel.adminStreamId, it) <= WIRE_BUDGET }) return run
+            limit = (limit * 0.85).toInt()
+        }
+        throw AdminStateTooLarge()
+    }
+
+    /**
+     * An admin_invalidate announced a snapshot too big to ride along: read
+     * the -3 once storage has had time to hold it. Signals arriving while a
+     * read is pending share it.
+     */
+    internal fun readAfterSignal(channel: Channel, data: JSONObject, sender: String?, generation: Int) {
+        if (channel.adminStreamId != _current.value?.adminStreamId) return
+        val owner = channelOwner(channel)
+        if (owner != null && sender != null && sender.lowercase() != owner) return
+        if (data.optInt("rev", 0) <= (adminRevs[channel.adminStreamId] ?: 0)) return
+        if (signalRead?.isActive == true) return
+        signalRead = scope.launch {
+            manager.adminConfirmSleep(SIGNAL_READ_DELAY_MS)
+            if (stillCurrent(generation)) loadAdminState(channel, generation)
+        }
+    }
+    private var signalRead: Job? = null
 
     /**
      * Moderation is applied locally first so the UI reacts instantly, then

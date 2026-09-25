@@ -699,7 +699,7 @@ class ChannelManager(
         override suspend fun republishAnchors(channel: Channel): List<Long> = epochKeys.republishAnchors(
             channel.messageStreamId,
             channel.keysStreamId.ifEmpty { StreamConstants.deriveKeysId(channel.messageStreamId) })
-        override suspend fun publishAdminState(channel: Channel): Long {
+        override suspend fun publishAdminState(channel: Channel): List<Long> {
             // Moderation lives in the open channel's flows: for any other
             // channel this would publish the open one's.
             check(channel.adminStreamId == _current.value?.adminStreamId) { "channel not open" }
@@ -6321,6 +6321,47 @@ class ChannelManager(
     }
 
     /**
+     * Bytes [publishForChannel] would hand the transport for this payload,
+     * branch for branch, including the publish's one attempt to recover a
+     * missing epoch key. Past the DataChannel's max-message-size the
+     * transport throws inside the SDK, where nothing here sees it, so a
+     * payload that may not fit is split by these numbers. A test holds the
+     * two together.
+     */
+    internal suspend fun wireBytes(channel: Channel, streamId: String, payload: JSONObject): Int {
+        require(channel.type != "dm") { "DM payloads are not sized here" }
+        fun plain(content: JSONObject): Int {
+            val bytes = content.toString().toByteArray(Charsets.UTF_8).size
+            return channel.password?.let { PomboCrypto.encryptedLength(bytes) + 2 } ?: bytes
+        }
+        val isAdminStream = streamId == channel.adminStreamId ||
+            streamId.endsWith(StreamConstants.SUFFIX_ADMIN)
+        if (!isEpochChannel(channel)) {
+            if (isAdminStream || (channel.readOnly && streamId == channel.messageStreamId)) return plain(payload)
+            return plain(stripLocalFields(payload).put("proof", channelIdentity(streamId).proof))
+        }
+        var clean = stripLocalFields(payload)
+        if (channel.wireIdentity == "sealed" && !isAdminStream) {
+            val auth = epochKeys.authorshipFor(channel.messageStreamId)
+                ?: throw IllegalStateException("No wallet available to bind the channel pseudonym")
+            clean = com.pombo.android.core.Authorship.seal(
+                channel.messageStreamId, clean, auth.privateKey, auth.publicKey, auth.bindProof)
+        }
+        val envelope = epochKeys.encryptCurrent(channel.messageStreamId, clean) ?: run {
+            epochKeys.ensureChannelKeys(
+                channel.messageStreamId,
+                channel.keysStreamId.ifEmpty { StreamConstants.deriveKeysId(channel.messageStreamId) },
+                keysRetentionDays(channel),
+                allowMint = System.currentTimeMillis() - channel.createdAt < 3_600_000,
+                memberCount = channel.members.size,
+                gated = channel.type == "gated")
+            epochKeys.encryptCurrent(channel.messageStreamId, clean)
+        } ?: throw IllegalStateException(
+            "No epoch key for ${channel.messageStreamId} — cannot size a ${channel.type} payload")
+        return envelope.toString().toByteArray(Charsets.UTF_8).size
+    }
+
+    /**
      * Fields that must never reach the wire inside an epoch envelope (web
      * publisherProof.js stripLocalFields): local UI state, and the identity
      * fields D6/D7 removed. `sender` is re-derived by every receiver from the
@@ -6979,7 +7020,10 @@ class ChannelManager(
             // checks — type, publisher == owner, rev — so the signal cannot
             // inject state a direct -3 publish couldn't.
             "admin_invalidate" -> {
-                val snapshot = data.optJSONObject("snapshot") ?: return
+                val snapshot = data.optJSONObject("snapshot") ?: run {
+                    if (!data.has("snapshot")) admin.readAfterSignal(channel, data, account, generation)
+                    return
+                }
                 // The authority check inside applyAdminMessage reads the
                 // snapshot object, but the proof (and thus the resolved
                 // account) lives on the OUTER admin_invalidate payload —
