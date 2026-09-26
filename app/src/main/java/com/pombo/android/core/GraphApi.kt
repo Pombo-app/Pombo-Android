@@ -67,7 +67,8 @@ object GraphApi {
 
     /** A null [cacheKey] asks The Graph every time. */
     private suspend fun query(cacheKey: String?, gql: String): JSONObject? {
-        cacheKey?.let { key -> cache[key]?.let { if (System.currentTimeMillis() - it.at < CACHE_MS) return it.data } }
+        cacheKey?.let { key -> cache[key]?.let { if (System.currentTimeMillis() - it.at < CACHE_MS) { println("DIAG graph cache HIT $key age=${System.currentTimeMillis() - it.at}ms [${Thread.currentThread().name}]"); return it.data } } }
+        println("DIAG graph MISS $cacheKey [${Thread.currentThread().name}]")
         val data = withContext(Dispatchers.IO) {
             try {
                 val conn = (URL(endpoint).openConnection() as HttpURLConnection).apply {
@@ -86,7 +87,7 @@ object GraphApi {
             } catch (e: Exception) {
                 null
             }
-        }.also { lastQueryOk = it != null } ?: return null
+        }.also { lastQueryOk = it != null; println("DIAG graph answered $cacheKey ok=${it != null} [${Thread.currentThread().name}]") } ?: return null
         if (cacheKey != null) cache[cacheKey] = Entry(data, System.currentTimeMillis())
         return data
     }

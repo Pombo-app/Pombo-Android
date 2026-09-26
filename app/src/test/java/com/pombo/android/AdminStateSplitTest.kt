@@ -46,6 +46,7 @@ class AdminStateSplitTest {
             val messages = JSONArray()
             if (args.optString("streamId") == room.adminStreamId) {
                 val last = args.optInt("last")
+                println("DIAG resend -3 last=$last [${Thread.currentThread().name}] at ${Throwable().stackTrace.filter { it.className.startsWith("com.pombo.android") && !it.className.contains("Test") }.take(5).joinToString(" < ") { "${it.className.substringAfterLast('.')}.${it.methodName}:${it.lineNumber}" }}")
                 reads += last
                 for ((row, publisher) in storage.takeLast(last)) {
                     messages.put(JSONObject().put("content", row)
@@ -77,6 +78,7 @@ class AdminStateSplitTest {
 
     private fun open() {
         manager.openChannel(streamId)
+        println("DIAG test open: reads=$reads current=${manager._current.value?.adminStreamId} gen=${manager.switchGeneration} hidden=${manager.hiddenIds.value.size} [${Thread.currentThread().name}]")
         reads.clear()
     }
 
@@ -165,8 +167,10 @@ class AdminStateSplitTest {
         open()
         storage += SyncChunks.splitFramed(snapshot(2, 40), "r1", SyncChunks.ADMIN, 800).map { it to me }
 
+        println("DIAG before deliver: ${state()}")
         h.deliver(room.ephemeralStreamId, StreamConstants.EPH_CONTROL,
             JSONObject().put("type", "admin_invalidate").put("rev", 2).put("ts", 2_000L), from = me)
+        println("DIAG after deliver: ${state()}")
 
         assertTrue(state(), reads.isNotEmpty())
         assertEquals(state(), 40, manager.hiddenIds.value.size)
@@ -220,8 +224,10 @@ class AdminStateSplitTest {
         open()
         storage += SyncChunks.splitFramed(snapshot(2, 40), "r1", SyncChunks.ADMIN, 800).map { it to me }
 
+        println("DIAG before deliver: ${state()}")
         h.deliver(room.ephemeralStreamId, StreamConstants.EPH_CONTROL,
             JSONObject().put("type", "admin_invalidate").put("rev", 2).put("ts", 2_000L), from = me)
+        println("DIAG after deliver: ${state()}")
 
         assertEquals(state(), 1, reads.size)
     }
@@ -231,8 +237,10 @@ class AdminStateSplitTest {
         storage += snapshot(1, 5) to me
         open()
 
+        println("DIAG before deliver: ${state()}")
         h.deliver(room.ephemeralStreamId, StreamConstants.EPH_CONTROL,
             JSONObject().put("type", "admin_invalidate").put("rev", 2).put("ts", 2_000L), from = me)
+        println("DIAG after deliver: ${state()}")
 
         assertEquals(state(), 2, reads.size)
         assertEquals(state(), 5, manager.hiddenIds.value.size)

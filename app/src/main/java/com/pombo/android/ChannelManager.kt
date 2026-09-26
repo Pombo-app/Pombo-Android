@@ -2744,8 +2744,10 @@ class ChannelManager(
         // retained → nothing republished (and a missing challenge must
         // republish regardless, the legacy redundancy semantics).
         if (channel.adminStreamId.isEmpty()) return
+        println("DIAG ttlRepublish: start gen=$generation [${Thread.currentThread().name}]")
         // The purge applies the -3's own retention, not the -1's.
         val storageDays = adminRetentionDays(refreshStreamRetentions(channel))
+        println("DIAG ttlRepublish: storageDays=$storageDays adminTs=${adminTs[channel.adminStreamId]} rev=${adminRevs[channel.adminStreamId]} loaded=${channel.adminStreamId in adminLoaded} stillCurrent=${stillCurrent(generation)} [${Thread.currentThread().name}]")
         fun ageDays(ts: Long) = (System.currentTimeMillis() - ts) / 86_400_000L
 
         // ADMIN_STATE (-3/P0): republish the current snapshot with rev+1 via
@@ -4992,6 +4994,7 @@ class ChannelManager(
             admin.clearDeltas()
             snapshot?.let { admin.restoreOwnerWord(it.ownerWord) }
             val generation = ++switchGeneration
+            println("DIAG switchGeneration -> $generation (open) [${Thread.currentThread().name}]")
             oldestTimestamp = snapshot?.oldestTimestamp ?: 0L
             synchronized(this) {
                 pendingOverrides.clear(); deletedIds.clear()
@@ -5095,6 +5098,7 @@ class ChannelManager(
         // Closing ends the viewing session too, so work in flight for this
         // channel cannot land after we reopen the very same channel.
         val generation = ++switchGeneration
+        println("DIAG switchGeneration -> $generation (close) [${Thread.currentThread().name}] at ${Throwable().stackTrace.drop(1).take(4).joinToString(" < ") { "${it.methodName}:${it.lineNumber}" }}")
         presenceJob?.cancel(); presenceJob = null
         adminPollJob?.cancel(); adminPollJob = null
         memberCatchUpJob?.cancel(); memberCatchUpJob = null
@@ -6666,7 +6670,10 @@ class ChannelManager(
             media.onSignal(streamId, content, publisher)
             return
         }
-        val channel = _current.value ?: return
+        val channel = _current.value ?: run {
+            if (StreamConstants.isEphemeralStream(streamId)) println("DIAG onIncoming: RETURN no current for $streamId/$partition")
+            return
+        }
         // Snapshot the session alongside the channel. This runs on the WebView
         // binder thread and the handlers below are dispatched to main, so by the
         // time they run the user may have switched; the captured generation is
@@ -6684,7 +6691,11 @@ class ChannelManager(
             channel.interactionsStreamId.ifEmpty {
                 StreamConstants.deriveInteractionsId(channel.messageStreamId)
             })
-        if (!isMsgStream && !isEphStream && !isIntStream) return
+        if (!isMsgStream && !isEphStream && !isIntStream) {
+            println("DIAG onIncoming: RETURN $streamId not for current ${channel.messageStreamId}")
+            return
+        }
+        if (isEphStream) println("DIAG onIncoming: eph gen=$generation current=${channel.messageStreamId} [${Thread.currentThread().name}]")
         scope.launch {
             handleContent(
                 channel, content, meta, historical = false,
@@ -6938,6 +6949,7 @@ class ChannelManager(
         //      generation bookkeeping still cannot paint into the wrong channel.
         val forOpenChannel = channel.messageStreamId == _current.value?.messageStreamId
         if (!stillCurrent(generation) || !forOpenChannel) {
+            println("DIAG handleContent: RETURN type=${data.optString("type")} gen=$generation now=$switchGeneration forOpen=$forOpenChannel channel=${channel.messageStreamId} current=${_current.value?.messageStreamId}")
             // A live message that landed in the switching window is still news
             // for the channel it was addressed to, so badge it rather than drop
             // it. History replays are not news and must stay silent.
@@ -7212,6 +7224,7 @@ class ChannelManager(
         _channels.value = _channels.value.map { if (it.messageStreamId == messageStreamId) updated else it }
         saveChannels()
         val stored = _channels.value.find { it.messageStreamId == messageStreamId } ?: updated
+        println("DIAG updateStored $messageStreamId: current=${_current.value?.messageStreamId} sameAsStored=${_current.value == stored} at ${Throwable().stackTrace.drop(1).take(3).joinToString(" < ") { "${it.methodName}:${it.lineNumber}" }}")
         if (_current.value?.messageStreamId == messageStreamId) _current.value = stored
         return stored
     }
@@ -7223,6 +7236,7 @@ class ChannelManager(
     internal fun saveChannels() {
         val now = System.currentTimeMillis()
         val stamped = _channels.value.map { it.stampedAgainst(persisted[it.messageStreamId], now) }
+        println("DIAG saveChannels now=$now changed=${stamped.filter { it != persisted[it.messageStreamId] }.map { "${it.messageStreamId.takeLast(12)}${it.fieldTs}" }} at ${Throwable().stackTrace.drop(1).take(3).joinToString(" < ") { "${it.methodName}:${it.lineNumber}" }}")
         _channels.value = stamped
         persist(stamped)
         onLocalStateChanged()

@@ -101,7 +101,11 @@ class ChannelManagerHarness(
         )
     }
 
-    fun stop() = scope.cancel()
+    fun stop() {
+        val active = scope.coroutineContext[kotlinx.coroutines.Job]?.children?.filter { it.isActive }?.toList().orEmpty()
+        println("DIAG harness stop: ${active.size} active job(s) ${active.take(6)}")
+        scope.cancel()
+    }
 
     companion object {
         fun channel(
