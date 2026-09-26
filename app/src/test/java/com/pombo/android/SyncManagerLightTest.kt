@@ -105,6 +105,17 @@ class SyncManagerLightTest {
     }
 
     @Test
+    fun `the same state is not published again while its read-back runs`() = runBlocking {
+        rows = JSONArray().put(row(5000, "0xeph"))
+        resendMs = 300L
+        sync.pushSync()
+        calls.clear()
+
+        assertNull(sync.pushSync())
+        assertFalse("publishAs" in calls)
+    }
+
+    @Test
     fun `an auto push clears the dirty flag`() {
         rows = JSONArray().put(row(5000, "0xeph"))
         sync.scheduleAutoPush(10L)

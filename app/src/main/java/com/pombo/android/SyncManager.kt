@@ -94,6 +94,12 @@ class SyncManager(
     private var pushQueued = false
     /** Bumped on every change; a push clears `dirty` only if none came after its export. */
     private val changeSeq = java.util.concurrent.atomic.AtomicLong()
+    /**
+     * A pushed state counts as sent while its read-back runs. Only a confirmed
+     * one is remembered across restarts: a push storage never kept has to go
+     * out again.
+     */
+    @Volatile private var pendingHash: String? = null
 
     private fun inboxId(): String? = myAddress()?.lowercase()?.let { "$it/Pombo-DM-1" }
 
@@ -141,8 +147,8 @@ class SyncManager(
             val seq = changeSeq.get()
             val data = exportLocal()
             val hash = stateHash(data)
-            if (isConfirmedState(hash)) {
-                Log.d(TAG, "push skipped: state unchanged since the last confirmed push")
+            if (isConfirmedState(hash) || hash == pendingHash) {
+                Log.d(TAG, "push skipped: state unchanged since the last push")
                 if (changeSeq.get() == seq) store.dirty = false
                 return null
             }
@@ -210,6 +216,7 @@ class SyncManager(
      */
     private fun confirmPush(inbox: String, hash: String, rows: List<String>) {
         confirmJob?.cancel()
+        pendingHash = hash
         val wanted = rows.toSet()
         confirmJob = scope.launch {
             var held = emptyList<Pair<Long, String>>()
@@ -222,6 +229,7 @@ class SyncManager(
                 confirmed = wanted.isNotEmpty() && held.map { rowKey(it.first, it.second) }.containsAll(wanted)
                 if (confirmed) break
             }
+            pendingHash = null
             if (confirmed) {
                 store.confirmedHash = hash
                 store.confirmedAt = System.currentTimeMillis()
@@ -306,6 +314,7 @@ class SyncManager(
     fun cancelPushConfirmation() {
         confirmJob?.cancel()
         confirmJob = null
+        pendingHash = null
         blobLeaveJob?.cancel()
         blobLeaveJob = null
         pulledRowTs = 0L
