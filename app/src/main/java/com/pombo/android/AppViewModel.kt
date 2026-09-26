@@ -1835,6 +1835,7 @@ class AppViewModel(app: Application) : AndroidViewModel(app), PomboBridge.Listen
 
     fun setGraphApiKey(key: String) {
         val v = key.trim().ifEmpty { null }
+        val changed = settingsStore.graphApiKey != v
         settingsStore.graphApiKey = v
         com.pombo.android.core.GraphApi.userApiKey = v
         _graphApiKey.value = v ?: ""
@@ -1842,7 +1843,7 @@ class AppViewModel(app: Application) : AndroidViewModel(app), PomboBridge.Listen
         com.pombo.android.core.GraphApi.clearCache()
         loadExplore()
         toast("Graph API key updated!", com.pombo.android.ui.ToastKind.SUCCESS)
-        sliceTouched("graphApiKey")
+        if (changed) sliceTouched("graphApiKey")
     }
 
     private fun startGuestSession() = viewModelScope.launch {
@@ -2341,10 +2342,11 @@ class AppViewModel(app: Application) : AndroidViewModel(app), PomboBridge.Listen
 
     fun setUsername(name: String?) {
         val v = name?.trim()?.ifEmpty { null }
+        val changed = store.username != v
         store.username = v
         _username.value = v
         toast("Name saved", com.pombo.android.ui.ToastKind.SUCCESS)
-        sliceTouched("username")
+        if (changed) sliceTouched("username")
         // Gated channels carry the name in the roster hello, so a rename has
         // to be announced or it waits for the next rotation.
         viewModelScope.launch { manager.republishHelloForRename() }
@@ -3194,6 +3196,7 @@ class AppViewModel(app: Application) : AndroidViewModel(app), PomboBridge.Listen
 
     fun removeContact(address: String) {
         val next = _contacts.value.filterNot { it.address.equals(address, ignoreCase = true) }
+        if (next.size == _contacts.value.size) return
         _contacts.value = next
         contactsStore.save(next)
         // The DM room falls back to ENS/short address once the contact is gone.

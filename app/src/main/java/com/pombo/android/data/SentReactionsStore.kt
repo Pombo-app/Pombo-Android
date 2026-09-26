@@ -33,19 +33,21 @@ class SentReactionsStore(context: Context) {
         prefs.edit().putString(key(), all.toString()).apply()
     }
 
-    /** Mirrors web addSentReaction: dedup on add, prune empty maps on remove. */
+    /**
+     * Mirrors web addSentReaction: dedup on add, prune empty maps on remove.
+     * Returns whether the record changed.
+     */
     @Synchronized
-    fun record(streamId: String, messageId: String, emoji: String, user: String, add: Boolean) {
-        if (memoryOnly) return
+    fun record(streamId: String, messageId: String, emoji: String, user: String, add: Boolean): Boolean {
+        if (memoryOnly) return false
         val all = readAll()
         val stream = all.optJSONObject(streamId) ?: JSONObject().also { all.put(streamId, it) }
         val msg = stream.optJSONObject(messageId) ?: JSONObject().also { stream.put(messageId, it) }
         val users = msg.optJSONArray(emoji) ?: JSONArray()
         val list = (0 until users.length()).mapNotNull { users.optString(it).ifEmpty { null } }
+        if (list.any { it.equals(user, ignoreCase = true) } == add) return false
         if (add) {
-            if (list.none { it.equals(user, ignoreCase = true) }) {
-                msg.put(emoji, JSONArray(list + user))
-            }
+            msg.put(emoji, JSONArray(list + user))
         } else {
             val kept = list.filterNot { it.equals(user, ignoreCase = true) }
             if (kept.isEmpty()) msg.remove(emoji) else msg.put(emoji, JSONArray(kept))
@@ -53,6 +55,7 @@ class SentReactionsStore(context: Context) {
             if (stream.length() == 0) all.remove(streamId)
         }
         writeAll(all)
+        return true
     }
 
     /** `{ messageId: { emoji: [users] } }` for one conversation, or null. */
