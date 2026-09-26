@@ -189,7 +189,7 @@ class SyncManager(
 
     private fun stateHash(data: JSONObject): String =
         java.security.MessageDigest.getInstance("SHA-256")
-            .digest(data.toString().toByteArray(Charsets.UTF_8))
+            .digest(com.pombo.android.core.SyncStateKey.key(data).toByteArray(Charsets.UTF_8))
             .joinToString("") { "%02x".format(it) }
 
     /** True when storage already holds this exact state from a recent push of ours. */
