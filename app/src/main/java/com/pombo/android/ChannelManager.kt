@@ -1300,12 +1300,11 @@ class ChannelManager(
             com.pombo.android.core.GraphApi.getChannelInfo(channel.messageStreamId)
         } catch (e: Exception) { null } ?: return false
         if (info.name.isNullOrEmpty()) return false
-        val fixed = channel.copy(exposure = info.exposure.ifEmpty { "visible" })
-        _channels.value = _channels.value.map {
-            if (it.messageStreamId == fixed.messageStreamId) fixed else it
+        val exposure = info.exposure.ifEmpty { "visible" }
+        if (updateStored(channel.messageStreamId) { it.copy(exposure = exposure) } == null) {
+            _current.value?.takeIf { it.messageStreamId == channel.messageStreamId }
+                ?.let { _current.value = it.copy(exposure = exposure) }
         }
-        saveChannels()
-        if (_current.value?.messageStreamId == fixed.messageStreamId) _current.value = fixed
         Log.i(TAG, "rename: chain says this channel is named publicly — exposure corrected")
         return true
     }
@@ -1325,16 +1324,16 @@ class ChannelManager(
             bridge.call("updateStreamMetadata", args, 120_000)
         }
 
-        val updated = channel.copy(
-            name = name?.trim()?.ifEmpty { null } ?: channel.name,
-            description = description?.trim() ?: channel.description,
-            // Stamped so the Graph refresh below does not revert this edit while
-            // the subgraph is still catching up.
-            metaUpdatedAt = System.currentTimeMillis()
-        )
-        _channels.value = _channels.value.map { if (it.messageStreamId == updated.messageStreamId) updated else it }
-        saveChannels()
-        _current.value = updated
+        val editedAt = System.currentTimeMillis()
+        updateStored(channel.messageStreamId) {
+            it.copy(
+                name = name?.trim()?.ifEmpty { null } ?: it.name,
+                description = description?.trim() ?: it.description,
+                // Stamped so the Graph refresh below does not revert this edit while
+                // the subgraph is still catching up.
+                metaUpdatedAt = editedAt
+            )
+        }
     }
 
     /**
@@ -1345,15 +1344,20 @@ class ChannelManager(
      * falls back to.
      */
     suspend fun refreshChannelMetadataFromGraph(): Boolean {
-        var changed = false
-        val updates = mutableMapOf<String, Channel>()
+        val infos = mutableMapOf<String, com.pombo.android.core.GraphApi.ChannelInfo>()
         for (channel in _channels.value) {
             if (channel.type == "dm") continue
-            val info = try {
+            infos[channel.messageStreamId] = try {
                 com.pombo.android.core.GraphApi.getChannelInfo(channel.messageStreamId)
             } catch (e: Exception) {
                 null
             } ?: continue
+        }
+        // Compared with the records as they are after the lookups, which may
+        // have run long enough for a sync import or a local edit to land.
+        val updates = mutableMapOf<String, Channel>()
+        for (channel in _channels.value) {
+            val info = infos[channel.messageStreamId] ?: continue
             // Indexing lag: never overwrite a local admin edit with older data.
             if (channel.metaUpdatedAt != null && info.updatedAt <= channel.metaUpdatedAt) continue
 
@@ -1372,13 +1376,18 @@ class ChannelManager(
             if (info.exposure == "visible" && info.description != channel.description) {
                 next = next.copy(description = info.description)
             }
-            if (next !== channel) { updates[channel.messageStreamId] = next; changed = true }
+            if (next !== channel) updates[channel.messageStreamId] = next
         }
+        val changed = updates.isNotEmpty()
         if (changed) {
             _channels.value = _channels.value.map { updates[it.messageStreamId] ?: it }
             saveChannels()
             // Keep the open channel's header in sync with the list.
-            _current.value?.let { cur -> updates[cur.messageStreamId]?.let { _current.value = it } }
+            _current.value?.let { cur ->
+                if (cur.messageStreamId in updates) {
+                    _channels.value.find { it.messageStreamId == cur.messageStreamId }?.let { _current.value = it }
+                }
+            }
         }
         return changed
     }
@@ -1788,20 +1797,15 @@ class ChannelManager(
         // with the old retention. A stream already at `days` counts as in
         // sync too, which is the whole point of not writing to it.
         fun settled(kind: String) = out.results[kind] == "applied" || out.results[kind] == "unchanged"
-        val updated = channel.copy(
-            storageDays = if (settled("message")) days else channel.storageDays,
-            adminStorageDays = if (settled("admin")) days else channel.adminStorageDays,
-            keysStorageDays = if (settled("keys")) days else channel.keysStorageDays,
+        val latest = _channels.value.find { it.messageStreamId == channel.messageStreamId } ?: return out
+        val updated = latest.copy(
+            storageDays = if (settled("message")) days else latest.storageDays,
+            adminStorageDays = if (settled("admin")) days else latest.adminStorageDays,
+            keysStorageDays = if (settled("keys")) days else latest.keysStorageDays,
             interactionsStorageDays =
-                if (settled("interactions")) days else channel.interactionsStorageDays
+                if (settled("interactions")) days else latest.interactionsStorageDays
         )
-        if (updated != channel) {
-            _channels.value = _channels.value.map {
-                if (it.messageStreamId == updated.messageStreamId) updated else it
-            }
-            saveChannels()
-            if (_current.value?.messageStreamId == updated.messageStreamId) _current.value = updated
-        }
+        if (updated != latest) updateStored(channel.messageStreamId) { updated }
         return out
     }
 
@@ -7194,6 +7198,22 @@ class ChannelManager(
     private fun addChannel(channel: Channel) {
         _channels.value = _channels.value + channel
         saveChannels()
+    }
+
+    /**
+     * Changes the stored record as it is now, not a copy captured before a
+     * slow call: a sync import may have landed meanwhile, and the save stamps
+     * every field that differs, so a stale copy would win them all on every
+     * device. Null when the channel is not stored.
+     */
+    internal fun updateStored(messageStreamId: String, change: (Channel) -> Channel): Channel? {
+        val latest = _channels.value.find { it.messageStreamId == messageStreamId } ?: return null
+        val updated = change(latest)
+        _channels.value = _channels.value.map { if (it.messageStreamId == messageStreamId) updated else it }
+        saveChannels()
+        val stored = _channels.value.find { it.messageStreamId == messageStreamId } ?: updated
+        if (_current.value?.messageStreamId == messageStreamId) _current.value = stored
+        return stored
     }
 
     /**
