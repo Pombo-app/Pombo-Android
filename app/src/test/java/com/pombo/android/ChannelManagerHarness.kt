@@ -5,7 +5,9 @@ import com.pombo.android.data.Channel
 import io.mockk.coEvery
 import io.mockk.every
 import io.mockk.mockk
+import io.mockk.mockkObject
 import io.mockk.slot
+import io.mockk.unmockkObject
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
@@ -27,6 +29,9 @@ import org.json.JSONObject
  * The mocks are relaxed, so anything reached through the bridge answers with a
  * stub. Only assert on state this class wrote; a call that merely returned is
  * no evidence.
+ *
+ * The Graph is stubbed to know nothing. Its cache is JVM-wide: with real
+ * lookups, whether an open runs to the end depends on an earlier test.
  */
 class ChannelManagerHarness(
     channels: List<Channel> = emptyList(),
@@ -60,6 +65,9 @@ class ChannelManagerHarness(
         every { ensStore.cachedName(any()) } returns null
         every { ensStore.cachedAvatar(any()) } returns null
         coEvery { ensStore.name(any(), any()) } returns null
+        mockkObject(com.pombo.android.core.GraphApi)
+        coEvery { com.pombo.android.core.GraphApi.streamRetention(any()) } returns null
+        coEvery { com.pombo.android.core.GraphApi.getChannelInfo(any()) } returns null
 
         val args = slot<JSONObject>()
         coEvery { bridge.call(any(), capture(args)) } answers {
@@ -101,7 +109,10 @@ class ChannelManagerHarness(
         )
     }
 
-    fun stop() = scope.cancel()
+    fun stop() {
+        scope.cancel()
+        unmockkObject(com.pombo.android.core.GraphApi)
+    }
 
     companion object {
         fun channel(

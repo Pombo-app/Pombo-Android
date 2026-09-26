@@ -27,8 +27,13 @@ class AdminStateSplitTest {
         .address("0x4f3edf983ac636a65a842ce7c78d9aa706d3b113bce9c46f30d7d21715b23b1d").lowercase()
     private val streamId = "$me/room-1"
     private val room = ChannelManagerHarness.channel(streamId)
-    private val h = ChannelManagerHarness(channels = listOf(room))
+    /** A room this account only reads: where a member meets the signal. */
+    private val owner = "0x" + "ab".repeat(20)
+    private val theirs = ChannelManagerHarness.channel("$owner/room-1")
+    private val h = ChannelManagerHarness(channels = listOf(room, theirs))
     private val manager = h.manager
+    /** Snapshots are recent, or the owner's open republishes them as nearing their TTL. */
+    private val t0 = System.currentTimeMillis()
 
     /** The -3 as the node holds it, oldest first: (row, publisher). */
     private val storage = mutableListOf<Pair<JSONObject, String>>()
@@ -44,7 +49,7 @@ class AdminStateSplitTest {
         coEvery { h.bridge.call("resend", any(), any()) } answers {
             val args = secondArg<JSONObject>()
             val messages = JSONArray()
-            if (args.optString("streamId") == room.adminStreamId) {
+            if (args.optString("streamId") in setOf(room.adminStreamId, theirs.adminStreamId)) {
                 val last = args.optInt("last")
                 reads += last
                 for ((row, publisher) in storage.takeLast(last)) {
@@ -58,8 +63,8 @@ class AdminStateSplitTest {
 
     @After fun tearDown() = h.stop()
 
-    private fun snapshot(rev: Int, hidden: Int) = JSONObject()
-        .put("type", "ADMIN_STATE").put("rev", rev).put("ts", 1_000L * rev).put("createdBy", me)
+    private fun snapshot(rev: Int, hidden: Int, by: String = me) = JSONObject()
+        .put("type", "ADMIN_STATE").put("rev", rev).put("ts", t0 + rev).put("createdBy", by)
         .put("state", JSONObject()
             .put("bannedMembers", JSONArray())
             .put("hiddenMessageIds", JSONArray((0 until hidden).map { "message-id-%030d".format(it) }))
@@ -75,10 +80,13 @@ class AdminStateSplitTest {
         .mapNotNull { it.optJSONObject("content") }
         .filter { it.optString("type") == "admin_invalidate" }
 
-    private fun open() {
-        manager.openChannel(streamId)
+    private fun open(channel: com.pombo.android.data.Channel = room) {
+        manager.openChannel(channel.messageStreamId)
         reads.clear()
     }
+
+    private fun signal(rev: Int) = h.deliver(theirs.ephemeralStreamId, StreamConstants.EPH_CONTROL,
+        JSONObject().put("type", "admin_invalidate").put("rev", rev).put("ts", t0 + rev), from = owner)
 
     @Test
     fun `a snapshot that fits goes out whole, and rides the signal`() {
@@ -159,12 +167,11 @@ class AdminStateSplitTest {
 
     @Test
     fun `a signal without the snapshot makes a member read the -3`() {
-        storage += snapshot(1, 5) to me
-        open()
-        storage += SyncChunks.splitFramed(snapshot(2, 40), "r1", SyncChunks.ADMIN, 800).map { it to me }
+        storage += snapshot(1, 5, by = owner) to owner
+        open(theirs)
+        storage += SyncChunks.splitFramed(snapshot(2, 40, by = owner), "r1", SyncChunks.ADMIN, 800).map { it to owner }
 
-        h.deliver(room.ephemeralStreamId, StreamConstants.EPH_CONTROL,
-            JSONObject().put("type", "admin_invalidate").put("rev", 2).put("ts", 2_000L), from = me)
+        signal(2)
 
         assertTrue(reads.isNotEmpty())
         assertEquals(40, manager.hiddenIds.value.size)
@@ -214,23 +221,21 @@ class AdminStateSplitTest {
 
     @Test
     fun `a run that lands on the first read is not read again`() {
-        storage += snapshot(1, 5) to me
-        open()
-        storage += SyncChunks.splitFramed(snapshot(2, 40), "r1", SyncChunks.ADMIN, 800).map { it to me }
+        storage += snapshot(1, 5, by = owner) to owner
+        open(theirs)
+        storage += SyncChunks.splitFramed(snapshot(2, 40, by = owner), "r1", SyncChunks.ADMIN, 800).map { it to owner }
 
-        h.deliver(room.ephemeralStreamId, StreamConstants.EPH_CONTROL,
-            JSONObject().put("type", "admin_invalidate").put("rev", 2).put("ts", 2_000L), from = me)
+        signal(2)
 
         assertEquals(1, reads.size)
     }
 
     @Test
     fun `a run not on storage yet is read once more, and no more`() {
-        storage += snapshot(1, 5) to me
-        open()
+        storage += snapshot(1, 5, by = owner) to owner
+        open(theirs)
 
-        h.deliver(room.ephemeralStreamId, StreamConstants.EPH_CONTROL,
-            JSONObject().put("type", "admin_invalidate").put("rev", 2).put("ts", 2_000L), from = me)
+        signal(2)
 
         assertEquals(2, reads.size)
         assertEquals(5, manager.hiddenIds.value.size)
@@ -238,11 +243,10 @@ class AdminStateSplitTest {
 
     @Test
     fun `a signal for a rev already held reads nothing`() {
-        storage += snapshot(3, 5) to me
-        open()
+        storage += snapshot(3, 5, by = owner) to owner
+        open(theirs)
 
-        h.deliver(room.ephemeralStreamId, StreamConstants.EPH_CONTROL,
-            JSONObject().put("type", "admin_invalidate").put("rev", 3).put("ts", 3_000L), from = me)
+        signal(3)
 
         assertTrue(reads.isEmpty())
     }

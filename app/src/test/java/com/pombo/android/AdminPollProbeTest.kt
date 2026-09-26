@@ -60,8 +60,11 @@ class AdminPollProbeTest {
 
     @After fun tearDown() = h.stop()
 
+    /** Snapshots are recent, or the owner's open republishes them as nearing their TTL. */
+    private val t0 = System.currentTimeMillis()
+
     private fun snapshot(rev: Int, hidden: Int = 5) = JSONObject()
-        .put("type", "ADMIN_STATE").put("rev", rev).put("ts", 1_000L * rev).put("createdBy", me)
+        .put("type", "ADMIN_STATE").put("rev", rev).put("ts", t0 + rev).put("createdBy", me)
         .put("state", JSONObject()
             .put("bannedMembers", JSONArray())
             .put("hiddenMessageIds", JSONArray((0 until hidden).map { "message-id-%030d".format(it) }))
