@@ -54,6 +54,23 @@ class SyncMergeVectorsTest {
     }
 
     @Test
+    fun `channel records merge field by field as on the web`() {
+        val cases = vectors().getJSONArray("channels")
+        assertTrue(cases.length() > 0)
+        for (i in 0 until cases.length()) {
+            val case = cases.getJSONObject(i)
+            val merged = SyncMerge.mergeState(case.getJSONObject("base"), case.getJSONObject("incoming"))
+            val expected = case.getJSONObject("expected")
+            for (key in listOf("channels", "channelsLeftAt")) {
+                assertTrue(
+                    "${case.getString("what")}: $key was ${merged.opt(key)}, expected ${expected.opt(key)}",
+                    same(merged.opt(key), expected.opt(key))
+                )
+            }
+        }
+    }
+
+    @Test
     fun `sent DMs carry deletions and edits as on the web`() {
         val cases = vectors().getJSONArray("sent")
         assertTrue(cases.length() > 0)

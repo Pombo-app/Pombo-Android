@@ -99,10 +99,11 @@ internal class Moderation(private val manager: ChannelManager) {
                 val keysId = channel.keysStreamId.ifEmpty { StreamConstants.deriveKeysId(messageStreamId) }
                 epochKeys.rotateEpoch(messageStreamId, keysId)
             }
-            override suspend fun covered(messageStreamId: String, addresses: Set<String>) =
+            override suspend fun covered(messageStreamId: String, addresses: Set<String>) {
                 updateStored(messageStreamId) {
                     it.copy(rotatedForNoAccess = (it.rotatedForNoAccess + addresses).distinct())
                 }
+            }
             override fun stillOwned(messageStreamId: String): Boolean =
                 _channels.value.find { it.messageStreamId == messageStreamId }?.let { amOwner(it) } == true
             override fun loadOwed(key: String): List<String> {
@@ -122,13 +123,8 @@ internal class Moderation(private val manager: ChannelManager) {
         _channels.value.filter { it.type == "gated" && amOwner(it) }.map { it.messageStreamId })
 
     /** Change the stored record as it is now, not a copy captured before a slow call. */
-    private fun updateStored(messageStreamId: String, change: (Channel) -> Channel) {
-        val latest = _channels.value.find { it.messageStreamId == messageStreamId } ?: return
-        val updated = change(latest)
-        _channels.value = _channels.value.map { if (it.messageStreamId == messageStreamId) updated else it }
-        manager.saveChannels()
-        if (_current.value?.messageStreamId == messageStreamId) _current.value = updated
-    }
+    private fun updateStored(messageStreamId: String, change: (Channel) -> Channel): Channel? =
+        manager.updateStored(messageStreamId, change)
 
     internal val _pins = MutableStateFlow<List<Pin>>(emptyList())
 
@@ -546,10 +542,8 @@ internal class Moderation(private val manager: ChannelManager) {
             val gate = channel.gateAddress
                 ?: throw IllegalStateException("Gate address unknown (repair pending)")
             bridge.call("gateAllow", JSONObject().put("gate", gate).put("user", addr), 180_000)
-            val updated = channel.copy(members = channel.members + addr)
-            _channels.value = _channels.value.map { if (it.messageStreamId == updated.messageStreamId) updated else it }
-            manager.saveChannels()
-            _current.value = updated
+            val updated = updateStored(channel.messageStreamId) { withMember(it, addr) }
+                ?: withMember(channel, addr)
             answerWaitingRequests(updated)
             return
         }
@@ -572,11 +566,13 @@ internal class Moderation(private val manager: ChannelManager) {
         setPermissionsRetry(keysId, rw)
 
         com.pombo.android.core.GraphApi.clearCache()
-        val updated = channel.copy(members = channel.members + addr)
-        _channels.value = _channels.value.map { if (it.messageStreamId == updated.messageStreamId) updated else it }
-        manager.saveChannels()
-        _current.value = updated
+        updateStored(channel.messageStreamId) { withMember(it, addr) }
     }
+
+    /** [channel] with [addr] among its members, once. */
+    private fun withMember(channel: Channel, addr: String): Channel =
+        if (channel.members.any { it.equals(addr, ignoreCase = true) }) channel
+        else channel.copy(members = channel.members + addr)
 
     /**
      * Revokes all permissions (web: empty permission array = revoke).
@@ -624,10 +620,9 @@ internal class Moderation(private val manager: ChannelManager) {
         setPermissionsRetry(keysId, revoke)
 
         com.pombo.android.core.GraphApi.clearCache()
-        val updated = channel.copy(members = channel.members.filterNot { it.equals(addr, ignoreCase = true) })
-        _channels.value = _channels.value.map { if (it.messageStreamId == updated.messageStreamId) updated else it }
-        manager.saveChannels()
-        _current.value = updated
+        updateStored(channel.messageStreamId) { latest ->
+            latest.copy(members = latest.members.filterNot { it.equals(addr, ignoreCase = true) })
+        }
 
         // Rotate the epoch so the removed member cannot read anything published
         // from here on — they keep what they already read; the rotation protects

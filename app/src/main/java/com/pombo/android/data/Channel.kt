@@ -87,8 +87,31 @@ data class Channel(
      * a lag, so a refresh whose `updatedAt` predates this would revert a rename
      * the admin just made (web: `channel.metaUpdatedAt`).
      */
-    val metaUpdatedAt: Long? = null
+    val metaUpdatedAt: Long? = null,
+    /**
+     * When each field (by its JSON key) last changed on some device. The sync
+     * merges the record field by field on it (web: `channel.fieldTs`).
+     */
+    val fieldTs: Map<String, Long> = emptyMap()
 ) {
+    /**
+     * This record with every field that differs from [previous], the copy
+     * last persisted or imported, stamped [now] (web stampChangedFields). A
+     * record with no such copy (created here) keeps the stamps it has; a stamp
+     * never goes back, whichever copy holds it.
+     */
+    fun stampedAgainst(previous: Channel?, now: Long): Channel {
+        if (previous == null || previous == this) return this
+        val stamps = HashMap(previous.fieldTs)
+        fieldTs.forEach { (key, ts) -> if (ts > (stamps[key] ?: 0L)) stamps[key] = ts }
+        val mine = toJson()
+        val before = previous.toJson()
+        (mine.keys().asSequence() + before.keys().asSequence()).toSet().forEach { key ->
+            if (key != "fieldTs" && mine.opt(key)?.toString() != before.opt(key)?.toString()) stamps[key] = now
+        }
+        return if (stamps == fieldTs) this else copy(fieldTs = stamps)
+    }
+
     fun toJson(): JSONObject = JSONObject()
         .put("peerAddress", peerAddress ?: JSONObject.NULL)
         .put("messageStreamId", messageStreamId)
@@ -124,6 +147,7 @@ data class Channel(
         .put("readOnly", readOnly)
         .put("writeOnly", writeOnly)
         .put("metaUpdatedAt", metaUpdatedAt ?: JSONObject.NULL)
+        .apply { if (fieldTs.isNotEmpty()) put("fieldTs", JSONObject(fieldTs)) }
 
     companion object {
         fun fromJson(o: JSONObject): Channel {
@@ -193,7 +217,12 @@ data class Channel(
                 readOnly = o.optBoolean("readOnly", false),
                 writeOnly = o.optBoolean("writeOnly", false),
                 peerAddress = if (o.isNull("peerAddress")) null else o.optString("peerAddress").ifEmpty { null },
-                metaUpdatedAt = if (o.isNull("metaUpdatedAt")) null else o.optLong("metaUpdatedAt")
+                metaUpdatedAt = if (o.isNull("metaUpdatedAt")) null else o.optLong("metaUpdatedAt"),
+                fieldTs = o.optJSONObject("fieldTs")?.let { s ->
+                    s.keys().asSequence()
+                        .mapNotNull { key -> (s.opt(key) as? Number)?.let { key to it.toLong() } }
+                        .toMap()
+                } ?: emptyMap()
             )
         }
     }
