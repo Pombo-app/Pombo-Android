@@ -77,8 +77,11 @@ class AdminStateSplitTest {
 
     private fun open() {
         manager.openChannel(streamId)
+        println("DIAG test open: reads=$reads current=${manager._current.value?.adminStreamId} gen=${manager.switchGeneration} hidden=${manager.hiddenIds.value.size} [${Thread.currentThread().name}]")
         reads.clear()
     }
+
+    private fun state() = "reads=$reads hidden=${manager.hiddenIds.value.size} current=${manager._current.value?.adminStreamId} gen=${manager.switchGeneration}"
 
     @Test
     fun `a snapshot that fits goes out whole, and rides the signal`() {
@@ -163,11 +166,13 @@ class AdminStateSplitTest {
         open()
         storage += SyncChunks.splitFramed(snapshot(2, 40), "r1", SyncChunks.ADMIN, 800).map { it to me }
 
+        println("DIAG before deliver: ${state()}")
         h.deliver(room.ephemeralStreamId, StreamConstants.EPH_CONTROL,
             JSONObject().put("type", "admin_invalidate").put("rev", 2).put("ts", 2_000L), from = me)
+        println("DIAG after deliver: ${state()}")
 
-        assertTrue(reads.isNotEmpty())
-        assertEquals(40, manager.hiddenIds.value.size)
+        assertTrue(state(), reads.isNotEmpty())
+        assertEquals(state(), 40, manager.hiddenIds.value.size)
     }
 
     @Test
@@ -218,10 +223,12 @@ class AdminStateSplitTest {
         open()
         storage += SyncChunks.splitFramed(snapshot(2, 40), "r1", SyncChunks.ADMIN, 800).map { it to me }
 
+        println("DIAG before deliver: ${state()}")
         h.deliver(room.ephemeralStreamId, StreamConstants.EPH_CONTROL,
             JSONObject().put("type", "admin_invalidate").put("rev", 2).put("ts", 2_000L), from = me)
+        println("DIAG after deliver: ${state()}")
 
-        assertEquals(1, reads.size)
+        assertEquals(state(), 1, reads.size)
     }
 
     @Test
@@ -229,11 +236,13 @@ class AdminStateSplitTest {
         storage += snapshot(1, 5) to me
         open()
 
+        println("DIAG before deliver: ${state()}")
         h.deliver(room.ephemeralStreamId, StreamConstants.EPH_CONTROL,
             JSONObject().put("type", "admin_invalidate").put("rev", 2).put("ts", 2_000L), from = me)
+        println("DIAG after deliver: ${state()}")
 
-        assertEquals(2, reads.size)
-        assertEquals(5, manager.hiddenIds.value.size)
+        assertEquals(state(), 2, reads.size)
+        assertEquals(state(), 5, manager.hiddenIds.value.size)
     }
 
     @Test

@@ -121,6 +121,11 @@ tasks.withType<Test>().configureEach {
     inputs.dir("src/main/assets")
         .withPropertyName("bridgeAssets")
         .withPathSensitivity(PathSensitivity.RELATIVE)
+    testLogging {
+        events("started", "failed")
+        showStandardStreams = true
+        exceptionFormat = org.gradle.api.tasks.testing.logging.TestExceptionFormat.FULL
+    }
 }
 
 dependencies {

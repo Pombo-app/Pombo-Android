@@ -878,13 +878,15 @@ internal class Moderation(private val manager: ChannelManager) {
     internal suspend fun loadAdminState(channel: Channel, generation: Int) {
         seedFloor(channel)
         try {
-            val entries = readAdminEntries(channel) ?: return
-            if (!stillCurrent(generation)) return
+            val entries = readAdminEntries(channel)
+            if (entries == null) { println("DIAG loadAdminState: entries null [${Thread.currentThread().name}]"); return }
+            if (!stillCurrent(generation)) { println("DIAG loadAdminState: stale gen=$generation now=${manager.switchGeneration}"); return }
             for ((content, meta) in entries) applyAdminMessage(channel, content, meta, generation)
             // Even an empty history is an answer: the stream holds no
             // snapshot, so rev bookkeeping may start from zero.
             adminLoaded.add(channel.adminStreamId)
-        } catch (e: Exception) { /* no admin history */ }
+            println("DIAG loadAdminState: applied ${entries.size} entries, rev=${adminRevs[channel.adminStreamId]} hidden=${snapHidden.size} [${Thread.currentThread().name}]")
+        } catch (e: Exception) { println("DIAG loadAdminState: threw $e"); e.printStackTrace(System.out) }
     }
 
     /**
@@ -1491,19 +1493,25 @@ internal class Moderation(private val manager: ChannelManager) {
      * are pending share them.
      */
     internal fun readAfterSignal(channel: Channel, data: JSONObject, sender: String?, generation: Int) {
-        if (channel.adminStreamId != _current.value?.adminStreamId) return
+        println("DIAG readAfterSignal: in gen=$generation now=${manager.switchGeneration} channel.admin=${channel.adminStreamId} current.admin=${_current.value?.adminStreamId} [${Thread.currentThread().name}]")
+        if (channel.adminStreamId != _current.value?.adminStreamId) { println("DIAG readAfterSignal: RETURN adminStreamId mismatch"); return }
         val owner = channelOwner(channel)
-        if (owner != null && sender != null && sender.lowercase() != owner) return
+        if (owner != null && sender != null && sender.lowercase() != owner) { println("DIAG readAfterSignal: RETURN owner=$owner sender=$sender"); return }
         val rev = data.optInt("rev", 0)
-        if (rev <= (adminRevs[channel.adminStreamId] ?: 0)) return
-        if (signalRead?.isActive == true) return
+        if (rev <= (adminRevs[channel.adminStreamId] ?: 0)) { println("DIAG readAfterSignal: RETURN rev=$rev held=${adminRevs[channel.adminStreamId]}"); return }
+        if (signalRead?.isActive == true) { println("DIAG readAfterSignal: RETURN signalRead active"); return }
         signalRead = scope.launch {
             for (wait in SIGNAL_READ_DELAYS_MS) {
                 manager.adminConfirmSleep(wait)
-                if (!stillCurrent(generation) || (adminRevs[channel.adminStreamId] ?: 0) >= rev) return@launch
+                if (!stillCurrent(generation) || (adminRevs[channel.adminStreamId] ?: 0) >= rev) {
+                    println("DIAG readAfterSignal: STOP wait=$wait stillCurrent=${stillCurrent(generation)} gen=$generation now=${manager.switchGeneration} held=${adminRevs[channel.adminStreamId]} rev=$rev")
+                    return@launch
+                }
+                println("DIAG readAfterSignal: read wait=$wait [${Thread.currentThread().name}]")
                 loadAdminState(channel, generation)
             }
         }
+        println("DIAG readAfterSignal: launched, active=${signalRead?.isActive}")
     }
     private var signalRead: Job? = null
 
