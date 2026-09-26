@@ -70,6 +70,26 @@ class ChannelFieldStampsTest {
     }
 
     @Test
+    fun `a save asks the sync for a push only when a record changed`() {
+        var signals = 0
+        h.manager.onLocalStateChanged = { signals++ }
+
+        h.manager.saveChannels()
+        assertEquals(0, signals)
+
+        h.manager._channels.value = h.manager._channels.value.map { it.copy(name = "Renamed") }
+        h.manager.saveChannels()
+        assertEquals(1, signals)
+
+        val created = ChannelManagerHarness.channel("0x00000000000000000000000000000000000000a1/beef-1")
+        h.manager._channels.value = h.manager._channels.value + created
+        h.manager.saveChannels()
+        h.manager._channels.value = h.manager._channels.value - created
+        h.manager.saveChannels()
+        assertEquals(3, signals)
+    }
+
+    @Test
     fun `a record created here carries no stamps`() {
         val created = ChannelManagerHarness.channel("0x00000000000000000000000000000000000000a1/beef-1")
         h.manager._channels.value = h.manager._channels.value + created

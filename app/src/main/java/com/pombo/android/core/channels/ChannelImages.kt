@@ -382,7 +382,6 @@ internal class ChannelImages(private val manager: ChannelManager) {
             com.pombo.android.core.ImageBlobStore.toDataUrl(enc.bytes, enc.mime),
             synced = false
         )
-        onLocalStateChanged()
 
         // Unsigned manifest (D6) — identity comes from the proof/envelope.
         val manifest = JSONObject()
@@ -627,7 +626,6 @@ internal class ChannelImages(private val manager: ChannelManager) {
                     com.pombo.android.core.ImageBlobStore.toDataUrl(assembled, p.finalMime),
                     synced = false
                 )
-                onLocalStateChanged()
             }
         }
     }

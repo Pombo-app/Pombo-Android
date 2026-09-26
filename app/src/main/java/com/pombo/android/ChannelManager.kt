@@ -5958,8 +5958,9 @@ class ChannelManager(
         // record is the only copy (web addSentReaction), and it is a sync
         // slice — mark state dirty so other devices receive it.
         if (channel.type == "dm" || channel.writeOnly) {
-            sentReactionsStore?.record(channel.messageStreamId, messageId, emoji, me, add)
-            onLocalStateChanged()
+            if (sentReactionsStore?.record(channel.messageStreamId, messageId, emoji, me, add) == true) {
+                onLocalStateChanged()
+            }
         }
     }
 
@@ -7223,9 +7224,10 @@ class ChannelManager(
     internal fun saveChannels() {
         val now = System.currentTimeMillis()
         val stamped = _channels.value.map { it.stampedAgainst(persisted[it.messageStreamId], now) }
+        val changed = stamped.size != persisted.size || stamped.any { it != persisted[it.messageStreamId] }
         _channels.value = stamped
         persist(stamped)
-        onLocalStateChanged()
+        if (changed) onLocalStateChanged()
     }
 
     /**
