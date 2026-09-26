@@ -135,7 +135,8 @@ object SyncMerge {
      * LWW-element-set over channels. Membership is decided by comparing the
      * join timestamp against the leave tombstone; the most recent action wins
      * and a tie goes to Join. Snapshot replacement would let an older remote
-     * snapshot delete a channel this device just joined.
+     * snapshot delete a channel this device just joined. Two copies of the
+     * same channel merge field by field ([mergeChannelRecord]).
      */
     private fun mergeChannels(
         baseChannels: JSONArray?,
@@ -170,7 +171,11 @@ object SyncMerge {
                 val id = c.optStringOrNull("messageStreamId") ?: continue
                 noteJoin(id, c)
                 val existing = byId[id]
-                if (existing == null || replaces(c, existing)) byId[id] = c
+                byId[id] = when {
+                    existing == null -> c
+                    replaces(c, existing) -> mergeChannelRecord(c, existing)
+                    else -> mergeChannelRecord(existing, c)
+                }
             }
         }
 
@@ -185,14 +190,53 @@ object SyncMerge {
         return channels to leftAt
     }
 
+    private fun fieldStamp(record: JSONObject, key: String): Long =
+        (record.optJSONObject("fieldTs")?.opt(key) as? Number)?.toLong() ?: 0L
+
+    /**
+     * One channel record from two copies of it (web mergeChannelRecord). Each
+     * field comes from the copy whose `fieldTs` stamped it later; a field
+     * neither copy stamped, or both stamped at the same time, comes from
+     * [preferred], and a field only one copy carries is kept. The stamps join,
+     * the latest per field, so a client that drops them cannot take them from
+     * the others. Returns [preferred] itself when nothing comes from [other].
+     */
+    fun mergeChannelRecord(preferred: JSONObject, other: JSONObject): JSONObject {
+        val merged = JSONObject()
+        var tookOther = false
+        val keys = LinkedHashSet<String>()
+        preferred.keys().forEach { keys.add(it) }
+        other.keys().forEach { keys.add(it) }
+        for (key in keys) {
+            if (key == "fieldTs") continue
+            val fromOther = other.has(key) &&
+                (!preferred.has(key) || fieldStamp(other, key) > fieldStamp(preferred, key))
+            merged.put(key, if (fromOther) other.get(key) else preferred.get(key))
+            if (fromOther) tookOther = true
+        }
+        if (!tookOther) return preferred
+        val sources = listOfNotNull(preferred.optJSONObject("fieldTs"), other.optJSONObject("fieldTs"))
+        if (sources.isNotEmpty()) {
+            val stamps = JSONObject()
+            sources.forEach { src ->
+                src.keys().forEach { key ->
+                    val ts = (src.opt(key) as? Number)?.toLong() ?: return@forEach
+                    if (ts > stamps.optLong(key, 0L)) stamps.put(key, ts)
+                }
+            }
+            merged.put("fieldTs", stamps)
+        }
+        return merged
+    }
+
     private fun joinTs(channel: JSONObject): Long {
         val joined = channel.optLong("joinedAt", 0L)
         return if (joined > 0L) joined else channel.optLong("createdAt", 0L)
     }
 
-    /** Incoming wins ties: the newer snapshot carries fresher metadata. An
-     *  entry with no joinedAt of its own is never a newer join than one that
-     *  has it, but its time still counts as a join against a leave tombstone. */
+    /** For the fields no stamp decides: incoming wins ties. An entry with no
+     *  joinedAt of its own is never a newer join than one that has it, but its
+     *  time still counts as a join against a leave tombstone. */
     private fun replaces(incoming: JSONObject, existing: JSONObject): Boolean {
         val incomingJoined = incoming.optLong("joinedAt", 0L) > 0L
         val existingJoined = existing.optLong("joinedAt", 0L) > 0L

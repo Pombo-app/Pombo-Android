@@ -777,10 +777,23 @@ class ChannelManager(
     // the store on the next save.
     internal val _channels = MutableStateFlow(store.load().distinctBy { it.messageStreamId })
 
+    /**
+     * Each record as last persisted or imported: what [saveChannels] compares
+     * against to stamp the fields that changed here.
+     */
+    @Volatile private var persisted: Map<String, Channel> = _channels.value.associateBy { it.messageStreamId }
+
+    /** Writes the list without stamping it: loads, imports and derived repairs. */
+    private fun persist(channels: List<Channel>) {
+        store.save(channels)
+        persisted = channels.associateBy { it.messageStreamId }
+    }
+
     /** Re-reads the list after the storage scope changes (account switch/guest). */
     fun reloadChannels() {
         scope.launch { channelSwitchMutex.withLock { closeCurrentInternal(); clearReopenSnapshots() } }
         _channels.value = store.load().distinctBy { it.messageStreamId }
+        persisted = _channels.value.associateBy { it.messageStreamId }
         _channelOrder.value = store.loadOrder()
     }
 
@@ -4687,7 +4700,7 @@ class ChannelManager(
             }
             // Local only: these ids derive from the stream id, and the web never stores
             // keysStreamId, so a sync push here would follow each of its pulls.
-            store.save(_channels.value)
+            persist(_channels.value)
         }
         return healed
     }
@@ -5301,7 +5314,7 @@ class ChannelManager(
     /** Replaces the channel list wholesale after a sync merge. */
     fun replaceChannels(channels: List<Channel>) {
         _channels.value = channels
-        store.save(channels)
+        persist(channels)
         reconcileAllGateAuthority()
     }
 
@@ -7183,9 +7196,15 @@ class ChannelManager(
         saveChannels()
     }
 
-    /** Every local change goes through here; a sync import must not, or each pull is pushed back out. */
+    /**
+     * Every local change goes through here; a sync import must not, or each
+     * pull is pushed back out, and its fields would be stamped as changed here.
+     */
     internal fun saveChannels() {
-        store.save(_channels.value)
+        val now = System.currentTimeMillis()
+        val stamped = _channels.value.map { it.stampedAgainst(persisted[it.messageStreamId], now) }
+        _channels.value = stamped
+        persist(stamped)
         onLocalStateChanged()
     }
 
