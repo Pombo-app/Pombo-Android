@@ -421,7 +421,10 @@ class ChannelManager(
                     val channel = _current.value?.takeIf { it.messageStreamId == messageStreamId }
                         ?: return@withContext
                     Log.i(TAG, "refreshing history")
-                    loadHistory(channel, switchGeneration)
+                    val generation = switchGeneration
+                    if (!loadHistory(channel, generation) && _historyRead.value == HistoryRead.OK) {
+                        retryOpenReads(channel, generation)
+                    }
                     // The -3 artifacts fetched at open were epoch-sealed and
                     // unreadable until this key arrived — pins/moderation and a
                     // hidden channel's image need their own re-pull (the admin
@@ -4873,7 +4876,19 @@ class ChannelManager(
                 }
                 val loads = launch {
                     listOf(
-                        launch { if (!loadHistory(channel, generation)) retryOpenReads(channel, generation) },
+                        launch {
+                            // The gate below lets go at its safety net; the
+                            // empty state waits for this read instead.
+                            if (stillCurrent(generation)) _historyRead.value = HistoryRead.READING
+                            val readAll = try {
+                                loadHistory(channel, generation)
+                            } finally {
+                                if (stillCurrent(generation) && _historyRead.value == HistoryRead.READING) {
+                                    _historyRead.value = HistoryRead.OK
+                                }
+                            }
+                            if (!readAll) retryOpenReads(channel, generation)
+                        },
                         launch { loadAdminState(channel, generation) }
                     ).joinAll()
                 }
@@ -5002,6 +5017,8 @@ class ChannelManager(
             _loadingHistory.value = false
             _historyError.value = null
             _historyRead.value = HistoryRead.OK
+            _overridesOwed.value = false
+            resetPagingBackoff()
             // Both are per-channel verdicts — carrying them across a switch
             // shows the previous room's key/subscription state on this one.
             _waitingForKeys.value = false
@@ -5101,6 +5118,7 @@ class ChannelManager(
         adminPollJob?.cancel(); adminPollJob = null
         memberCatchUpJob?.cancel(); memberCatchUpJob = null
         historyRetryJob?.cancel(); historyRetryJob = null
+        resetPagingBackoff()
         _current.value = null
         _isPreview.value = false
         unsubscribeAll(channel)
@@ -5428,19 +5446,26 @@ class ChannelManager(
     private class HistoryPage(
         val entries: JSONArray, val contents: List<Any?>, val readError: HistoryError? = null,
         /** The node broke the read off without answering it: what came is applied, the read is owed. */
-        val failed: Boolean = false
+        val failed: Boolean = false,
+        /** The drain stopped before the page ended, by its budget or a break, with no refusal to explain it. */
+        val cut: Boolean = false
     )
 
     private val HistoryPage?.answered get() = this != null && !failed
+    /** Overrides owe every row of their page: one cut by its budget leaves edits and deletions unread. */
+    private val HistoryPage?.whole get() = answered && this?.cut != true
 
     private val _historyError = MutableStateFlow<HistoryError?>(null)
     /** The refusal behind an empty history, for the empty state to explain. */
     val historyError: StateFlow<HistoryError?> = _historyError.asStateFlow()
 
-    /** Whether the open channel's reads came back, are being read again, or gave up. */
-    enum class HistoryRead { OK, RETRYING, FAILED }
+    /** Whether the open channel's reads came back, are still out, are being read again, or gave up. */
+    enum class HistoryRead { OK, READING, RETRYING, FAILED }
     private val _historyRead = MutableStateFlow(HistoryRead.OK)
     val historyRead: StateFlow<HistoryRead> = _historyRead.asStateFlow()
+    private val _overridesOwed = MutableStateFlow(false)
+    /** The open channel's edits and deletions did not come back with its messages. */
+    val overridesOwed: StateFlow<Boolean> = _overridesOwed.asStateFlow()
     private var historyRetryJob: Job? = null
     @Volatile private var historyRetryWake: CompletableDeferred<Unit>? = null
     internal var historyRetryDelaysMs: LongArray = HISTORY_RETRY_DELAYS_MS
@@ -5545,8 +5570,9 @@ class ChannelManager(
             }
             // A 4xx is the node's answer about this read; any other break
             // (network, 5xx, a page refused for its storedAt) left it unread.
-            val failed = res.optInt("errors", 0) > 0 && (readError == null || readError.status !in 400..499)
-            HistoryPage(arr, contents, readError, failed)
+            val refused = readError != null && readError.status in 400..499
+            val failed = res.optInt("errors", 0) > 0 && !refused
+            HistoryPage(arr, contents, readError, failed, cut = res.optBoolean("partial", false) && !refused)
         }
     } catch (e: Exception) {
         Log.w(TAG, "history ${channel.name} P$partition: read failed: ${e.message}")
@@ -5593,8 +5619,10 @@ class ChannelManager(
                     onNoStorage = { noStorage += "content" }
                 )
             }
+            // The content's ceiling: nothing is applied before both pages are
+            // back, so this only lengthens an open whose node is slow on P1 alone.
             val o = async {
-                fetchHistoryPage(channel, StreamConstants.P_CONTROL, 50, 20_000, 30_000,
+                fetchHistoryPage(channel, StreamConstants.P_CONTROL, 50, 45_000, 60_000,
                     onNoStorage = { noStorage += "overrides" })
             }
             // Reactions moved to the -5 — without this read a reopened channel
@@ -5693,14 +5721,51 @@ class ChannelManager(
         // without a `messages` array, which skipped this sweep and left any
         // override that had arrived before its target parked forever.
         applyPendingOverrides()
-        return (content.answered || "content" in noStorage) &&
-            (overrides.answered || "overrides" in noStorage) && sideReadsOk
+        val overridesRead = overrides.whole || "overrides" in noStorage
+        _overridesOwed.value = !overridesRead
+        return (content.answered || "content" in noStorage) && overridesRead && sideReadsOk
     }
 
     /** Moves the pagination cursor back. Chunks count too — they carry no id. */
     private fun trackOldest(meta: JSONObject) {
         val ts = meta.optLong("timestamp", 0L)
         if (ts > 0L && (oldestTimestamp == 0L || ts < oldestTimestamp)) oldestTimestamp = ts
+    }
+
+    private var pagingFailures = 0
+    private var pagingRetryAt = 0L
+    private var pagingNudgeJob: Job? = null
+    internal var pagingRetryDelaysMs: LongArray = HISTORY_RETRY_DELAYS_MS
+    private val _pagingNudge = MutableStateFlow(0)
+    /** Ticks when an older page that came back incomplete may be asked for again. */
+    val pagingNudge: StateFlow<Int> = _pagingNudge.asStateFlow()
+
+    private fun resetPagingBackoff() {
+        pagingNudgeJob?.cancel(); pagingNudgeJob = null
+        pagingFailures = 0
+        pagingRetryAt = 0L
+    }
+
+    /** Asks for the page again after a backoff; past the last one, only the user's scroll does. */
+    private fun backOffPaging(generation: Int) {
+        val wait = pagingRetryDelaysMs[minOf(pagingFailures, pagingRetryDelaysMs.size - 1)]
+        pagingFailures++
+        pagingRetryAt = System.currentTimeMillis() + wait
+        pagingNudgeJob?.cancel(); pagingNudgeJob = null
+        if (pagingFailures > pagingRetryDelaysMs.size) return
+        pagingNudgeJob = scope.launch {
+            delay(wait)
+            if (stillCurrent(generation)) _pagingNudge.value++
+        }
+    }
+
+    /** Whether a range page is the node's answer: a refusal is; a break is not, nor a cut where every row counts. */
+    private fun rangeAnswered(page: JSONObject?, cutCounts: Boolean): Boolean {
+        page ?: return false
+        val status = readErrorOf(page)?.status
+        if (status != null && status in 400..499) return true
+        if (page.optInt("errors", 0) > 0) return false
+        return !cutCounts || !page.optBoolean("partial", false)
     }
 
     /**
@@ -5716,6 +5781,7 @@ class ChannelManager(
         // A page that failed keeps paging open, so an empty screen would ask
         // again every frame; the open's reads are the retry's until they are back.
         if (_historyRead.value != HistoryRead.OK) return 0
+        if (System.currentTimeMillis() < pagingRetryAt) return 0
 
         // Cursor of Date.now() when history held only reactions/chunks (web parity).
         val before = if (oldestTimestamp > 0L) oldestTimestamp else System.currentTimeMillis()
@@ -5757,6 +5823,15 @@ class ChannelManager(
 
             // Discard if the user switched channels while we were fetching.
             if (!stillCurrent(generationAtStart)) return 0
+            // Taken whole or not at all: content without its overrides paints
+            // edits and deletions undone, and the cursor would move past
+            // overrides that nothing reads again.
+            if (!rangeAnswered(content, cutCounts = false) || !rangeAnswered(overrides, cutCounts = true)) {
+                Log.w(TAG, "loadMore ${channel.name}: page came back incomplete, asking again later")
+                backOffPaging(generationAtStart)
+                return 0
+            }
+            resetPagingBackoff()
 
             // Content first, then overrides — an edit/delete needs its target
             // present, so each partition gets its own batch rather than one

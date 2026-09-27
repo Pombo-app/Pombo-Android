@@ -1216,6 +1216,8 @@ class AppViewModel(app: Application) : AndroidViewModel(app), PomboBridge.Listen
     val hasMoreHistory get() = manager.hasMoreHistory
     val historyError get() = manager.historyError
     val historyRead get() = manager.historyRead
+    val overridesOwed get() = manager.overridesOwed
+    val pagingNudge get() = manager.pagingNudge
     val waitingForKeys get() = manager.waitingForKeys
     val loadingHistory get() = manager.loadingHistory
     val isPreview get() = manager.isPreview
