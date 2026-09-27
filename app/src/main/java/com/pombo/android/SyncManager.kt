@@ -92,6 +92,13 @@ class SyncManager(
     private var autoPushJob: Job? = null
     private var autoPushRetries = 0
     private var pushQueued = false
+    /**
+     * An auto push that has started publishing is never cancelled: a run cut
+     * between its chunks stays on storage and never joins.
+     */
+    @Volatile private var autoPushPublishing = false
+    /** The delay a change asked for while the auto push was publishing. */
+    @Volatile private var queuedDelayMs: Long? = null
     /** Bumped on every change; a push clears `dirty` only if none came after its export. */
     private val changeSeq = java.util.concurrent.atomic.AtomicLong()
     /**
@@ -114,25 +121,43 @@ class SyncManager(
         changeSeq.incrementAndGet()
         store.dirty = true
         if (syncMode() == com.pombo.android.data.SyncMode.MANUAL_ONLY) return
+        if (autoPushPublishing) {
+            queuedDelayMs = delayMs
+            return
+        }
         autoPushJob?.cancel()
         autoPushJob = scope.launch {
             delay(delayMs)
-            try {
+            autoPushPublishing = true
+            val failed = try {
                 if (pushSync() != null) autoPushRetries = 0
+                false
             } catch (e: Exception) {
+                true
+            } finally {
+                autoPushPublishing = false
+            }
+            val queued = queuedDelayMs
+            queuedDelayMs = null
+            if (failed) {
                 autoPushRetries++
                 // Web: exponential backoff capped at five minutes.
                 val retry = minOf(autoPushDelayMs * (1L shl autoPushRetries), 300_000L)
                 scheduleAutoPush(retry)
+            } else if (queued != null) {
+                scheduleAutoPush(queued)
             }
         }
     }
 
     fun cancelAutoPush() {
-        autoPushJob?.cancel()
-        autoPushJob = null
+        if (!autoPushPublishing) {
+            autoPushJob?.cancel()
+            autoPushJob = null
+        }
         autoPushRetries = 0
         pushQueued = false
+        queuedDelayMs = null
     }
 
     /** Publishes the local snapshot. Returns the payload timestamp, or null if skipped. */
@@ -435,6 +460,10 @@ class SyncManager(
         // Backgrounding is still an unprompted publish. `dirty` survives, so the
         // next manual run carries the change.
         if (syncMode() == com.pombo.android.data.SyncMode.MANUAL_ONLY) return
+        if (autoPushPublishing) {
+            queuedDelayMs = 0L
+            return
+        }
         cancelAutoPush()
         scope.launch {
             try { pushSync() } catch (e: Exception) { /* dirty survives for the next run */ }
