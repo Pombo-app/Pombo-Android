@@ -128,6 +128,7 @@ class SyncManager(
         autoPushJob?.cancel()
         autoPushJob = scope.launch {
             delay(delayMs)
+            val owner = myAddress()?.lowercase()
             autoPushPublishing = true
             val failed = try {
                 if (pushSync() != null) autoPushRetries = 0
@@ -139,6 +140,7 @@ class SyncManager(
             }
             val queued = queuedDelayMs
             queuedDelayMs = null
+            if (owner == null || accountChanged(owner)) return@launch
             if (failed) {
                 autoPushRetries++
                 // Web: exponential backoff capped at five minutes.
@@ -164,12 +166,15 @@ class SyncManager(
     suspend fun pushSync(): Long? {
         if (isGuest()) return null
         if (_syncing.value) { pushQueued = true; return null }
-        val inbox = inboxId() ?: return null
+        val me = myAddress()?.lowercase() ?: return null
+        val key = myPrivateKey() ?: return null
+        val inbox = "$me/Pombo-DM-1"
         if (!inboxExists()) return null
 
         _syncing.value = true
         try {
             val seq = changeSeq.get()
+            if (accountChanged(me)) return null
             val data = exportLocal()
             val hash = stateHash(data)
             if (isConfirmedState(hash) || hash == pendingHash) {
@@ -196,13 +201,15 @@ class SyncManager(
             publishing = true
             try {
                 for (message in messages) {
-                    sealPublishToSelf(inbox, StreamConstants.P_SYNC, message)?.let {
+                    if (accountChanged(me)) return null
+                    sealPublishToSelf(inbox, StreamConstants.P_SYNC, message, key, me).let {
                         rows.add(rowKey(it.optLong("timestamp"), it.optString("publisherId")))
                     }
                 }
             } finally {
                 publishing = false
             }
+            if (accountChanged(me)) return null
             noteOwnRows(rows)
             confirmPush(inbox, hash, rows)
 
@@ -217,6 +224,13 @@ class SyncManager(
             if (pushQueued) { pushQueued = false; scheduleAutoPush(0L) }
         }
     }
+
+    /**
+     * A push started for one account stops when another takes over: what is
+     * left of it, and the store it would write to, are no longer that account's.
+     */
+    private fun accountChanged(address: String): Boolean =
+        (myAddress()?.lowercase() != address).also { if (it) Log.d(TAG, "push stopped: the account changed") }
 
     private fun stateHash(data: JSONObject): String =
         java.security.MessageDigest.getInstance("SHA-256")
@@ -477,20 +491,21 @@ class SyncManager(
     /** Publishes locally-held images that no device has synced yet. */
     suspend fun pushImageBlobs() {
         if (isGuest() || _syncing.value) return
-        val inbox = inboxId() ?: return
+        val me = myAddress()?.lowercase() ?: return
+        val key = myPrivateKey() ?: return
+        val inbox = "$me/Pombo-DM-1"
         val pending = blobStore.unsynced()
         if (pending.isEmpty()) return
         if (!inboxExists()) return
 
-        if (myAddress() == null) return
-
         // Sealed-to-self v2 under a throwaway publisher, one seal per message.
         suspend fun publish(payload: JSONObject) {
-            sealPublishToSelf(inbox, StreamConstants.P_SYNC_BLOBS, payload)
+            sealPublishToSelf(inbox, StreamConstants.P_SYNC_BLOBS, payload, key, me)
         }
 
         var published = 0
         for (record in pending) {
+            if (accountChanged(me)) break
             val data = blobStore.load(record.imageId)
             if (data.isNullOrEmpty()) {
                 // The blob is gone but the ledger still lists it; drop the entry
@@ -679,12 +694,16 @@ class SyncManager(
      * WebView; the throwaway key crosses because it is also the publishing
      * identity (bridge publishAs).
      */
-    private suspend fun sealPublishToSelf(streamId: String, partition: Int, payload: JSONObject): JSONObject? {
-        val myPk = myPrivateKey() ?: return null
-        val me = myAddress()?.lowercase() ?: return null
-        val recipientPub = com.pombo.android.core.EthereumSigner.compressedPublicKey(myPk)
+    private suspend fun sealPublishToSelf(
+        streamId: String,
+        partition: Int,
+        payload: JSONObject,
+        privateKey: String,
+        address: String
+    ): JSONObject {
+        val recipientPub = com.pombo.android.core.EthereumSigner.compressedPublicKey(privateKey)
         val (envelope, ephemeralPk) = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.Default) {
-            com.pombo.android.core.SealedSenderCrypto.seal(payload, myPk, me, recipientPub)
+            com.pombo.android.core.SealedSenderCrypto.seal(payload, privateKey, address, recipientPub)
         }
         // The ceiling applies to the envelope, not the payload: JSON-escaping
         // the slice and base64 of the ciphertext both inflate it. Measured, a

@@ -7,6 +7,7 @@ import com.pombo.android.data.SyncStore
 import io.mockk.coEvery
 import io.mockk.every
 import io.mockk.mockk
+import io.mockk.verify
 import java.util.concurrent.CopyOnWriteArrayList
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -36,6 +37,8 @@ class SyncManagerLightTest {
     @Volatile private var resendMs = 0L
     @Volatile private var onPublish: () -> Unit = {}
     @Volatile private var export = JSONObject("""{"channels":[],"username":"Bob","sliceTs":{"username":1}}""")
+    @Volatile private var address = ME
+    @Volatile private var key = PK
     private var mode = SyncMode.AUTOMATIC
     private val calls = CopyOnWriteArrayList<String>()
     private val left = CopyOnWriteArrayList<Int>()
@@ -85,7 +88,7 @@ class SyncManagerLightTest {
         }
         sync = SyncManager(
             bridge, scope, store, blobStore,
-            myAddress = { ME }, myPrivateKey = { PK }, isGuest = { false },
+            myAddress = { address }, myPrivateKey = { key }, isGuest = { false },
             exportLocal = { JSONObject(export.toString()) },
             importMerged = {}, syncMode = { mode },
             checkIntervalMs = 50L, confirmAtMs = longArrayOf(10L, 20L, 30L, 40L), blobLeaveAfterMs = 10L
@@ -193,6 +196,56 @@ class SyncManagerLightTest {
     }
 
     @Test
+    fun `an account switch during a push stops it before the next chunk and leaves the store alone`() {
+        rows = JSONArray().put(row(5000, "0xeph"))
+        export = bigState("first")
+        val inFlight = kotlinx.coroutines.CompletableDeferred<Unit>()
+        val published = java.util.concurrent.atomic.AtomicInteger()
+        coEvery { bridge.call("publishAs", any(), any()) } coAnswers {
+            if (published.incrementAndGet() == 2) inFlight.await()
+            JSONObject().put("ok", true).put("timestamp", 5000L).put("publisherId", "0xEph")
+        }
+
+        sync.scheduleAutoPush(10L)
+        waitFor { published.get() == 2 }
+        address = OTHER
+        key = OTHER_PK
+        inFlight.complete(Unit)
+        waitFor { !sync.syncing.value }
+
+        assertEquals(2, published.get())
+        assertTrue(dirty)
+        assertNull(confirmedHash)
+        verify(exactly = 0) { store.recordApplied(any()) }
+        verify(exactly = 0) { store.lastSyncTs = any() }
+    }
+
+    @Test
+    fun `a push that fails because the account switched is not retried for the new account`() {
+        rows = JSONArray().put(row(5000, "0xeph"))
+        export = bigState("first")
+        val inFlight = kotlinx.coroutines.CompletableDeferred<Unit>()
+        val published = java.util.concurrent.atomic.AtomicInteger()
+        coEvery { bridge.call("publishAs", any(), any()) } coAnswers {
+            if (published.incrementAndGet() == 2) {
+                inFlight.await()
+                throw IllegalStateException("bridge reloaded")
+            }
+            JSONObject().put("ok", true).put("timestamp", 5000L).put("publisherId", "0xEph")
+        }
+
+        sync.scheduleAutoPush(10L)
+        waitFor { published.get() == 2 }
+        address = OTHER
+        key = OTHER_PK
+        inFlight.complete(Unit)
+        waitFor { !sync.syncing.value }
+
+        verify(exactly = 1) { store.dirty = true }
+        assertEquals(2, published.get())
+    }
+
+    @Test
     fun `an unconfirmed push leaves too and its state is sent again`() = runBlocking {
         rows = JSONArray()
         sync.pushSync()
@@ -273,5 +326,7 @@ class SyncManagerLightTest {
     private companion object {
         const val PK = "0x59c6995e998f97a5a0044966f0945389dc9e86dae88c7a8412f4603b6b78690d"
         const val ME = "0x70997970c51812dc3a010c7d01b50e0d17dc79c8"
+        const val OTHER_PK = "0x5de4111afa1a4b94908f83103eb1f1706367c2e68ca870fc3fb9a804cdab365a"
+        const val OTHER = "0x3c44cdddb6a900fa2b585dd299e03d12fa4293bc"
     }
 }
