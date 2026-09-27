@@ -5611,6 +5611,9 @@ class ChannelManager(
         var moderationPage: HistoryPage? = null
         var sideReadsOk = true
         val noStorage = java.util.Collections.synchronizedSet(HashSet<String>())
+        // Every page of the group has the content's ceiling: nothing is applied
+        // before all are back, so this only lengthens an open whose node is
+        // slow on one page alone.
         val (content, overrides) = coroutineScope {
             val c = async {
                 fetchHistoryPage(
@@ -5619,8 +5622,6 @@ class ChannelManager(
                     onNoStorage = { noStorage += "content" }
                 )
             }
-            // The content's ceiling: nothing is applied before both pages are
-            // back, so this only lengthens an open whose node is slow on P1 alone.
             val o = async {
                 fetchHistoryPage(channel, StreamConstants.P_CONTROL, 50, 45_000, 60_000,
                     onNoStorage = { noStorage += "overrides" })
@@ -5631,7 +5632,7 @@ class ChannelManager(
             val r = if (channel.type != "dm") async {
                 fetchHistoryPage(
                     channel, StreamConstants.P_REACTIONS,
-                    StreamConstants.INITIAL_MESSAGES, 20_000, 30_000,
+                    StreamConstants.INITIAL_MESSAGES, 45_000, 60_000,
                     streamId = channel.interactionsStreamId.ifEmpty {
                         StreamConstants.deriveInteractionsId(channel.messageStreamId)
                     },
@@ -5641,7 +5642,7 @@ class ChannelManager(
             // was away has to be there on open, not only when it happens.
             val m = if (channel.type == "gated") async {
                 fetchHistoryPage(
-                    channel, StreamConstants.P_MODERATION, 300, 20_000, 30_000,
+                    channel, StreamConstants.P_MODERATION, 300, 45_000, 60_000,
                     onNoStorage = { noStorage += "moderation" })
             } else null
             val pair = c.await() to o.await()
