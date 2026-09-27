@@ -167,6 +167,8 @@ fun ChatScreen(vm: AppViewModel) {
     val hasMoreHistory by vm.hasMoreHistory.collectAsState()
     val historyError by vm.historyError.collectAsState()
     val historyRead by vm.historyRead.collectAsState()
+    val overridesOwed by vm.overridesOwed.collectAsState()
+    val pagingNudge by vm.pagingNudge.collectAsState()
     val loadingHistory by vm.loadingHistory.collectAsState()
     val loadingInitial by vm.initialLoad.collectAsState()
     val restoredTimeline by vm.restoredTimeline.collectAsState()
@@ -232,7 +234,7 @@ fun ChatScreen(vm: AppViewModel) {
     val contentShort by remember {
         derivedStateOf { !listState.canScrollForward && !listState.canScrollBackward }
     }
-    LaunchedEffect(nearTop, contentShort, hasMoreHistory, loadingHistory, loadingInitial, messages.isEmpty(), searchOlder) {
+    LaunchedEffect(nearTop, contentShort, hasMoreHistory, loadingHistory, loadingInitial, messages.isEmpty(), searchOlder, pagingNudge) {
         // The reversed list is born at index 0 = the NEWEST message, with the
         // sentinel a full page away — `nearTop` cannot fire during opening, so
         // the chain-load that once parked whole channels at their oldest
@@ -684,6 +686,18 @@ fun ChatScreen(vm: AppViewModel) {
                 modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 8.dp)
             )
         }
+        if (overridesOwed && visible.isNotEmpty()) {
+            Text(
+                if (historyRead == ChannelManager.HistoryRead.FAILED) {
+                    "Edits and deletions could not be loaded. Reopen the channel"
+                } else {
+                    "Loading edits and deletions…"
+                },
+                color = Color.White.copy(alpha = 0.40f), fontSize = 13.sp,
+                textAlign = androidx.compose.ui.text.style.TextAlign.Center,
+                modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 8.dp)
+            )
+        }
 
         Box(Modifier.weight(1f).fillMaxWidth()) {
             // Web renderMessages: while any loading signal is still live the
@@ -691,7 +705,8 @@ fun ChatScreen(vm: AppViewModel) {
             // and still empty does it say "No messages yet".
             if (visible.isEmpty()) {
                 val terminalEmpty = !loadingInitial && !loadingHistory && !hasMoreHistory &&
-                    historyRead != ChannelManager.HistoryRead.RETRYING
+                    historyRead != ChannelManager.HistoryRead.RETRYING &&
+                    historyRead != ChannelManager.HistoryRead.READING
                 Column(
                     // The list below is declared after this and would otherwise
                     // sit on top, swallowing taps meant for the button here.
@@ -992,10 +1007,10 @@ fun ChatScreen(vm: AppViewModel) {
                                 fontSize = 14.sp
                             )
                         }
-                        // A refused or failed read also clears hasMoreHistory,
-                        // and there the start is unknown, not reached.
+                        // A refused, failed or unfinished read also leaves
+                        // hasMoreHistory false, and there the start is unknown.
                         !hasMoreHistory && historyError == null && visible.isNotEmpty() &&
-                            historyRead != ChannelManager.HistoryRead.FAILED -> Box(
+                            historyRead == ChannelManager.HistoryRead.OK -> Box(
                             Modifier.fillMaxWidth().padding(vertical = 16.dp),
                             contentAlignment = Alignment.Center
                         ) {
