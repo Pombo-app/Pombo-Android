@@ -1628,6 +1628,7 @@ class AppViewModel(app: Application) : AndroidViewModel(app), PomboBridge.Listen
         contactsStore.memoryOnly = guest
         settingsStore.scopeAddress = address
         syncStore.scopeAddress = address
+        sync.cancelAutoPush()
         sync.cancelPushConfirmation()
         epochKeyStore.scopeAddress = address
         epochKeyStore.memoryOnly = guest
@@ -2354,6 +2355,7 @@ class AppViewModel(app: Application) : AndroidViewModel(app), PomboBridge.Listen
 
     fun disconnect() {
         manager.closeCurrent()
+        sync.cancelAutoPush()
         store.clear()
         _accounts.value = store.accounts()
         _address.value = store.address
