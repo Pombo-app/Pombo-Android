@@ -166,6 +166,7 @@ fun ChatScreen(vm: AppViewModel) {
     val isPreview by vm.isPreview.collectAsState()
     val hasMoreHistory by vm.hasMoreHistory.collectAsState()
     val historyError by vm.historyError.collectAsState()
+    val historyRead by vm.historyRead.collectAsState()
     val loadingHistory by vm.loadingHistory.collectAsState()
     val loadingInitial by vm.initialLoad.collectAsState()
     val restoredTimeline by vm.restoredTimeline.collectAsState()
@@ -689,7 +690,8 @@ fun ChatScreen(vm: AppViewModel) {
             // area shows a centred spinner; only once everything is quiescent
             // and still empty does it say "No messages yet".
             if (visible.isEmpty()) {
-                val terminalEmpty = !loadingInitial && !loadingHistory && !hasMoreHistory
+                val terminalEmpty = !loadingInitial && !loadingHistory && !hasMoreHistory &&
+                    historyRead != ChannelManager.HistoryRead.RETRYING
                 Column(
                     // The list below is declared after this and would otherwise
                     // sit on top, swallowing taps meant for the button here.
@@ -773,6 +775,18 @@ fun ChatScreen(vm: AppViewModel) {
                         Text(
                             "Requested from the channel, this can take a moment",
                             color = Color.White.copy(alpha = 0.25f), fontSize = 12.sp
+                        )
+                    } else if (terminalEmpty && historyRead == ChannelManager.HistoryRead.FAILED) {
+                        Text(
+                            "Channel history could not be loaded",
+                            color = Color.White.copy(alpha = 0.40f), fontSize = 14.sp
+                        )
+                        Spacer(Modifier.height(4.dp))
+                        Text(
+                            "Check your connection and reopen the channel",
+                            color = Color.White.copy(alpha = 0.25f), fontSize = 12.sp,
+                            textAlign = androidx.compose.ui.text.style.TextAlign.Center,
+                            modifier = Modifier.padding(horizontal = 32.dp)
                         )
                     } else if (terminalEmpty) {
                         Text(
@@ -978,9 +992,10 @@ fun ChatScreen(vm: AppViewModel) {
                                 fontSize = 14.sp
                             )
                         }
-                        // A refused read also clears hasMoreHistory, and there
-                        // the start is unknown, not reached.
-                        !hasMoreHistory && historyError == null && visible.isNotEmpty() -> Box(
+                        // A refused or failed read also clears hasMoreHistory,
+                        // and there the start is unknown, not reached.
+                        !hasMoreHistory && historyError == null && visible.isNotEmpty() &&
+                            historyRead != ChannelManager.HistoryRead.FAILED -> Box(
                             Modifier.fillMaxWidth().padding(vertical = 16.dp),
                             contentAlignment = Alignment.Center
                         ) {

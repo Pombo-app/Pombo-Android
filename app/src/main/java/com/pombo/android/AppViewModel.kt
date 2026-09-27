@@ -1215,6 +1215,7 @@ class AppViewModel(app: Application) : AndroidViewModel(app), PomboBridge.Listen
     val restoredTimeline get() = manager.restoredTimeline
     val hasMoreHistory get() = manager.hasMoreHistory
     val historyError get() = manager.historyError
+    val historyRead get() = manager.historyRead
     val waitingForKeys get() = manager.waitingForKeys
     val loadingHistory get() = manager.loadingHistory
     val isPreview get() = manager.isPreview
@@ -3720,6 +3721,7 @@ class AppViewModel(app: Application) : AndroidViewModel(app), PomboBridge.Listen
             "node-up" -> {
                 nodeRevival.onAlive()
                 if (_status.value == NetStatus.CONNECTING) _status.value = NetStatus.CONNECTED
+                manager.kickOpenReadRetry()
             }
         }
     }

@@ -1362,9 +1362,10 @@ const api = {
         const iterator = stream[Symbol.asyncIterator]();
         let done = false;
         // Iteration errors are skipped so one bad row cannot end a read, but
-        // the count travels out: a caller that answers requests must be able
-        // to tell a failed read from an empty one.
-        api._lastDrainErrors = 0;
+        // the count travels out on ctx.errors: a caller that answers requests
+        // must be able to tell a failed read from an empty one. Per call, since
+        // reads run concurrently and one stream's refusal is not another's.
+        if (ctx) ctx.errors = 0;
         while (!done) {
             if (deadlineAt && Date.now() >= deadlineAt) {
                 try { if (iterator.return) iterator.return(); } catch (e) { /* best effort */ }
@@ -1390,7 +1391,7 @@ const api = {
                     // traffic; there is no key recovery any more (P6).
                     continue;
                 }
-                api._lastDrainErrors++;
+                if (ctx) ctx.errors++;
                 console.warn('resend iteration error: ' +
                     (iterError && iterError.message ? iterError.message : String(iterError)));
                 // A transport error ends the read: reading on after it waits
@@ -1516,6 +1517,7 @@ const api = {
         const out = [];
         const opener = api._sealedOpener(pwKey);
         const t0 = Date.now();
+        const drain = { streamId: a.streamId, partition: a.partition };
         const partial = await api._drainResend(stream, function (msg) {
             if (!a.recoverSigner && !api._envelopeIsAuthentic(msg)) return;
             const rec = {
@@ -1529,7 +1531,7 @@ const api = {
             storageFetch.stamp(rec.meta, msg, a.streamId, a.partition);
             out.push(rec);
             opener.take(rec);
-        }, Date.now() + (a.budgetMs || 40000), { streamId: a.streamId, partition: a.partition });
+        }, Date.now() + (a.budgetMs || 40000), drain);
         const tDrain = Date.now();
         await opener.done();
         await api._keepOnlyWriters(a.streamId, out, a.gated);
@@ -1537,7 +1539,7 @@ const api = {
         // that found no network wait left to hide behind. A large tail means
         // PBKDF2 is the wall, not the storage node.
         return {
-            messages: out, partial: partial, errors: api._lastDrainErrors,
+            messages: out, partial: partial, errors: drain.errors,
             readError: storageFetch.lastReadError(a.streamId, a.partition),
             drainMs: tDrain - t0, decryptMs: Date.now() - tDrain
         };
