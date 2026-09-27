@@ -1560,6 +1560,7 @@ const api = {
         );
         const all = [];
         const opener = api._sealedOpener(pwKey);
+        const drain = { streamId: a.streamId, partition: a.partition };
         const partial = await api._drainResend(stream, function (msg) {
             if (!a.recoverSigner && !api._envelopeIsAuthentic(msg)) return;
             const rec = {
@@ -1573,7 +1574,7 @@ const api = {
             storageFetch.stamp(rec.meta, msg, a.streamId, a.partition);
             all.push(rec);
             opener.take(rec);
-        }, Date.now() + (a.budgetMs || 40000), { streamId: a.streamId, partition: a.partition });
+        }, Date.now() + (a.budgetMs || 40000), drain);
         await opener.done();
         // Exhaustion is about what the RANGE held, not about what survived the
         // permission filter: a page made only of refused rows still means there
@@ -1587,7 +1588,7 @@ const api = {
         // A cut-short drain cannot prove exhaustion — keep pagination alive.
         return {
             messages: all.slice(start), hasMore: fetched > count || partial, partial: partial,
-            readError: storageFetch.lastReadError(a.streamId, a.partition)
+            errors: drain.errors, readError: storageFetch.lastReadError(a.streamId, a.partition)
         };
     },
 
