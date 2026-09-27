@@ -16,6 +16,7 @@ import com.pombo.android.core.channels.optStringOrNull
 import com.pombo.android.core.channels.messageTime
 import com.pombo.android.data.Channel
 import com.pombo.android.data.ChannelStore
+import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.async
@@ -4872,7 +4873,7 @@ class ChannelManager(
                 }
                 val loads = launch {
                     listOf(
-                        launch { loadHistory(channel, generation) },
+                        launch { if (!loadHistory(channel, generation)) retryOpenReads(channel, generation) },
                         launch { loadAdminState(channel, generation) }
                     ).joinAll()
                 }
@@ -5000,6 +5001,7 @@ class ChannelManager(
             _hasMoreHistory.value = false
             _loadingHistory.value = false
             _historyError.value = null
+            _historyRead.value = HistoryRead.OK
             // Both are per-channel verdicts — carrying them across a switch
             // shows the previous room's key/subscription state on this one.
             _waitingForKeys.value = false
@@ -5098,6 +5100,7 @@ class ChannelManager(
         presenceJob?.cancel(); presenceJob = null
         adminPollJob?.cancel(); adminPollJob = null
         memberCatchUpJob?.cancel(); memberCatchUpJob = null
+        historyRetryJob?.cancel(); historyRetryJob = null
         _current.value = null
         _isPreview.value = false
         unsubscribeAll(channel)
@@ -5199,6 +5202,7 @@ class ChannelManager(
             for ((eph, password) in media.activeEphemeralStreams()) {
                 media.ensureMediaPartitions(eph, password)
             }
+            kickOpenReadRetry()
         }
     }
 
@@ -5422,12 +5426,61 @@ class ChannelManager(
     data class HistoryError(val status: Int, val signed: Boolean, val reason: String? = null)
 
     private class HistoryPage(
-        val entries: JSONArray, val contents: List<Any?>, val readError: HistoryError? = null
+        val entries: JSONArray, val contents: List<Any?>, val readError: HistoryError? = null,
+        /** The node broke the read off without answering it: what came is applied, the read is owed. */
+        val failed: Boolean = false
     )
+
+    private val HistoryPage?.answered get() = this != null && !failed
 
     private val _historyError = MutableStateFlow<HistoryError?>(null)
     /** The refusal behind an empty history, for the empty state to explain. */
     val historyError: StateFlow<HistoryError?> = _historyError.asStateFlow()
+
+    /** Whether the open channel's reads came back, are being read again, or gave up. */
+    enum class HistoryRead { OK, RETRYING, FAILED }
+    private val _historyRead = MutableStateFlow(HistoryRead.OK)
+    val historyRead: StateFlow<HistoryRead> = _historyRead.asStateFlow()
+    private var historyRetryJob: Job? = null
+    @Volatile private var historyRetryWake: CompletableDeferred<Unit>? = null
+    internal var historyRetryDelaysMs: LongArray = HISTORY_RETRY_DELAYS_MS
+
+    /**
+     * Reads the open's group again after one of its reads failed, the -3
+     * first so nothing paints without its moderation. A reconnect or a node
+     * that came up cuts the wait short ([kickOpenReadRetry]).
+     */
+    private fun retryOpenReads(channel: Channel, generation: Int) {
+        if (!stillCurrent(generation)) return
+        _historyRead.value = HistoryRead.RETRYING
+        historyRetryJob?.cancel()
+        historyRetryJob = scope.launch {
+            for ((attempt, wait) in historyRetryDelaysMs.withIndex()) {
+                val wake = CompletableDeferred<Unit>().also { historyRetryWake = it }
+                withTimeoutOrNull(wait) { wake.await() }
+                if (!stillCurrent(generation)) return@launch
+                Log.i(TAG, "history ${channel.name}: reading the open's group again (attempt ${attempt + 1})")
+                val readAll = historyRefreshLock.withLock {
+                    runCatching { loadAdminState(channel, generation) }
+                    runCatching { loadHistory(channel, generation) }.getOrDefault(false)
+                }
+                if (!stillCurrent(generation)) return@launch
+                if (readAll) {
+                    _historyRead.value = HistoryRead.OK
+                    return@launch
+                }
+            }
+            if (stillCurrent(generation)) {
+                _hasMoreHistory.value = false
+                _historyRead.value = HistoryRead.FAILED
+            }
+        }
+    }
+
+    /** The bridge is back: a pending read of the open channel need not wait out its backoff. */
+    fun kickOpenReadRetry() {
+        historyRetryWake?.complete(Unit)
+    }
 
     /**
      * One partition's resend, decrypted but not yet applied.
@@ -5436,8 +5489,9 @@ class ChannelManager(
      * the budget, the bridge returns the PARTIAL page it already has — one
      * offline member no longer renders the whole room empty.
      *
-     * Returns null on any failure, so a channel with no storage (or a partition
-     * that simply has nothing) just contributes nothing.
+     * Returns null when the call itself failed, so a channel with no storage (or
+     * a partition that simply has nothing) just contributes nothing; a read the
+     * node broke off comes back as the page so far, marked [HistoryPage.failed].
      */
     private suspend fun fetchHistoryPage(
         channel: Channel,
@@ -5447,7 +5501,9 @@ class ChannelManager(
         timeoutMs: Long,
         /** Which stream to read; defaults to the channel's -1. Reactions on a
          *  gated channel come from the -5 instead. */
-        streamId: String = channel.messageStreamId
+        streamId: String = channel.messageStreamId,
+        /** The client has no storage for the stream: an answer, not a read to retry. */
+        onNoStorage: () -> Unit = {}
     ): HistoryPage? = try {
         val t0 = System.currentTimeMillis()
         val args = JSONObject()
@@ -5487,10 +5543,14 @@ class ChannelManager(
             val readError = res.optJSONObject("readError")?.let {
                 HistoryError(it.optInt("status", 0), it.optBoolean("signed", false), it.optString("reason").ifEmpty { null })
             }
-            HistoryPage(arr, contents, readError)
+            // A 4xx is the node's answer about this read; any other break
+            // (network, 5xx, a page refused for its storedAt) left it unread.
+            val failed = res.optInt("errors", 0) > 0 && (readError == null || readError.status !in 400..499)
+            HistoryPage(arr, contents, readError, failed)
         }
     } catch (e: Exception) {
         Log.w(TAG, "history ${channel.name} P$partition: read failed: ${e.message}")
+        if (e.message?.contains("NO_STORAGE_NODES") == true) onNoStorage()
         null
     }
 
@@ -5517,19 +5577,25 @@ class ChannelManager(
      * an edit or delete needs its target present, and while [applyOverride]
      * parks orphans in `pendingOverrides` for the sweep at the end, keeping the
      * original order means the common case never has to rely on that.
+     *
+     * @return false when a read of the group failed, which is not an empty channel.
      */
-    private suspend fun loadHistory(channel: Channel, generation: Int) {
+    private suspend fun loadHistory(channel: Channel, generation: Int): Boolean {
         var reactionsPage: HistoryPage? = null
         var moderationPage: HistoryPage? = null
+        var sideReadsOk = true
+        val noStorage = java.util.Collections.synchronizedSet(HashSet<String>())
         val (content, overrides) = coroutineScope {
             val c = async {
                 fetchHistoryPage(
                     channel, StreamConstants.P_MESSAGES,
-                    StreamConstants.INITIAL_MESSAGES, 45_000, 60_000
+                    StreamConstants.INITIAL_MESSAGES, 45_000, 60_000,
+                    onNoStorage = { noStorage += "content" }
                 )
             }
             val o = async {
-                fetchHistoryPage(channel, StreamConstants.P_CONTROL, 50, 20_000, 30_000)
+                fetchHistoryPage(channel, StreamConstants.P_CONTROL, 50, 20_000, 30_000,
+                    onNoStorage = { noStorage += "overrides" })
             }
             // Reactions moved to the -5 — without this read a reopened channel
             // would render messages with no reactions. Same predicate as the
@@ -5540,23 +5606,27 @@ class ChannelManager(
                     StreamConstants.INITIAL_MESSAGES, 20_000, 30_000,
                     streamId = channel.interactionsStreamId.ifEmpty {
                         StreamConstants.deriveInteractionsId(channel.messageStreamId)
-                    })
+                    },
+                    onNoStorage = { noStorage += "reactions" })
             } else null
             // Moderator deltas (-1/P2): what a moderator did while the owner
             // was away has to be there on open, not only when it happens.
             val m = if (channel.type == "gated") async {
                 fetchHistoryPage(
-                    channel, StreamConstants.P_MODERATION, 300, 20_000, 30_000)
+                    channel, StreamConstants.P_MODERATION, 300, 20_000, 30_000,
+                    onNoStorage = { noStorage += "moderation" })
             } else null
             val pair = c.await() to o.await()
             reactionsPage = r?.await()
             moderationPage = m?.await()
+            sideReadsOk = (r == null || reactionsPage.answered || "reactions" in noStorage) &&
+                (m == null || moderationPage.answered || "moderation" in noStorage)
             pair
         }
         // The resends can take tens of seconds on a slow network — long enough
         // for several channel switches. Without this the whole of A's history
         // was appended to whatever channel is now on screen.
-        if (!stillCurrent(generation)) return
+        if (!stillCurrent(generation)) return true
 
         if (content != null) {
             // One merge for the whole page instead of one per message.
@@ -5618,11 +5688,13 @@ class ChannelManager(
                 )
             }
         }
-        if (!stillCurrent(generation)) return
+        if (!stillCurrent(generation)) return true
         // Unconditional now. The old code returned early when P1 came back
         // without a `messages` array, which skipped this sweep and left any
         // override that had arrived before its target parked forever.
         applyPendingOverrides()
+        return (content.answered || "content" in noStorage) &&
+            (overrides.answered || "overrides" in noStorage) && sideReadsOk
     }
 
     /** Moves the pagination cursor back. Chunks count too — they carry no id. */
@@ -5641,6 +5713,9 @@ class ChannelManager(
         val channel = _current.value ?: return 0
         if (channel.writeOnly || channel.type == "dm") return 0
         if (_loadingHistory.value || !_hasMoreHistory.value) return 0
+        // A page that failed keeps paging open, so an empty screen would ask
+        // again every frame; the open's reads are the retry's until they are back.
+        if (_historyRead.value != HistoryRead.OK) return 0
 
         // Cursor of Date.now() when history held only reactions/chunks (web parity).
         val before = if (oldestTimestamp > 0L) oldestTimestamp else System.currentTimeMillis()
@@ -7472,6 +7547,7 @@ class ChannelManager(
         const val REOPEN_SNAPSHOT_CHANNELS = 10
         /** The storage node keeps a gate refusal for 20 s (web config.js renewalHistoryRetryMs). */
         const val RENEWAL_HISTORY_RETRY_MS = 21_000L
+        val HISTORY_RETRY_DELAYS_MS = longArrayOf(5_000L, 15_000L, 30_000L, 60_000L)
         /** Allowed clock skew of a payload timestamp ahead of now / of its
          *  signed envelope (web config gate.timestampSkewMs). One-sided: a
          *  payload older than its envelope is a legitimate republish. */
