@@ -2244,21 +2244,23 @@ class ChannelManager(
         Log.w(TAG, "PASSWORD_CHALLENGE not retained after $maxAttempts attempts — joiners may see CHALLENGE_NOT_FOUND")
     }
 
-    private suspend fun createStreamRetry(id: String, description: String, partitions: Int) = retry(7) {
+    private suspend fun createStreamRetry(id: String, description: String, partitions: Int) = retryWrite(7) { onlyIfMissing ->
         bridge.call("createStream", JSONObject()
-            .put("id", id).put("description", description).put("partitions", partitions), 120_000)
+            .put("id", id).put("description", description).put("partitions", partitions)
+            .put("onlyIfMissing", onlyIfMissing), 120_000)
     }
 
-    internal suspend fun setPermissionsRetry(streamId: String, assignments: JSONArray) = retry(7) {
+    internal suspend fun setPermissionsRetry(streamId: String, assignments: JSONArray) = retryWrite(7) { onlyIfMissing ->
         bridge.call("setPermissions", JSONObject()
-            .put("streamId", streamId).put("assignments", assignments), 120_000)
+            .put("streamId", streamId).put("assignments", assignments)
+            .put("onlyIfMissing", onlyIfMissing), 120_000)
     }
 
     /** The same assignments on several streams, in one transaction. */
-    internal suspend fun setPermissionsRetry(streamIds: List<String>, assignments: JSONArray) = retry(7) {
+    internal suspend fun setPermissionsRetry(streamIds: List<String>, assignments: JSONArray) = retryWrite(7) { onlyIfMissing ->
         val items = JSONArray()
         streamIds.forEach { items.put(JSONObject().put("streamId", it).put("assignments", assignments)) }
-        bridge.call("setPermissions", JSONObject().put("items", items), 120_000)
+        bridge.call("setPermissions", JSONObject().put("items", items).put("onlyIfMissing", onlyIfMissing), 120_000)
     }
 
     /**
@@ -2270,12 +2272,23 @@ class ChannelManager(
     private suspend fun addStorageRetry(
         streamId: String, nodeAddress: String = STORAGE_NODE, storageDays: Int = 180
     ): Int? {
-        val res = retry(7) {
+        val res = retryWrite(7) { onlyIfMissing ->
             bridge.call("addToStorageNode", JSONObject()
                 .put("streamId", streamId).put("nodeAddress", nodeAddress)
-                .put("storageDays", storageDays), 120_000)
+                .put("storageDays", storageDays).put("onlyIfMissing", onlyIfMissing), 120_000)
         }
         return if (res.optBoolean("retentionApplied", false)) storageDays else null
+    }
+
+    /**
+     * [retry] for an on-chain write. A write whose receipt read failed has
+     * usually landed, so from the second attempt on the bridge asks the chain
+     * first and sends only what is missing; a read that fails throws before
+     * anything is sent, and the next attempt asks again.
+     */
+    private suspend fun <T> retryWrite(times: Int, block: suspend (onlyIfMissing: Boolean) -> T): T {
+        var attempt = 0
+        return retry(times) { block(attempt++ > 0) }
     }
 
     private suspend fun <T> retry(times: Int, block: suspend () -> T): T {

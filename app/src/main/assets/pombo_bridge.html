@@ -2198,9 +2198,58 @@ const api = {
 
     async setStorageDays(a) {
         if (!client) throw new Error('client not connected');
+        if (a.onlyIfMissing && await api._chainStorageDays(a.streamId) === a.storageDays) {
+            return { ok: true, skipped: true };
+        }
         const stream = await client.getStream(a.streamId);
         await stream.setStorageDayCount(a.storageDays);
         return { ok: true };
+    },
+
+    // ===== confirming a write on chain before sending it again =====
+    // `onlyIfMissing` (set by the native retry from its second attempt on):
+    // a write whose receipt read failed has usually landed, so the call asks
+    // the chain first and skips what is already there. A read that fails
+    // throws before anything is sent.
+
+    _STREAM_REGISTRY: '0x0D483E10612F327FC11965Fc82E90dC19b141641',
+    _STREAM_REGISTRY_ABI: ['function getStreamMetadata(string streamId) view returns (string)'],
+
+    // The retention the chain holds now: the SDK caches stream metadata and
+    // keeps the old value after a write whose receipt read failed.
+    async _chainStorageDays(streamId) {
+        const raw = await api._gateWithProvider(function (p) {
+            return new window.ethers.Contract(api._STREAM_REGISTRY, api._STREAM_REGISTRY_ABI, p)
+                .getStreamMetadata(streamId);
+        });
+        let metadata = {};
+        try { metadata = raw ? JSON.parse(raw) : {}; } catch (e) { /* the chain answered: no retention set */ }
+        return Number.isFinite(metadata.storageDays) ? metadata.storageDays : null;
+    },
+
+    // setPermissions replaces a grantee's set, so a grant is in place only
+    // when every permission matches, the ones it leaves out included.
+    async _permissionsInPlace(streamId, assignments) {
+        const all = ['publish', 'subscribe', 'edit', 'delete', 'grant'];
+        for (const assignment of assignments) {
+            const wanted = new Set(assignment.permissions);
+            for (const permission of all) {
+                const held = await client.hasPermission(assignment.public
+                    ? { streamId: streamId, public: true, permission: permission }
+                    : { streamId: streamId, userId: assignment.userId, permission: permission, allowPublic: false });
+                if (held !== wanted.has(permission)) return false;
+            }
+        }
+        return true;
+    },
+
+    async _streamIfExists(id) {
+        try {
+            return await client.getStream(id);
+        } catch (e) {
+            if (e && e.code === 'STREAM_NOT_FOUND') return null;
+            throw e;
+        }
     },
 
     // ===== stream management (channel creation) =====
@@ -2221,6 +2270,10 @@ const api = {
     // Creates a stream on-chain: {id, description, partitions}
     async createStream(a) {
         if (!client) throw new Error('client not connected');
+        if (a.onlyIfMissing) {
+            const existing = await api._streamIfExists(a.id);
+            if (existing) return { id: existing.id, existed: true };
+        }
         const stream = await client.createStream({
             id: a.id,
             description: a.description,
@@ -2233,7 +2286,15 @@ const api = {
     // items: [{streamId, assignments}, ...] — several streams, ONE transaction
     async setPermissions(a) {
         if (!client) throw new Error('client not connected');
-        const items = Array.isArray(a.items) ? a.items : [{ streamId: a.streamId, assignments: a.assignments }];
+        let items = Array.isArray(a.items) ? a.items : [{ streamId: a.streamId, assignments: a.assignments }];
+        if (a.onlyIfMissing) {
+            const missing = [];
+            for (const item of items) {
+                if (!await api._permissionsInPlace(item.streamId, item.assignments)) missing.push(item);
+            }
+            if (missing.length === 0) return { ok: true, skipped: true };
+            items = missing;
+        }
         await client.setPermissions(...items);
         return { ok: true };
     },
@@ -2245,13 +2306,19 @@ const api = {
     async addToStorageNode(a) {
         if (!client) throw new Error('client not connected');
         const stream = await client.getStream(a.streamId);
-        await stream.addToStorageNode(a.nodeAddress);
+        if (!(a.onlyIfMissing && await client.isStoredStream(a.streamId, a.nodeAddress))) {
+            await stream.addToStorageNode(a.nodeAddress);
+        }
         if (!a.storageDays || typeof stream.setStorageDayCount !== 'function') {
             return { ok: true, retentionApplied: false, storageDays: null };
         }
         let lastError = null;
         for (let attempt = 0; attempt < 3; attempt++) {
             try {
+                if ((a.onlyIfMissing || attempt > 0)
+                        && await api._chainStorageDays(a.streamId) === a.storageDays) {
+                    return { ok: true, retentionApplied: true, storageDays: a.storageDays };
+                }
                 await stream.setStorageDayCount(a.storageDays);
                 return { ok: true, retentionApplied: true, storageDays: a.storageDays };
             } catch (e) {

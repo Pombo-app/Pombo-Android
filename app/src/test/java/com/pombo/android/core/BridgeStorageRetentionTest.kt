@@ -55,7 +55,7 @@ class BridgeStorageRetentionTest {
         assertTrue(
             "setStorageDayCount is no longer retried inside the bridge, and the " +
                 "native retry cannot reach it through the catch",
-            Regex("for\\s*\\([\\s\\S]{0,120}setStorageDayCount").containsMatchIn(fn)
+            Regex("for\\s*\\([\\s\\S]{0,400}setStorageDayCount").containsMatchIn(fn)
         )
     }
 
