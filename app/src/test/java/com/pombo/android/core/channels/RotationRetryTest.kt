@@ -108,13 +108,49 @@ class RotationRetryTest {
 
     @Test fun `a channel this account no longer owns stops the retry`() = runBlocking {
         failures = Int.MAX_VALUE
-        owned = false
-
+        clock = CompletableDeferred()
         assertFalse(retry.rotateFor(channel, listOf("0xabc")))
+
+        owned = false
+        clock!!.complete(Unit)
 
         assertEquals(listOf(5_000L), waits)
         assertFalse(retry.isOwed(channel))
         assertTrue(covered.isEmpty())
+    }
+
+    @Test fun `a moderator's cut owes nothing, the owner rotates on their next open`() = runBlocking {
+        owned = false
+
+        assertFalse(retry.rotateFor(channel, listOf("0xabc")))
+
+        assertFalse(retry.isOwed(channel))
+        assertEquals(0, rotations)
+        assertTrue(waits.isEmpty())
+    }
+
+    @Test fun `a debt this account cannot pay is dropped, not held against its sends`() = runBlocking {
+        failures = Int.MAX_VALUE
+        clock = CompletableDeferred()
+        retry.rotateFor(channel, listOf("0xabc"))
+        owned = false
+
+        retry.settle(channel)
+
+        assertFalse(retry.isOwed(channel))
+    }
+
+    @Test fun `a debt left on a channel this account does not own is dropped when the next session connects`() = runBlocking {
+        failures = Int.MAX_VALUE
+        clock = CompletableDeferred()
+        retry.rotateFor(channel, listOf("0xabc"))
+        val next = newRetry()
+        owned = false
+
+        next.resume(listOf(channel))
+
+        assertFalse(next.isOwed(channel))
+        next.settle(channel)
     }
 
     @Test fun `one rotation covers every cut owed on the channel`() = runBlocking {

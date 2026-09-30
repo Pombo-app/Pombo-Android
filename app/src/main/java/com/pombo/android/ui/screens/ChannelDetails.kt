@@ -810,6 +810,7 @@ private fun ChannelMembersPanel(vm: AppViewModel, channel: Channel, canModerate:
     var confirmRemove by remember { mutableStateOf<String?>(null) }
     var confirmBan by remember { mutableStateOf<String?>(null) }
     val purgeProviders by vm.purgeProviders.collectAsState()
+    val moderatesGate by vm.moderatesGate.collectAsState()
     var kebabFor by remember { mutableStateOf<String?>(null) }
     // N-D: TOKEN/NFT/PAID gates have no owner-minted members — allow() is
     // NONE-only on-chain, so manual add would be a guaranteed revert there.
@@ -1073,12 +1074,12 @@ private fun ChannelMembersPanel(vm: AppViewModel, channel: Channel, canModerate:
     }
 
     confirmBan?.let { addr ->
+        val ban = banRights(myAddress?.lowercase() == creatorAddr, moderatesGate, channel.type == "gated")
         BanMemberDialog(
             label = shortAddress(addr),
             gated = channel.type == "gated",
-            // Receivers reject an ADMIN_STATE from anyone but the creator, so
-            // a moderator can only reach for the protocol level.
-            canClientBan = myAddress?.lowercase() == creatorAddr,
+            canClientBan = ban.client,
+            canProtocolBan = ban.protocol,
             purgeProviders = purgeProviders,
             onDismiss = { confirmBan = null },
             onConfirm = { client, protocol, purge ->
@@ -1146,22 +1147,28 @@ private fun MemberBadge(text: String, color: Color) {
     ) { Text(text, color = color, fontSize = 11.sp) }
 }
 
+/** The ban levels this account may reach for. */
+internal data class BanRights(val client: Boolean, val protocol: Boolean)
+
+/** The gate's `ban()` is onlyOwner: offered to a moderator, it reverts. A moderator hides by delta. */
+internal fun banRights(owner: Boolean, moderatesGate: Boolean, gated: Boolean) =
+    BanRights(client = owner || moderatesGate, protocol = gated && owner)
+
 /**
  * Ban with its two enforcement levels, either or both.
  *
- * CLIENT hides the author's messages in every client: free, reversible, and
- * publishable only by the channel creator, since receivers reject an
- * ADMIN_STATE from anyone else. PROTOCOL bans on the gate: no responder
- * hands them keys again and the rotation that follows cuts their reads.
- * That one costs gas, and only gated channels have it.
+ * CLIENT hides the author's messages in every client: free and reversible,
+ * published by the creator in the ADMIN_STATE or by a gate moderator as a
+ * delta. PROTOCOL bans on the gate, the owner's alone: no responder hands
+ * them keys again and the rotation that follows cuts their reads. That one
+ * costs gas, and only gated channels have it.
  */
 @Composable
 internal fun BanMemberDialog(
     label: String,
     gated: Boolean,
     canClientBan: Boolean,
-    /** The gate's ban is the owner's alone — a moderator only hides. */
-    canProtocolBan: Boolean = gated,
+    canProtocolBan: Boolean,
     /** Storage providers of the channel that announce `purge`. */
     purgeProviders: Int = 0,
     onDismiss: () -> Unit,
@@ -1218,7 +1225,7 @@ internal fun BanMemberDialog(
             Spacer(Modifier.height(18.dp))
             val armed = (client && canClientBan) || (protocol && gated && canProtocolBan)
             PomboPrimaryButton("Ban", enabled = armed, danger = true) {
-                onConfirm(client && canClientBan, protocol && gated, purge && canPurge && client)
+                onConfirm(client && canClientBan, protocol && gated && canProtocolBan, purge && canPurge && client)
             }
     }
 }

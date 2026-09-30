@@ -263,6 +263,11 @@ fun ChatScreen(vm: AppViewModel) {
         val moderatesGate by vm.moderatesGate.collectAsState()
         val rosterNames by vm.rosterNames.collectAsState()
         val myAddr = vm.address.collectAsState().value
+        val ban = banRights(
+            owner = myAddr?.lowercase() == (ch.createdBy ?: ch.messageStreamId.substringBefore('/')).lowercase(),
+            moderatesGate = moderatesGate,
+            gated = ch.type == "gated"
+        )
 
         // A read-only channel only lets its writers post: the owner always,
         // and on gated channels the moderators too — the same condition the
@@ -919,11 +924,8 @@ fun ChatScreen(vm: AppViewModel) {
                         onBan = { addr, client, protocol, purge -> vm.banMemberLevels(addr, client, protocol, purge) },
                         purgeProviders = purgeProviders,
                         banGated = ch.type == "gated",
-                        canClientBan = myAddr?.lowercase() ==
-                            (ch.createdBy ?: ch.messageStreamId.substringBefore('/')).lowercase() ||
-                            moderatesGate,
-                        canProtocolBan = ch.type == "gated" && myAddr?.lowercase() ==
-                            (ch.createdBy ?: ch.messageStreamId.substringBefore('/')).lowercase(),
+                        canClientBan = ban.client,
+                        canProtocolBan = ban.protocol,
                         moderatesGate = moderatesGate,
                         onAddContact = { addr -> vm.addContact(addr, null) },
                         onSendDm = { addr -> vm.startDm(addr) },

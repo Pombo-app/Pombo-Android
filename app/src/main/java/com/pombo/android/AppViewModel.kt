@@ -1184,22 +1184,22 @@ class AppViewModel(app: Application) : AndroidViewModel(app), PomboBridge.Listen
         onDone()
     }
 
-    /** Owner-only: revokes all permissions for an address. */
+    /** Revokes all permissions for an address: the owner, or a moderator of a Closed gate. */
     fun removeMember(address: String, onDone: () -> Unit = {}) = viewModelScope.launch {
+        val owner = amOwnerOfCurrent()
         chainAction("Remove member", "Revokes their access on the channel's streams.") {
             var rotated = true
             val removed = runWithToast("Removing member…", null, "Failed to remove member") {
                 rotated = manager.removeMember(address)
             }
-            if (removed) cutToast("Member removed", rotated)
+            if (removed) cutToast("Member removed", rotated, owner)
         }
         onDone()
     }
 
-    private fun cutToast(done: String, rotated: Boolean) {
-        if (rotated) toast(done, com.pombo.android.ui.ToastKind.SUCCESS)
-        else toast("$done. The channel key rotates the next time the app connects.",
-            com.pombo.android.ui.ToastKind.WARNING, 5000L)
+    private fun cutToast(done: String, rotated: Boolean, owner: Boolean = true) {
+        val notice = cutNotice(done, rotated, owner)
+        toast(notice.text, notice.kind, notice.durationMs)
     }
 
     val ensNames get() = manager.ensNames
@@ -3912,4 +3912,15 @@ class AppViewModel(app: Application) : AndroidViewModel(app), PomboBridge.Listen
         }
         bridge.destroy()
     }
+}
+
+internal data class CutNotice(val text: String, val kind: com.pombo.android.ui.ToastKind, val durationMs: Long)
+
+/** What a removal or a ban says about the channel key: only the owner rotates it. */
+internal fun cutNotice(done: String, rotated: Boolean, owner: Boolean): CutNotice = when {
+    !owner -> CutNotice("$done. The key rotates when the owner next opens the channel.",
+        com.pombo.android.ui.ToastKind.INFO, 5000L)
+    rotated -> CutNotice(done, com.pombo.android.ui.ToastKind.SUCCESS, 3000L)
+    else -> CutNotice("$done. The channel key rotates the next time the app connects.",
+        com.pombo.android.ui.ToastKind.WARNING, 5000L)
 }

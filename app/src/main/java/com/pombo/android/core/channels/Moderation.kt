@@ -118,9 +118,9 @@ internal class Moderation(private val manager: ChannelManager) {
         })
     }
 
-    /** Owed rotations of the gated channels this account owns, taken up on a bridge connect. */
+    /** Owed rotations of the gated channels, taken up on a bridge connect; the ones this account cannot pay are dropped. */
     fun resumeOwedRotations() = rotations.resume(
-        _channels.value.filter { it.type == "gated" && amOwner(it) }.map { it.messageStreamId })
+        _channels.value.filter { it.type == "gated" }.map { it.messageStreamId })
 
     /** Change the stored record as it is now, not a copy captured before a slow call. */
     private fun updateStored(messageStreamId: String, change: (Channel) -> Channel): Channel? =

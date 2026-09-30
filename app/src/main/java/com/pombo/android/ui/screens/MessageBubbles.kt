@@ -398,10 +398,9 @@ internal fun MessageGroup(
     purgeProviders: Int = 0,
     /** Gated channel: the protocol level has a gate to ban on. */
     banGated: Boolean = false,
-    /** Only the creator may publish the client-level ban. */
     canClientBan: Boolean = false,
     /** The gate's ban is the owner's alone. */
-    canProtocolBan: Boolean = banGated,
+    canProtocolBan: Boolean = false,
     /** Moderates the gate: hides and bans, without the owner's surfaces. */
     moderatesGate: Boolean = false,
     /** The whole name chain, resolved by the caller (roster included). */
@@ -630,7 +629,7 @@ private fun MessageBubble(
     purgeProviders: Int = 0,
     banGated: Boolean = false,
     canClientBan: Boolean = false,
-    canProtocolBan: Boolean = banGated,
+    canProtocolBan: Boolean = false,
     moderatesGate: Boolean = false,
     displayName: ((UiMessage) -> String)? = null,
     onAddContact: () -> Unit = {},
