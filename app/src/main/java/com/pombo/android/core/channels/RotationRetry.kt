@@ -52,28 +52,38 @@ class RotationRetry(
     fun isOwed(messageStreamId: String): Boolean = owed(messageStreamId).isNotEmpty()
 
     /**
-     * Rotate for [addresses] now; on failure keep them owed and retry.
+     * Rotate for [addresses] now; on failure keep them owed and retry. Only
+     * the owner announces epochs: anyone else's cut is left to the owner's
+     * next open, and a debt they took on would hold back their own sends.
      * @return true when the rotation went out now
      */
     suspend fun rotateFor(messageStreamId: String, addresses: Collection<String>): Boolean {
+        if (!host.stillOwned(messageStreamId)) return false
         update(messageStreamId) { it + addresses.map { a -> a.lowercase() } }
         if (attempt(messageStreamId)) return true
         ensureLoop(messageStreamId)
         return false
     }
 
-    /** Take up what an earlier session or bridge left owed on these channels. */
+    /** Take up what an earlier session or bridge left owed on these channels, and drop what this account cannot pay. */
     fun resume(messageStreamIds: Collection<String>) {
         for (id in messageStreamIds) {
-            if (!isOwed(id)) continue
+            if (!isOwed(id) || dropUnpayable(id)) continue
             scope.launch { if (!attempt(id)) ensureLoop(id) }
         }
     }
 
     /** Before the admin publishes: an owed rotation goes first, or the publish does not go. */
     suspend fun settle(messageStreamId: String) {
-        if (!isOwed(messageStreamId)) return
+        if (!isOwed(messageStreamId) || dropUnpayable(messageStreamId)) return
         if (!attempt(messageStreamId)) throw IllegalStateException(OWED_MESSAGE)
+    }
+
+    /** A debt on a channel this account does not own can never be paid. */
+    private fun dropUnpayable(messageStreamId: String): Boolean {
+        if (host.stillOwned(messageStreamId)) return false
+        update(messageStreamId) { emptySet() }
+        return true
     }
 
     private suspend fun attempt(messageStreamId: String): Boolean =
@@ -103,10 +113,7 @@ class RotationRetry(
             while (isOwed(messageStreamId)) {
                 host.sleep(delaysMs[minOf(round, delaysMs.lastIndex)])
                 round++
-                if (!host.stillOwned(messageStreamId)) {
-                    update(messageStreamId) { emptySet() }
-                    return@launch
-                }
+                if (dropUnpayable(messageStreamId)) return@launch
                 attempt(messageStreamId)
             }
         }
