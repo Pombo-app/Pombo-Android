@@ -204,7 +204,10 @@ internal class Moderation(private val manager: ChannelManager) {
         // snapshot shrinks and a later loss of access never rotates.
         val candidates = (channel.members + channel.knownBanned +
             channel.accessSnapshot + channel.rotatedForNoAccess +
-            epochKeys.seenRequesters(channel.messageStreamId) + roster + onChain)
+            epochKeys.seenRequesters(channel.messageStreamId) +
+            // The requester pool stops growing at its cap; whoever holds the
+            // key in force must stay a candidate.
+            epochKeys.currentKeyHolders(channel.messageStreamId) + roster + onChain)
             .map { it.lowercase() }.distinct()
         return try {
             val res = bridge.call("gateMembers", JSONObject()
@@ -296,8 +299,13 @@ internal class Moderation(private val manager: ChannelManager) {
         val covered = stored.rotatedForNoAccess.map { it.lowercase() }
             .filterNot { it in withAccess }.toSet()
 
-        val pending = (noAccessNow.filter { it in previously } + bannedNow)
-            .distinct().filterNot { it in covered }
+        // Whoever holds the key in force and lost access rotates even when
+        // covered: a moderator may have re-admitted and removed them between
+        // two owner opens, with no sweep seeing the regain.
+        val holders = epochKeys.currentKeyHolders(channel.messageStreamId).toSet()
+
+        val pending = ((noAccessNow.filter { it in previously } + bannedNow).filterNot { it in covered } +
+            noAccessNow.filter { it in holders }).distinct()
 
         val keysId = channel.keysStreamId.ifEmpty { StreamConstants.deriveKeysId(channel.messageStreamId) }
         try {
