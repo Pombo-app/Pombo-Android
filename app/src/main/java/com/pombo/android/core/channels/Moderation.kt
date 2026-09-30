@@ -531,7 +531,8 @@ internal class Moderation(private val manager: ChannelManager) {
         // Accept an ENS name or a raw address.
         val addr = resolveMemberInput(address)
             ?: throw IllegalStateException("Invalid address or ENS name")
-        if (channel.members.any { it.equals(addr, ignoreCase = true) }) {
+        if (channel.members.any { it.equals(addr, ignoreCase = true) }
+            && (channel.type != "gated" || gateStillAllows(channel, addr))) {
             throw IllegalStateException("Address is already a member")
         }
 
@@ -567,6 +568,23 @@ internal class Moderation(private val manager: ChannelManager) {
 
         com.pombo.android.core.GraphApi.clearCache()
         updateStored(channel.messageStreamId) { withMember(it, addr) }
+    }
+
+    /**
+     * Does the gate still allow [addr]? This device's members list goes stale
+     * when a moderator or another device revokes someone.
+     */
+    private suspend fun gateStillAllows(channel: Channel, addr: String): Boolean {
+        val gate = channel.gateAddress ?: return true
+        val res = bridge.call("gateMembers", JSONObject()
+            .put("gate", gate)
+            .put("candidates", JSONArray(listOf(addr.lowercase()))), 30_000)
+        val arr = res.optJSONArray("members") ?: return false
+        for (i in 0 until arr.length()) {
+            val m = arr.optJSONObject(i) ?: continue
+            if (m.optString("address").equals(addr, ignoreCase = true)) return m.optBoolean("allowed")
+        }
+        return false
     }
 
     /** [channel] with [addr] among its members, once. */
