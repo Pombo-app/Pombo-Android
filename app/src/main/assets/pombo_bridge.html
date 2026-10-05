@@ -38,16 +38,15 @@ const BRIDGE_ADDRESS = '__BRIDGE_ADDR__';
 const BRIDGE_PUBKEY = '__BRIDGE_PUB__';
 
 // Polygon RPCs. The user's preference (Settings → API) is injected by Kotlin;
-// when nothing is injected we fall back to the endpoints that answer CORS in
-// a WebView (origin https://pombo.local) — some (e.g. meowrpc) don't send the
-// headers and spam the console. Kotlin already appends these safe ones after
-// the chosen preset, so a CORS-broken pick still falls through to a working
-// endpoint instead of killing the connection.
+// when nothing is injected we fall back to the default providers
+// (RpcEndpoints.DEFAULT_ENABLED), which must all answer CORS in a WebView
+// (origin https://pombo.local).
 let BRIDGE_RPCS = [];
 try { BRIDGE_RPCS = JSON.parse('__BRIDGE_RPCS__'); } catch (e) { /* not injected */ }
 const DEFAULT_RPCS = [
     'https://polygon.drpc.org',
-    'https://polygon-bor-rpc.publicnode.com'
+    'https://poly.api.pocket.network',
+    'https://matic.rpc.sentio.xyz'
 ];
 const RPCS = (Array.isArray(BRIDGE_RPCS) && BRIDGE_RPCS.length ? BRIDGE_RPCS : DEFAULT_RPCS)
     .map(function (url) { return { url: url }; });
@@ -2436,7 +2435,7 @@ const api = {
         // RPCS is the settings-derived list injected at page build — entries
         // are Streamr-shaped ({url}); JsonRpcProvider needs the string or it
         // treats the object as a FetchRequest.
-        const list = (typeof RPCS !== 'undefined' && RPCS && RPCS.length) ? RPCS : [{ url: 'https://polygon-bor-rpc.publicnode.com' }];
+        const list = (typeof RPCS !== 'undefined' && RPCS && RPCS.length) ? RPCS : DEFAULT_RPCS;
         const entry = list[api._gateRpcIndex % list.length];
         return typeof entry === 'string' ? entry : entry.url;
     },
@@ -2593,7 +2592,7 @@ const api = {
         const cacheKey = String(a.gate).toLowerCase() + '|' + String(a.user).toLowerCase();
         const cached = api._gateAccessCache.get(cacheKey);
         if (cached && Date.now() - cached.at < api._gateAccessTtl(cached.value)) return { access: cached.value };
-        const list = (typeof RPCS !== 'undefined' && RPCS && RPCS.length) ? RPCS : [{ url: 'https://polygon-bor-rpc.publicnode.com' }];
+        const list = (typeof RPCS !== 'undefined' && RPCS && RPCS.length) ? RPCS : DEFAULT_RPCS;
         const urls = list.map(function (e) { return typeof e === 'string' ? e : e.url; }).filter(Boolean);
         if (!urls.length) return { access: false, failed: true };
         const gen = api._gateGen(a.gate);
