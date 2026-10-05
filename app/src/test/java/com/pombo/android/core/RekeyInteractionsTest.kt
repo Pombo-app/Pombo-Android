@@ -55,21 +55,21 @@ class RekeyInteractionsTest {
 
     @Test
     fun `moves the grants first, then announces the new key at the next rev`() = runBlocking {
-        var granted: Pair<String, String?>? = null
+        var granted: Pair<String, List<String>>? = null
         val keys = manager()
 
-        val rev = keys.rekeyInteractionsKey(stream, keysStream) { next, old ->
-            events += "grants"; granted = next to old
+        val rev = keys.rekeyInteractionsKey(stream, keysStream) { next, revoke ->
+            events += "grants"; granted = next to revoke
         }
 
         assertEquals(2, rev)
         // "adopted" is what hands the new key to the account's other devices through sync.
-        assertEquals(listOf("grants", "announce", "adopted"), events)
+        assertEquals(listOf("grants", "adopted", "announce"), events)
         val ann = published.single()
         assertEquals("i", ann.getString("k"))
         assertEquals(2, ann.getInt("rev"))
         assertEquals(granted!!.first, ann.getString("addr"))
-        assertEquals(oldAddress, granted!!.second)
+        assertEquals(listOf(oldAddress), granted!!.second)
         assertNotEquals(oldAddress, ann.getString("addr"))
         assertEquals(ann.getString("keyId"), keys.interactionsKeyFor(stream)?.keyId)
     }

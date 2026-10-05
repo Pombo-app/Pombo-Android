@@ -2298,6 +2298,21 @@ const api = {
         return { ok: true };
     },
 
+    // Which side of a re-key holds PUBLISH, stream by stream (web streamr.js
+    // rekeyGrantsState). Read-only; throws when the chain cannot be read.
+    async rekeyGrantsState(a) {
+        if (!client) throw new Error('client not connected');
+        const holds = (streamId, address) => client.hasPermission(
+            { streamId: streamId, userId: address.toLowerCase(), permission: 'publish', allowPublic: false });
+        const next = [];
+        const old = [];
+        for (const streamId of a.streamIds) {
+            next.push(await holds(streamId, a.newAddress));
+            old.push(a.oldAddress ? await holds(streamId, a.oldAddress) : false);
+        }
+        return { next: next, old: old };
+    },
+
     // Retention is a SECOND transaction and fails on its own. It gets its own
     // retries here, because the native caller retries this whole call and a
     // swallowed failure never reaches it. When it never lands the caller is

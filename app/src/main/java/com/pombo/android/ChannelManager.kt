@@ -336,6 +336,22 @@ class ChannelManager(
         isPreviewChannel = { messageStreamId ->
             _channels.value.none { it.messageStreamId == messageStreamId }
         },
+        // The streams Moderation's re-key grants write, read back off the chain.
+        readRekeyGrants = { messageStreamId, interactions, newAddress, oldAddress ->
+            val channel = channelByStream(messageStreamId)
+                ?: throw IllegalStateException("Unknown channel for $messageStreamId")
+            val streamIds = if (interactions) listOf(
+                channel.interactionsStreamId.ifEmpty { StreamConstants.deriveInteractionsId(messageStreamId) },
+                channel.ephemeralStreamId
+            ) else listOf(messageStreamId, channel.ephemeralStreamId)
+            val res = bridge.call("rekeyGrantsState", JSONObject()
+                .put("streamIds", JSONArray(streamIds.filter { it.isNotEmpty() }))
+                .put("newAddress", newAddress)
+                .put("oldAddress", oldAddress ?: JSONObject.NULL))
+            fun held(key: String) = res.getJSONArray(key).let { arr -> List(arr.length()) { arr.getBoolean(it) } }
+            com.pombo.android.core.EpochKeyManager.RekeyGrants(held("next"), held("old"))
+        },
+        onRekeyUnsettled = { _, warning -> onGateWarning?.invoke(warning) },
         myPrivateKey = myPrivateKey,
         myUsername = myUsername,
         publishRoster = { keysStreamId, data ->

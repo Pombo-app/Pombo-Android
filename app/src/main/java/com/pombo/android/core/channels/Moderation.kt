@@ -691,13 +691,12 @@ internal class Moderation(private val manager: ChannelManager) {
             "the publish key only exists on Sealed channels"
         }
         val keysId = channel.keysStreamId.ifEmpty { StreamConstants.deriveKeysId(channel.messageStreamId) }
-        return epochKeys.rekeyPublishKey(channel.messageStreamId, keysId) { newAddress, oldAddress ->
+        return epochKeys.rekeyPublishKey(channel.messageStreamId, keysId) { newAddress, revoke ->
             val assignments = JSONArray().apply {
                 // PUBLISH alone: the shared key writes, the clone reads.
                 put(JSONObject().put("userId", newAddress)
                     .put("permissions", JSONArray(listOf("publish"))))
-                if (oldAddress != null) put(JSONObject().put("userId", oldAddress)
-                    .put("permissions", JSONArray()))
+                revoke.forEach { put(JSONObject().put("userId", it).put("permissions", JSONArray())) }
             }
             setPermissionsRetry(channel.messageStreamId, assignments)
             setPermissionsRetry(channel.ephemeralStreamId, assignments)
@@ -713,12 +712,11 @@ internal class Moderation(private val manager: ChannelManager) {
         val keysId = channel.keysStreamId.ifEmpty { StreamConstants.deriveKeysId(channel.messageStreamId) }
         val interactionsId = channel.interactionsStreamId
             .ifEmpty { StreamConstants.deriveInteractionsId(channel.messageStreamId) }
-        return epochKeys.rekeyInteractionsKey(channel.messageStreamId, keysId) { newAddress, oldAddress ->
+        return epochKeys.rekeyInteractionsKey(channel.messageStreamId, keysId) { newAddress, revoke ->
             val assignments = JSONArray().apply {
                 put(JSONObject().put("userId", newAddress)
                     .put("permissions", JSONArray(listOf("publish"))))
-                if (oldAddress != null) put(JSONObject().put("userId", oldAddress)
-                    .put("permissions", JSONArray()))
+                revoke.forEach { put(JSONObject().put("userId", it).put("permissions", JSONArray())) }
             }
             setPermissionsRetry(listOf(interactionsId, channel.ephemeralStreamId), assignments)
         }
