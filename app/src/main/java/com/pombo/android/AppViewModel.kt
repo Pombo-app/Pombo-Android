@@ -43,6 +43,7 @@ class AppViewModel(app: Application) : AndroidViewModel(app), PomboBridge.Listen
     private val unreadStore = com.pombo.android.data.UnreadStore(app)
     private val blobStore = com.pombo.android.core.ImageBlobStore(app)
     private val sentDmStore = com.pombo.android.data.SentDmStore(app)
+    private val failedOutbox = com.pombo.android.data.FailedOutboxStore(app)
     private val sentReactionsStore = com.pombo.android.data.SentReactionsStore(app)
     private val epochKeyStore = com.pombo.android.data.EpochKeyStore(app)
     private val adminFloorStore = com.pombo.android.core.AdminFloorStore(app)
@@ -129,6 +130,7 @@ class AppViewModel(app: Application) : AndroidViewModel(app), PomboBridge.Listen
         blobStore = blobStore,
         sentDmStore = sentDmStore,
         sentReactionsStore = sentReactionsStore,
+        failedOutbox = failedOutbox,
         inviteStore = inviteStore,
         unreadStore = unreadStore,
         epochKeyStore = epochKeyStore,
@@ -1625,6 +1627,8 @@ class AppViewModel(app: Application) : AndroidViewModel(app), PomboBridge.Listen
         sentDmStore.scopeAddress = address
         unreadStore.scopeAddress = address
         sentDmStore.memoryOnly = guest
+        failedOutbox.scopeAddress = address
+        failedOutbox.memoryOnly = guest
         sentReactionsStore.scopeAddress = address
         sentReactionsStore.memoryOnly = guest
         pushRegistry.scopeAddress = address
@@ -1672,6 +1676,7 @@ class AppViewModel(app: Application) : AndroidViewModel(app), PomboBridge.Listen
         contactsStore.scopeAddress = store.address
         inviteStore.scopeAddress = store.address
         sentDmStore.scopeAddress = store.address
+        failedOutbox.scopeAddress = store.address
         sentReactionsStore.scopeAddress = store.address
         pushRegistry.scopeAddress = store.address
         settingsStore.scopeAddress = store.address

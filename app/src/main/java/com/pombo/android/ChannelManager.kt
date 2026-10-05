@@ -159,6 +159,8 @@ class ChannelManager(
     internal val sentDmStore: com.pombo.android.data.SentDmStore,
     /** Own DM/write-only reactions — no resend returns them (web sentReactions). */
     private val sentReactionsStore: com.pombo.android.data.SentReactionsStore? = null,
+    /** Failed text sends, so their Retry survives a restart. */
+    private val failedOutbox: com.pombo.android.data.FailedOutboxStore? = null,
     private val inviteStore: com.pombo.android.data.InviteStore,
     private val unreadStore: com.pombo.android.data.UnreadStore,
     /** Persisted epoch keys for gated channels (-4 protocol, N-A). */
@@ -4050,6 +4052,7 @@ class ChannelManager(
             .distinctBy { it.id }
             .sortedBy { it.timestamp }
         if (merged.isNotEmpty()) mergeMessages(merged)
+        restoreFailedOutbox(channel)
 
         // Now that the messages exist, fill any image from the local ledger.
         // Order matters: hydrating before the merge would map over a list that
@@ -4330,9 +4333,11 @@ class ChannelManager(
             }
         } catch (e: Exception) {
             markFailed(id, e.message)
+            keepForRetry(channel.messageStreamId, wire, sender, e.message)
             throw e
         }
         confirmMessage(id)
+        failedOutbox?.remove(channel.messageStreamId, id)
         // Persist only after the publish succeeded, so a failed send does not
         // leave a message in the history that the peer never received. This is
         // the only copy we will ever have of it — and it keeps `sender`,
@@ -5276,6 +5281,7 @@ class ChannelManager(
             // older snapshot taken before the user left.
             store.markLeft(messageStreamId)
             saveChannels()
+            failedOutbox?.clear(messageStreamId)
             // Rotate the channel pseudonym on a GENUINE leave (never on a mere
             // view switch — closeCurrent keeps it: peers mid-transfer know the
             // current publisher). Rejoining gets a fresh key, so yesterday's
@@ -5722,6 +5728,7 @@ class ChannelManager(
             // what the node answered, which is what the empty state shows.
             lastStorageReadError(channel.messageStreamId, StreamConstants.P_MESSAGES)?.let { _historyError.value = it }
         }
+        restoreFailedOutbox(channel)
 
         if (overrides != null) {
             for (i in 0 until overrides.entries.length()) {
@@ -6050,9 +6057,11 @@ class ChannelManager(
             }
         } catch (e: Exception) {
             markFailed(id, e.message)
+            keepForRetry(channel.messageStreamId, content, content.optString("sender"), e.message)
             throw e
         }
         confirmMessage(id)
+        failedOutbox?.remove(channel.messageStreamId, id)
         delivery.track(channel, id, envelopeTs)
         // Without this a message sent from Android never wakes anyone: web
         // clients rely on the relay seeing a wake signal on the push stream.
@@ -6214,6 +6223,7 @@ class ChannelManager(
         deletedIds.add(targetId)
         if (original.isImage) original.imageId?.let { tombstoneImage(it) }
         _messages.value = _messages.value.filterNot { it.id == targetId }
+        failedOutbox?.remove(channel.messageStreamId, targetId)
         if (channel.type == "dm") {
             sentDmStore.delete(channel.messageStreamId, targetId)
             onLocalStateChanged()
@@ -7337,6 +7347,7 @@ class ChannelManager(
         val mine = sender.equals(me, ignoreCase = true)
         if (mine && _messages.value.any { it.id == id }) {
             confirmMessage(id)
+            failedOutbox?.remove(channel.messageStreamId, id)
             return
         }
         val msg = UiMessage(
@@ -7563,6 +7574,73 @@ class ChannelManager(
 
     internal fun markUndelivered(id: String, reason: String) = updateSendState(id) {
         it.copy(pending = false, failed = true, undelivered = true, failError = reason)
+    }
+
+    /** Keeps a failed text send, as the wire fields its Retry republishes. */
+    private fun keepForRetry(
+        streamId: String, wire: JSONObject, sender: String, error: String?, undelivered: Boolean = false
+    ) {
+        failedOutbox?.put(streamId, JSONObject(wire.toString())
+            .put("sender", sender)
+            .put("failError", error ?: JSONObject.NULL)
+            .put("undelivered", undelivered)
+            .put("failedAt", System.currentTimeMillis()))
+    }
+
+    /** A sent text storage never recorded joins the outbox like one that failed outright. */
+    @Synchronized
+    internal fun keepUndeliveredForRetry(streamId: String, id: String) {
+        val msg = _messages.value.firstOrNull { it.id == id }
+            ?: reopenSnapshots.values.firstNotNullOfOrNull { s -> s.messages.firstOrNull { it.id == id } }
+            ?: return
+        if (msg.isImage || msg.file != null || msg.storageFile != null) return
+        keepForRetry(streamId, textWire(msg.id, msg.text, msg.sender, msg.timestamp, msg.replyTo),
+            msg.sender, msg.failError, undelivered = true)
+    }
+
+    /**
+     * Brings back the failed sends of this conversation that the timeline does
+     * not hold. An id the timeline holds unfailed was delivered after all.
+     */
+    private fun restoreFailedOutbox(channel: Channel) {
+        val outbox = failedOutbox ?: return
+        val me = myAddress() ?: return
+        val shown = _messages.value.associateBy { it.id }
+        val restored = mutableListOf<UiMessage>()
+        for (entry in outbox.load(channel.messageStreamId)) {
+            val id = entry.optString("id")
+            if (id.isEmpty()) continue
+            val existing = shown[id]
+            if (existing != null) {
+                if (!existing.failed) outbox.remove(channel.messageStreamId, id)
+                continue
+            }
+            val sender = entry.optString("sender").ifEmpty { me }
+            restored += UiMessage(
+                id = id,
+                text = entry.optString("text"),
+                sender = sender,
+                senderName = entry.optStringOrNull("senderName"),
+                timestamp = entry.optLong("timestamp"),
+                mine = true,
+                failed = true,
+                failError = entry.optStringOrNull("failError"),
+                undelivered = entry.optBoolean("undelivered", false),
+                verified = true,
+                ensName = ensStore.cachedName(sender),
+                ensAvatar = ensStore.cachedAvatar(sender),
+                replyTo = entry.optJSONObject("replyTo")?.let {
+                    val rid = it.optString("id")
+                    if (rid.isEmpty()) null else ReplyRef(
+                        id = rid,
+                        sender = it.optString("sender"),
+                        senderName = it.optStringOrNull("senderName"),
+                        text = it.optString("text")
+                    )
+                }
+            )
+        }
+        if (restored.isNotEmpty()) mergeMessages(restored)
     }
 
     /** A send can settle after the user left its channel: the reopen copy must hear it too. */

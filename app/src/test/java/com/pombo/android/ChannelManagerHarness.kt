@@ -35,7 +35,8 @@ import org.json.JSONObject
  */
 class ChannelManagerHarness(
     channels: List<Channel> = emptyList(),
-    private val trustedContacts: Set<String> = emptySet()
+    private val trustedContacts: Set<String> = emptySet(),
+    failedOutbox: com.pombo.android.data.FailedOutboxStore? = null
 ) {
     /** Throwaway key; the channel pseudonym is minted from it, so it must be real. */
     val myKey = "0x4f3edf983ac636a65a842ce7c78d9aa706d3b113bce9c46f30d7d21715b23b1d"
@@ -86,6 +87,7 @@ class ChannelManagerHarness(
             ensStore = ensStore,
             blobStore = mockk(relaxed = true),
             sentDmStore = mockk(relaxed = true),
+            failedOutbox = failedOutbox,
             inviteStore = mockk(relaxed = true),
             unreadStore = unreadStore,
             epochKeyStore = mockk(relaxed = true),

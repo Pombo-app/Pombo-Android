@@ -95,6 +95,7 @@ internal class DeliveryConfirm(private val manager: ChannelManager) {
                 if (!remove(streamId, entry.id)) continue
                 if (entry.verified) {
                     manager.markUndelivered(entry.id, UNDELIVERED_REASON)
+                    manager.keepUndeliveredForRetry(streamId, entry.id)
                     Log.w(TAG, "$label: ${entry.id} never reached storage")
                 } else {
                     Log.w(TAG, "$label: ${entry.id} unverifiable, storage never answered")
