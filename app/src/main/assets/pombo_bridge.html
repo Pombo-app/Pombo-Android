@@ -2946,7 +2946,14 @@ window.bridgeCall = function (id, method, argsB64) {
         const value = await fn(args);
         Native.result(id, true, utf8ToB64(JSON.stringify(value === undefined ? {} : value)));
     }).catch(function (e) {
-        const msg = (e && e.message) ? e.message : String(e);
+        let msg = (e && e.message) ? e.message : String(e);
+        // The SDK's contract-call wrapper keeps only code/reason in its message;
+        // the FallbackProvider's failed block-number read shows only on the
+        // error it wraps, and ChainErrors.kt matches this suffix.
+        const inner = e && e.reason;
+        if (inner && inner.code === 'INVALID_ARGUMENT' && inner.argument === '%internal') {
+            msg += ' (argument="%internal")';
+        }
         Native.result(id, false, utf8ToB64(JSON.stringify({ error: msg })));
     });
 };
