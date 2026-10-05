@@ -69,6 +69,8 @@ class PomboBridge(
         fun onBridgeProgress(op: String, step: String) {}
         /** The client's node failed to start; nothing publishes or subscribes until a [reconnect]. */
         fun onBridgeNodeDead(message: String) {}
+        /** The page's RPC health report (core.RpcHealth.parse). */
+        fun onBridgeRpcHealth(reportJson: String) {}
         fun onBridgeError(message: String)
     }
 
@@ -461,6 +463,9 @@ class PomboBridge(
 
         @JavascriptInterface
         fun nodeDead(msg: String) { main.post { listener.onBridgeNodeDead(msg) } }
+
+        @JavascriptInterface
+        fun rpcHealth(reportJson: String) { main.post { listener.onBridgeRpcHealth(reportJson) } }
 
         @JavascriptInterface
         fun error(msg: String) { main.post { listener.onBridgeError(msg) } }

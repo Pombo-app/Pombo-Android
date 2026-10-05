@@ -48,8 +48,9 @@ const DEFAULT_RPCS = [
     'https://poly.api.pocket.network',
     'https://matic.rpc.sentio.xyz'
 ];
-const RPCS = (Array.isArray(BRIDGE_RPCS) && BRIDGE_RPCS.length ? BRIDGE_RPCS : DEFAULT_RPCS)
-    .map(function (url) { return { url: url }; });
+const CHOSEN_RPCS = Array.isArray(BRIDGE_RPCS) && BRIDGE_RPCS.length ? BRIDGE_RPCS : DEFAULT_RPCS;
+// The chosen ones that passed boot()'s health probe (api.rpcHealthProbe).
+let RPCS = CHOSEN_RPCS.map(function (url) { return { url: url }; });
 
 // Ethereum mainnet RPCs for ENS reverse lookup (same list as the web config).
 const ENS_RPCS = [
@@ -2450,6 +2451,134 @@ const api = {
         return value ? api._GATE_GRANT_TTL_MS : api._GATE_DENIAL_TTL_MS;
     },
 
+    // ---- RPC endpoint health (the web's rpcHealth.js) ----
+    // Each chosen endpoint is probed with the block number and the SDK's most
+    // frequent read, the storage node registry's getNode for Pombo's node.
+    _HEALTH_TIMEOUT_MS: 3000,
+    _HEALTH_MAX_LAG: 10,
+    _HEALTH_REPROBE_MS: 15 * 60 * 1000,
+    _HEALTH_FAILURES: 3,
+    _HEALTH_FAILURE_WINDOW_MS: 2 * 60 * 1000,
+    _HEALTH_GET_NODE: {
+        to: '0x080f34fec2bc33928999ea9e39adc798bef3e0d6',
+        data: '0x9d209048000000000000000000000000ae340e799e8151f6a4999d245e466197aa217667'
+    },
+    _healthVerdicts: {},
+    _healthProbing: null,
+    _healthFailures: [],
+    _healthLastFailureProbe: 0,
+    _healthClientBuilt: false,
+
+    async _healthCall(url, method, params) {
+        const isTimeout = function (e) { return e && (e.name === 'TimeoutError' || e.name === 'AbortError'); };
+        let response;
+        try {
+            response = await fetch(url, {
+                method: 'POST',
+                headers: { 'content-type': 'application/json' },
+                body: JSON.stringify({ jsonrpc: '2.0', id: 1, method: method, params: params }),
+                signal: AbortSignal.timeout(api._HEALTH_TIMEOUT_MS)
+            });
+        } catch (e) {
+            return { kind: isTimeout(e) ? 'timeout' : 'network' };
+        }
+        if (!response.ok) return { kind: 'http', status: response.status };
+        let data;
+        try {
+            data = await response.json();
+        } catch (e) {
+            return { kind: isTimeout(e) ? 'timeout' : 'bad' };
+        }
+        if (data && data.error) return { kind: 'rpc', code: data.error.code };
+        return { kind: 'ok', result: data && data.result };
+    },
+
+    _healthFailure(o) {
+        if (o.kind === 'ok') return null;
+        if (o.kind === 'timeout') return { reason: 'timeout' };
+        if (o.kind === 'network') return { reason: 'unreachable' };
+        if (o.kind === 'http') {
+            if (o.status === 429) return { reason: 'limited' };
+            if (o.status === 529 || o.status === 503) return { reason: 'overloaded', status: o.status };
+            return { reason: 'http', status: o.status };
+        }
+        if (o.kind === 'rpc') {
+            if (o.code === -32005 || o.code === -32001) return { reason: 'limited' };
+            return { reason: 'refused', code: o.code };
+        }
+        return { reason: 'badresult' };
+    },
+
+    async _healthProbeOne(url) {
+        const r = await Promise.all([
+            api._healthCall(url, 'eth_blockNumber', []),
+            api._healthCall(url, 'eth_call', [api._HEALTH_GET_NODE, 'latest'])
+        ]);
+        const failed = api._healthFailure(r[0]) || api._healthFailure(r[1]);
+        if (failed) return Object.assign({ ok: false }, failed);
+        const block = typeof r[0].result === 'string' ? parseInt(r[0].result, 16) : NaN;
+        if (!Number.isSafeInteger(block) || block <= 0) return { ok: false, reason: 'badresult' };
+        if (typeof r[1].result !== 'string' || !/^0x[0-9a-f]{64,}$/i.test(r[1].result)) return { ok: false, reason: 'badresult' };
+        return { ok: true, block: block };
+    },
+
+    /** The chosen urls minus the failed ones, in the user's order; never empty. */
+    _healthUsable() {
+        const urls = CHOSEN_RPCS.filter(function (u) { return !(api._healthVerdicts[u] && api._healthVerdicts[u].ok === false); });
+        return urls.length ? { urls: urls, fallback: false } : { urls: CHOSEN_RPCS.slice(), fallback: true };
+    },
+
+    /** Probe the chosen endpoints (concurrent calls share one run) and report to Kotlin. */
+    async rpcHealthProbe() {
+        if (api._healthProbing) return api._healthProbing;
+        api._healthProbing = (async function () {
+            const results = await Promise.all(CHOSEN_RPCS.map(api._healthProbeOne));
+            const best = Math.max(0, ...results.filter(function (v) { return v.ok; }).map(function (v) { return v.block; }));
+            const at = Date.now();
+            CHOSEN_RPCS.forEach(function (url, i) {
+                const v = results[i];
+                const behind = v.ok ? best - v.block : 0;
+                api._healthVerdicts[url] = Object.assign(
+                    behind > api._HEALTH_MAX_LAG ? { ok: false, reason: 'lagging', behind: behind, block: v.block } : v,
+                    { at: at });
+            });
+            api._healthReport();
+            return api._healthUsable();
+        })().finally(function () { api._healthProbing = null; });
+        return api._healthProbing;
+    },
+
+    _healthReport() {
+        if (!api._healthClientBuilt) return;
+        const usable = api._healthUsable();
+        try {
+            Native.rpcHealth(JSON.stringify({
+                applied: RPCS.map(function (r) { return r.url; }),
+                usable: usable.urls,
+                verdicts: api._healthVerdicts,
+                fallback: usable.fallback
+            }));
+        } catch (e) { /* an older native side has no rpcHealth */ }
+    },
+
+    _isRpcFailure(e) {
+        const codes = /^(SERVER_ERROR|TIMEOUT|NETWORK_ERROR)$/;
+        return !!e && (codes.test(e.code || '') || codes.test((e.reason && e.reason.code) || '')
+            || /contract call[\s\S]*code=(SERVER_ERROR|TIMEOUT|NETWORK_ERROR)/.test(e.message || ''));
+    },
+
+    /** Three RPC read failures within the window probe again, once per window. */
+    _noteRpcFailure() {
+        const now = Date.now();
+        api._healthFailures = api._healthFailures.filter(function (t) { return now - t <= api._HEALTH_FAILURE_WINDOW_MS; });
+        api._healthFailures.push(now);
+        if (api._healthFailures.length < api._HEALTH_FAILURES) return;
+        if (now - api._healthLastFailureProbe < api._HEALTH_FAILURE_WINDOW_MS) return;
+        api._healthFailures = [];
+        api._healthLastFailureProbe = now;
+        api.rpcHealthProbe();
+    },
+
     _gateRpcUrl() {
         // RPCS is the settings-derived list injected at page build — entries
         // are Streamr-shaped ({url}); JsonRpcProvider needs the string or it
@@ -3029,6 +3158,7 @@ window.bridgeCall = function (id, method, argsB64) {
         if (inner && inner.code === 'INVALID_ARGUMENT' && inner.argument === '%internal') {
             msg += ' (argument="%internal")';
         }
+        if (api._isRpcFailure(e)) api._noteRpcFailure();
         Native.result(id, false, utf8ToB64(JSON.stringify({ error: msg })));
     });
 };
@@ -3243,6 +3373,9 @@ async function boot() {
         }
         wallet = { address: BRIDGE_ADDRESS, publicKey: BRIDGE_PUBKEY };
         Native.status('connecting');
+        // The SDK, the gate and the quorum get only the endpoints that answer.
+        await api.rpcHealthProbe();
+        RPCS = api._healthUsable().urls.map(function (url) { return { url: url }; });
         // Config identical to the web streamr.js init(), except auth: the key
         // stays in Kotlin and the SDK signs through nativeIdentity.
         client = new window.StreamrClient({
@@ -3279,6 +3412,9 @@ async function boot() {
             // dead-key cost per message.
             encryption: { keyRequestTimeout: 10000 }
         });
+        api._healthClientBuilt = true;
+        api._healthReport();
+        setInterval(function () { api.rpcHealthProbe(); }, api._HEALTH_REPROBE_MS);
         const addr = await client.getAddress();
         Native.connected(addr);
     } catch (e) {
