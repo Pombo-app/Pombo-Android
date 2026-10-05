@@ -1004,8 +1004,9 @@ class EpochKeyManager(
             val s = state[messageStreamId] ?: return
             val held = s.pubKey ?: return
             if ((s.pubAnnounce?.rev ?: 0) > held.rev) return   // we hold the superseded key
+            val unannounced = (s.pubAnnounce?.rev ?: 0) < held.rev
             val retentionMs = retentionDays.toLong() * 86_400_000L
-            if (s.pubAnnounceFreshness != 0L &&
+            if (!unannounced && s.pubAnnounceFreshness != 0L &&
                 System.currentTimeMillis() - s.pubAnnounceFreshness < (retentionMs * 0.8).toLong()) return
             announce = JSONObject()
                 .put("t", StreamConstants.PUB_ANNOUNCE)
@@ -1036,8 +1037,10 @@ class EpochKeyManager(
             // re-key, which is on-chain work.
             val held = s.intKey ?: return
             if ((s.intAnnounce?.rev ?: 0) > held.rev) return
+            // A fresh announce of an OLDER rev says nothing about the held key.
+            val unannounced = (s.intAnnounce?.rev ?: 0) < held.rev
             val retentionMs = retentionDays.toLong() * 86_400_000L
-            if (s.intAnnounceFreshness != 0L &&
+            if (!unannounced && s.intAnnounceFreshness != 0L &&
                 System.currentTimeMillis() - s.intAnnounceFreshness < (retentionMs * 0.8).toLong()) return
             announce = JSONObject()
                 .put("t", StreamConstants.PUB_ANNOUNCE)
