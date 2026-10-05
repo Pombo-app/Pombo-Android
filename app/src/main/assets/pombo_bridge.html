@@ -2576,7 +2576,7 @@ const api = {
     async _gateReadAt(url, gate, user) {
         try {
             const p = new window.ethers.JsonRpcProvider(url, 137, { staticNetwork: true, batchMaxCount: 1 });
-            return await new window.ethers.Contract(gate, api._GATE_ABI, p).checkAccess(user);
+            return await api._gateDeadline(new window.ethers.Contract(gate, api._GATE_ABI, p).checkAccess(user));
         } catch (e) {
             console.warn('gate: quorum read failed: ' + (e && e.message || e));
             return null;
