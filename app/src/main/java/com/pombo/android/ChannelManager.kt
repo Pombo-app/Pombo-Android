@@ -4783,9 +4783,12 @@ class ChannelManager(
                 if (isEpochChannel(channel) && channel.keysStreamId.isNotEmpty()) {
                     awaitGateRepair(channel.messageStreamId)
                     epochKeys.loadPersistedState(channel.messageStreamId)
-                    if (epochKeys.hasCurrentKey(channel.messageStreamId)) {
+                    val warm = epochKeys.hasCurrentKey(channel.messageStreamId)
+                    if (warm) {
                         android.util.Log.d("PomboPerf", "epochKeys ${channel.name}: warm (persisted), reconcile in background")
-                        launch {
+                        // Not a child of the open: a failure elsewhere in it
+                        // must not cancel this read or the sweep that needs it.
+                        scope.launch {
                             // After the open's own resends: the WebView JS
                             // thread is single — a concurrent -4 drain here
                             // pushed the P0 history call into the seconds.
@@ -4806,13 +4809,15 @@ class ChannelManager(
                                         memberCount = channel.members.size,
                                         gated = channel.type == "gated")
                                     if (attempt > 0) Log.i(TAG, "Background epoch reconcile recovered on retry $attempt")
-                                    return@launch
+                                    break
                                 } catch (e: Exception) {
                                     Log.w(TAG, "Background epoch reconcile failed (attempt ${attempt + 1}/5)", e)
                                 }
                                 attempt += 1
                                 delay(minOf(15_000L * attempt, 60_000L))
                             }
+                            // Who holds the key in force comes from this -4 read.
+                            if (stillCurrent(generation)) rotateForLostAccess(channel)
                         }
                     } else {
                         val tEnsure = System.currentTimeMillis()
@@ -4872,7 +4877,7 @@ class ChannelManager(
                         }
                     }
                     if (!stillCurrent(generation)) return@launch
-                    launch { rotateForLostAccess(channel) }
+                    if (!warm) launch { rotateForLostAccess(channel) }
                 }
                 val loads = launch {
                     listOf(

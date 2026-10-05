@@ -162,6 +162,8 @@ class EpochKeyManager(
          * the owner — no indexer, no event scan.
          */
         val seenRequesters = LinkedHashSet<String>()
+        /** requestId -> the account that sent that KEY_REQUEST; memory only, the -4 history refills it. */
+        val requestAuthors = LinkedHashMap<String, String>()
         /**
          * requestId -> (fromEpoch, sentAt) — PERSISTED. Holds no key material
          * (D12 intact by construction): a v2 wrap for any of these ids opens
@@ -605,6 +607,7 @@ class EpochKeyManager(
                     StreamConstants.KEY_REQUEST -> {
                         storedRequests.add(entry)
                         recordRequesterLocked(s, entry.publisherId)
+                        recordRequestAuthorLocked(s, entry.data.optString("requestId"), entry.publisherId)
                     }
                 }
             }
@@ -744,6 +747,29 @@ class EpochKeyManager(
      */
     suspend fun seenRequesters(messageStreamId: String): List<String> = mutex.withLock {
         state[messageStreamId]?.seenRequesters?.toList() ?: emptyList()
+    }
+
+    /** Caller holds the lock. */
+    private fun recordRequestAuthorLocked(s: ChannelState, requestId: String, publisherId: String?) {
+        val addr = publisherId?.lowercase() ?: return
+        if (requestId.isEmpty() || !ADDR_RE.matches(addr)) return
+        if (!s.requestAuthors.containsKey(requestId) && s.requestAuthors.size >= SEEN_WRAPS_MAX) {
+            s.requestAuthors.keys.firstOrNull()?.let { s.requestAuthors.remove(it) }
+        }
+        s.requestAuthors[requestId] = addr
+    }
+
+    /**
+     * Accounts some responder handed the key in force to, whoever answered,
+     * as far as the -4 history this session read goes back.
+     */
+    suspend fun currentKeyHolders(messageStreamId: String): List<String> = mutex.withLock {
+        val s = state[messageStreamId] ?: return@withLock emptyList()
+        val keyId = s.announces[s.currentEpoch]?.keyId ?: return@withLock emptyList()
+        s.seenWraps.entries
+            .filter { (_, keyIds) -> keyId in keyIds }
+            .mapNotNull { (requestId, _) -> s.requestAuthors[requestId] }
+            .distinct()
     }
 
     /**
@@ -1372,7 +1398,11 @@ class EpochKeyManager(
         messageStreamId: String, keysStreamId: String,
         data: JSONObject, publisherId: String?, memberCount: Int
     ) {
-        mutex.withLock { recordRequesterLocked(getState(messageStreamId), publisherId) }
+        mutex.withLock {
+            val s = getState(messageStreamId)
+            recordRequesterLocked(s, publisherId)
+            recordRequestAuthorLocked(s, data.optString("requestId"), publisherId)
+        }
         val pubkey = data.optString("pubkey").ifEmpty { return }
         val requestId = data.optString("requestId").ifEmpty { return }
         // Skip only what THIS session asked for, by requestId. Skipping every

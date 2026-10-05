@@ -204,7 +204,10 @@ internal class Moderation(private val manager: ChannelManager) {
         // snapshot shrinks and a later loss of access never rotates.
         val candidates = (channel.members + channel.knownBanned +
             channel.accessSnapshot + channel.rotatedForNoAccess +
-            epochKeys.seenRequesters(channel.messageStreamId) + roster + onChain)
+            epochKeys.seenRequesters(channel.messageStreamId) +
+            // The requester pool stops growing at its cap; whoever holds the
+            // key in force must stay a candidate.
+            epochKeys.currentKeyHolders(channel.messageStreamId) + roster + onChain)
             .map { it.lowercase() }.distinct()
         return try {
             val res = bridge.call("gateMembers", JSONObject()
@@ -296,8 +299,13 @@ internal class Moderation(private val manager: ChannelManager) {
         val covered = stored.rotatedForNoAccess.map { it.lowercase() }
             .filterNot { it in withAccess }.toSet()
 
-        val pending = (noAccessNow.filter { it in previously } + bannedNow)
-            .distinct().filterNot { it in covered }
+        // Whoever holds the key in force and lost access rotates even when
+        // covered: a moderator may have re-admitted and removed them between
+        // two owner opens, with no sweep seeing the regain.
+        val holders = epochKeys.currentKeyHolders(channel.messageStreamId).toSet()
+
+        val pending = ((noAccessNow.filter { it in previously } + bannedNow).filterNot { it in covered } +
+            noAccessNow.filter { it in holders }).distinct()
 
         val keysId = channel.keysStreamId.ifEmpty { StreamConstants.deriveKeysId(channel.messageStreamId) }
         try {
@@ -531,7 +539,8 @@ internal class Moderation(private val manager: ChannelManager) {
         // Accept an ENS name or a raw address.
         val addr = resolveMemberInput(address)
             ?: throw IllegalStateException("Invalid address or ENS name")
-        if (channel.members.any { it.equals(addr, ignoreCase = true) }) {
+        if (channel.members.any { it.equals(addr, ignoreCase = true) }
+            && (channel.type != "gated" || gateStillAllows(channel, addr))) {
             throw IllegalStateException("Address is already a member")
         }
 
@@ -567,6 +576,23 @@ internal class Moderation(private val manager: ChannelManager) {
 
         com.pombo.android.core.GraphApi.clearCache()
         updateStored(channel.messageStreamId) { withMember(it, addr) }
+    }
+
+    /**
+     * Does the gate still allow [addr]? This device's members list goes stale
+     * when a moderator or another device revokes someone.
+     */
+    private suspend fun gateStillAllows(channel: Channel, addr: String): Boolean {
+        val gate = channel.gateAddress ?: return true
+        val res = bridge.call("gateMembers", JSONObject()
+            .put("gate", gate)
+            .put("candidates", JSONArray(listOf(addr.lowercase()))), 30_000)
+        val arr = res.optJSONArray("members") ?: return false
+        for (i in 0 until arr.length()) {
+            val m = arr.optJSONObject(i) ?: continue
+            if (m.optString("address").equals(addr, ignoreCase = true)) return m.optBoolean("allowed")
+        }
+        return false
     }
 
     /** [channel] with [addr] among its members, once. */
