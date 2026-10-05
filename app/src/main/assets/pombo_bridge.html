@@ -54,8 +54,7 @@ const RPCS = (Array.isArray(BRIDGE_RPCS) && BRIDGE_RPCS.length ? BRIDGE_RPCS : D
 // Ethereum mainnet RPCs for ENS reverse lookup (same list as the web config).
 const ENS_RPCS = [
     'https://ethereum-rpc.publicnode.com',
-    'https://eth.drpc.org',
-    'https://cloudflare-eth.com'
+    'https://eth.drpc.org'
 ];
 // K-anonymity decoys per reverse lookup (web CONFIG.identity.ensDecoyCount).
 // Kept at 2 because the free ENS tiers 429 easily: cover fires once per
@@ -1773,13 +1772,18 @@ const api = {
         // multiplies the request count until the free tiers answer HTTP 429
         // (identity.js _doResolveENS learned this the hard way).
         var coverUsed = false;
+        var answered = false;
         for (var i = 0; i < ensProviders.length; i++) {
             try {
                 var name = await api._lookupWithDecoys(ensProviders[i], addr, !coverUsed);
                 coverUsed = true;
+                answered = true;
                 if (name) return { name: name };
             } catch (e) { /* try the next provider */ }
         }
+        // EnsStore keeps a null for a day only when a provider said so; a
+        // lookup that no provider answered must fail instead.
+        if (!answered) throw new Error('no ENS provider answered');
         return { name: null };
     },
 
@@ -2644,6 +2648,33 @@ const api = {
 
     _gateInfoCache: new Map(), // gate -> { info|null, at }; null = not v3
 
+    // Contract facts that cannot change (a gate's initialize parameters, a
+    // token's symbol and decimals), kept in this page's localStorage. Public
+    // chain data, so shared by every account on the device.
+    _CHAIN_FACTS_KEY: 'pombo_chain_facts',
+    _CHAIN_FACTS_MAX: 500,
+    _chainFacts(kind) {
+        try {
+            const all = JSON.parse(localStorage.getItem(api._CHAIN_FACTS_KEY) || '{}');
+            return (all && all[kind]) || {};
+        } catch (e) {
+            return {};
+        }
+    },
+    _rememberChainFact(kind, address, value) {
+        try {
+            const all = JSON.parse(localStorage.getItem(api._CHAIN_FACTS_KEY) || '{}') || {};
+            const bucket = all[kind] || (all[kind] = {});
+            delete bucket[address];
+            bucket[address] = value;
+            const keys = Object.keys(bucket);
+            for (let i = 0; i < keys.length - api._CHAIN_FACTS_MAX; i++) delete bucket[keys[i]];
+            localStorage.setItem(api._CHAIN_FACTS_KEY, JSON.stringify(all));
+        } catch (e) {
+            // Storage full or unavailable: the facts are read from the chain again.
+        }
+    },
+
     // { gate, fresh? } -> { owner, mode, token, minBalance, price, duration,
     // wireIdentity, wireIdentityName, readOnly }. TTL'd: price/duration are
     // owner-mutable in v3. A revert means a pre-v3 clone — unsupported by
@@ -2656,23 +2687,38 @@ const api = {
             if (cached.info === null) throw new Error('gate is not v3 (unsupported)');
             return cached.info;
         }
+        // Only price and duration are read once a gate's initialize parameters
+        // are known: PomboGate sets the other six in initialize and never again.
+        const known = api._chainFacts('gates')[key];
+        const withFixed = function (f, price, duration) {
+            return {
+                owner: f.owner, mode: f.mode, token: f.token, minBalance: f.minBalance,
+                price: String(price), duration: String(duration),
+                wireIdentity: f.wireIdentity,
+                wireIdentityName: f.wireIdentity === 1 ? 'sealed' : 'visible',
+                readOnly: f.readOnly
+            };
+        };
         let info;
         try {
             info = await api._gateWithProvider(async function () {
                 const gate = api._gateRead(a.gate);
+                if (known) {
+                    const pd = await Promise.all([gate.price(), gate.duration()]);
+                    return withFixed(known, pd[0], pd[1]);
+                }
                 const r = await Promise.all([
                     gate.owner(), gate.mode(), gate.token(),
                     gate.minBalance(), gate.price(), gate.duration(),
                     gate.wireIdentity(), gate.readOnly()
                 ]);
-                return {
+                const fixed = {
                     owner: String(r[0]).toLowerCase(), mode: Number(r[1]),
                     token: String(r[2]).toLowerCase(), minBalance: String(r[3]),
-                    price: String(r[4]), duration: String(r[5]),
-                    wireIdentity: Number(r[6]),
-                    wireIdentityName: Number(r[6]) === 1 ? 'sealed' : 'visible',
-                    readOnly: !!r[7]
+                    wireIdentity: Number(r[6]), readOnly: !!r[7]
                 };
+                api._rememberChainFact('gates', key, fixed);
+                return withFixed(fixed, r[4], r[5]);
             });
         } catch (e) {
             if (e && e.code === 'CALL_EXCEPTION') {
@@ -2802,19 +2848,33 @@ const api = {
 
     // { token } -> { symbol, decimals|null } — null decimals = ERC-721
     // collection (the getter does not exist there), render whole units.
+    _gateTokenMetaPending: new Map(), // token -> Promise, so concurrent first reads share one
     async gateTokenMeta(a) {
         const key = String(a.token).toLowerCase();
         if (api._gateTokenMetaCache.has(key)) return api._gateTokenMetaCache.get(key);
-        const meta = await api._gateWithProvider(async function () {
+        const stored = api._chainFacts('tokens')[key];
+        if (stored) {
+            api._gateTokenMetaCache.set(key, stored);
+            return stored;
+        }
+        if (api._gateTokenMetaPending.has(key)) return api._gateTokenMetaPending.get(key);
+        const pending = api._gateWithProvider(async function () {
             const token = api._gateReadToken(a.token);
+            let readBoth = true;
             const r = await Promise.all([
-                token.symbol().catch(function () { return key.slice(0, 6) + '…' + key.slice(-4); }),
-                token.decimals().then(function (d) { return Number(d); }).catch(function () { return null; })
+                token.symbol().catch(function () { readBoth = false; return key.slice(0, 6) + '…' + key.slice(-4); }),
+                token.decimals().then(function (d) { return Number(d); }).catch(function () { readBoth = false; return null; })
             ]);
-            return { symbol: r[0], decimals: r[1] };
-        });
-        api._gateTokenMetaCache.set(key, meta);
-        return meta;
+            return { meta: { symbol: r[0], decimals: r[1] }, readBoth: readBoth };
+        }).then(function (res) {
+            api._gateTokenMetaCache.set(key, res.meta);
+            // A fallback symbol or a missing decimals may be a failed read, not
+            // the token's answer (an ERC-721 has no decimals), so neither is kept.
+            if (res.readBoth) api._rememberChainFact('tokens', key, res.meta);
+            return res.meta;
+        }).finally(function () { api._gateTokenMetaPending.delete(key); });
+        api._gateTokenMetaPending.set(key, pending);
+        return pending;
     },
 
     // { token, user } -> { balance } string bigint (ERC-721 = owned count)

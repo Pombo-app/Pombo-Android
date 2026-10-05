@@ -1197,7 +1197,7 @@ class ChannelManager(
                         .optStringOrNull("name")
                 } catch (e: Exception) {
                     Log.w("PomboEns", "resolveEns bridge call failed for $address: ${e.message}")
-                    null
+                    throw e
                 }
             }
             Log.d("PomboEns", "name ${address.take(10)}… -> $name")
