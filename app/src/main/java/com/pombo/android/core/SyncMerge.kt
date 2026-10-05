@@ -27,6 +27,8 @@ object SyncMerge {
     // a snapshot that holds nothing.
     private const val UNSTAMPED_VALUE_TS = 1L
 
+    private val PENDING_SLOTS = listOf("pubKeyPending", "intKeyPending")
+
     private fun isEmptySlice(value: Any?): Boolean = when (value) {
         null, JSONObject.NULL -> true
         is String -> value.isEmpty()
@@ -296,12 +298,28 @@ object SyncMerge {
                 if (x == null) y else if (y == null) x
                 else if (y.optInt("rev") > x.optInt("rev")) y else x
             }
-            for (slot in listOf("pubKey", "pubAnnounce", "intKey", "intAnnounce")) {
+            for (slot in listOf("pubKey", "pubAnnounce", "intKey", "intAnnounce") + PENDING_SLOTS) {
                 higherRev(b.optJSONObject(slot), i.optJSONObject(slot))?.let { entry.put(slot, it) }
             }
+            dropSettledPending(entry)
             result.put(streamId, entry)
         }
         return result
+    }
+
+    /**
+     * A pending re-key travels with the keys; a key or announce at its rev or
+     * above means some device already settled it.
+     */
+    private fun dropSettledPending(entry: JSONObject) {
+        for ((pending, key, announce) in listOf(
+            Triple("pubKeyPending", "pubKey", "pubAnnounce"),
+            Triple("intKeyPending", "intKey", "intAnnounce")
+        )) {
+            val rev = entry.optJSONObject(pending)?.optInt("rev") ?: continue
+            val settled = maxOf(entry.optJSONObject(key)?.optInt("rev") ?: 0, entry.optJSONObject(announce)?.optInt("rev") ?: 0)
+            if (rev <= settled) entry.remove(pending)
+        }
     }
 
     private fun editedAt(message: JSONObject): Long =
@@ -418,11 +436,12 @@ object SyncMerge {
         if (incoming.optInt("currentEpoch") > local.optInt("currentEpoch")) {
             local.put("currentEpoch", incoming.optInt("currentEpoch"))
         }
-        for (field in listOf("pubKey", "pubAnnounce", "intKey", "intAnnounce")) {
+        for (field in listOf("pubKey", "pubAnnounce", "intKey", "intAnnounce") + PENDING_SLOTS) {
             val inc = incoming.optJSONObject(field) ?: continue
             val cur = local.optJSONObject(field)
             if (cur == null || inc.optInt("rev") > cur.optInt("rev")) local.put(field, inc)
         }
+        dropSettledPending(local)
         val helloEpochs = sortedSetOf<Int>()
         for (src in listOfNotNull(local.optJSONArray("helloEpochs"), incoming.optJSONArray("helloEpochs"))) {
             for (k in 0 until src.length()) src.optInt(k).takeIf { it > 0 }?.let { helloEpochs.add(it) }

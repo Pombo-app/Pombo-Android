@@ -2,6 +2,7 @@ package com.pombo.android.core
 
 import android.util.Log
 import com.pombo.android.data.EpochKeyStore
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
@@ -109,7 +110,19 @@ class EpochKeyManager(
      * requests keys like a member (live-holding gates answer), but must not
      * publish a MEMBER_HELLO — the roster feeds the members panel.
      */
-    private val isPreviewChannel: (messageStreamId: String) -> Boolean = { false }
+    private val isPreviewChannel: (messageStreamId: String) -> Boolean = { false },
+    /** Reads a re-key's grants off the chain; throws when the chain cannot be read. */
+    private val readRekeyGrants: suspend (
+        messageStreamId: String, interactions: Boolean, newAddress: String, oldAddress: String?
+    ) -> RekeyGrants = { _, _, _, _ -> throw IllegalStateException("re-key grants unreadable") },
+    /** Owner notice for a re-key the channel open could not settle. */
+    private val onRekeyUnsettled: (messageStreamId: String, warning: String) -> Unit = { _, _ -> },
+    /** A re-key's key was minted and is pending: sync must carry it before the grant lands. */
+    private val onRekeyPending: (messageStreamId: String) -> Unit = {},
+    /** Sends the publish key's grant on the streams a reset left without it. */
+    private val completePublishGrants: suspend (
+        messageStreamId: String, newAddress: String, revoke: List<String>, streamIds: List<String>
+    ) -> Unit = { _, _, _, _ -> throw IllegalStateException("publish grants not wired") }
 ) {
     data class Entry(val data: JSONObject, val publisherId: String?, val timestamp: Long)
 
@@ -213,6 +226,13 @@ class EpochKeyManager(
         var intAnnounce: PubAnnounce? = null
         var intAnnounceFreshness = 0L
         /**
+         * A re-key between mint and on-chain confirmation. Persisted BEFORE
+         * the grant is sent: a grant that lands while the call fails has
+         * already revoked the old key.
+         */
+        var pubKeyPending: PendingKey? = null
+        var intKeyPending: PendingKey? = null
+        /**
          * Session pseudonym for our own publishes: (priv, pub, bindProof) —
          * MEMORY ONLY; members resolve the account from the bind proof, so
          * pseudonym churn across sessions is invisible.
@@ -223,6 +243,10 @@ class EpochKeyManager(
     }
 
     class PubKey(val keyId: String, val keyHex: String, val address: String, val rev: Int)
+    class PendingKey(val key: PubKey, val oldAddress: String?, val mintedAt: Long)
+    /** Who holds PUBLISH on chain, stream by stream: the re-key's new key and the one it replaces. */
+    class RekeyGrants(val streamIds: List<String>, val next: List<Boolean>, val old: List<Boolean>)
+    enum class RekeyOutcome { NONE, PROMOTED, DROPPED, KEPT, PARTIAL, UNREADABLE, INCONSISTENT }
     class PubAnnounce(
         val keyId: String, val keyHash: String, val address: String, val rev: Int,
         val publisher: String, val timestamp: Long
@@ -360,6 +384,14 @@ class EpochKeyManager(
         // without a schedule the cut never lands. Weekly for every gate mode.
         private const val ROTATION_INTERVAL_MS = 7 * 24 * 60 * 60 * 1000L
         private const val ROTATION_RETRY_MS = 60 * 60 * 1000L
+        // A re-key whose grant is nowhere on chain after this long never
+        // landed. It outlasts the write's own retries, so a transaction still
+        // pending is not mistaken for one that was never sent.
+        private const val REKEY_PENDING_MAX_AGE_MS = 60 * 60 * 1000L
+        const val PUB_REKEY_UNSETTLED =
+            "The publish key reset has not finished. It retries when you open the channel."
+        const val INT_REKEY_UNSETTLED =
+            "The interactions key reset has not finished. It retries when you open the channel."
         private const val SEEN_REQUESTERS_MAX = 500
         private val ADDR_RE = Regex("^0x[0-9a-f]{40}$")
     }
@@ -454,7 +486,23 @@ class EpochKeyManager(
                     ia.optString("publisher"), ia.optLong("timestamp"))
             }
         }
+        persisted.optJSONObject("pubKeyPending")?.let { p ->
+            if (p.optInt("rev") > (s.pubKeyPending?.key?.rev ?: 0)) s.pubKeyPending = pendingFromJson(p)
+        }
+        persisted.optJSONObject("intKeyPending")?.let { p ->
+            if (p.optInt("rev") > (s.intKeyPending?.key?.rev ?: 0)) s.intKeyPending = pendingFromJson(p)
+        }
     }
+
+    private fun pendingFromJson(p: JSONObject) = PendingKey(
+        PubKey(p.optString("keyId"), p.optString("keyHex"), p.optString("address"), p.optInt("rev")),
+        p.optString("oldAddress").ifEmpty { null },
+        p.optLong("mintedAt"))
+
+    private fun pendingToJson(p: PendingKey) = JSONObject()
+        .put("keyId", p.key.keyId).put("keyHex", p.key.keyHex)
+        .put("address", p.key.address).put("rev", p.key.rev)
+        .put("oldAddress", p.oldAddress ?: JSONObject.NULL).put("mintedAt", p.mintedAt)
 
     private fun persist(messageStreamId: String, s: ChannelState) {
         val epochs = JSONObject()
@@ -492,6 +540,8 @@ class EpochKeyManager(
                 .put("keyId", it.keyId).put("keyHex", it.keyHex)
                 .put("address", it.address).put("rev", it.rev))
         }
+        s.pubKeyPending?.let { out.put("pubKeyPending", pendingToJson(it)) }
+        s.intKeyPending?.let { out.put("intKeyPending", pendingToJson(it)) }
         s.intAnnounce?.let {
             out.put("intAnnounce", JSONObject()
                 .put("keyId", it.keyId).put("keyHash", it.keyHash)
@@ -648,6 +698,7 @@ class EpochKeyManager(
         if (toBootstrap) bootstrapOrReannounce(messageStreamId, keysStreamId, allowMint)
         else if (toReannounce) reannounceCurrent(messageStreamId, keysStreamId)
         if (isOwnAdmin(messageStreamId)) {
+            settleRekeys(messageStreamId, keysStreamId)
             try {
                 maybeAnnouncePub(messageStreamId, keysStreamId, retentionDays)
                 maybeAnnounceInteractions(messageStreamId, keysStreamId, retentionDays)
@@ -1004,8 +1055,9 @@ class EpochKeyManager(
             val s = state[messageStreamId] ?: return
             val held = s.pubKey ?: return
             if ((s.pubAnnounce?.rev ?: 0) > held.rev) return   // we hold the superseded key
+            val unannounced = (s.pubAnnounce?.rev ?: 0) < held.rev
             val retentionMs = retentionDays.toLong() * 86_400_000L
-            if (s.pubAnnounceFreshness != 0L &&
+            if (!unannounced && s.pubAnnounceFreshness != 0L &&
                 System.currentTimeMillis() - s.pubAnnounceFreshness < (retentionMs * 0.8).toLong()) return
             announce = JSONObject()
                 .put("t", StreamConstants.PUB_ANNOUNCE)
@@ -1036,8 +1088,10 @@ class EpochKeyManager(
             // re-key, which is on-chain work.
             val held = s.intKey ?: return
             if ((s.intAnnounce?.rev ?: 0) > held.rev) return
+            // A fresh announce of an OLDER rev says nothing about the held key.
+            val unannounced = (s.intAnnounce?.rev ?: 0) < held.rev
             val retentionMs = retentionDays.toLong() * 86_400_000L
-            if (s.intAnnounceFreshness != 0L &&
+            if (!unannounced && s.intAnnounceFreshness != 0L &&
                 System.currentTimeMillis() - s.intAnnounceFreshness < (retentionMs * 0.8).toLong()) return
             announce = JSONObject()
                 .put("t", StreamConstants.PUB_ANNOUNCE)
@@ -1930,81 +1984,202 @@ class EpochKeyManager(
     suspend fun rekeyPublishKey(
         messageStreamId: String,
         keysStreamId: String,
-        chainGrants: suspend (newAddress: String, oldAddress: String?) -> Unit
+        chainGrants: suspend (newAddress: String, revoke: List<String>) -> Unit
     ): Int {
         check(isOwnAdmin(messageStreamId)) { "only the channel admin can reset the publish key" }
-        val (newKey, oldAddress) = mutex.withLock {
-            val s = getState(messageStreamId)
-            if (!s.loaded) { loadPersisted(messageStreamId, s); s.loaded = true }
-            val rev = maxOf(s.pubKey?.rev ?: 0, s.pubAnnounce?.rev ?: 0) + 1
-            Pair(mintPublishKey(rev), s.pubKey?.address ?: s.pubAnnounce?.address)
-        }
-        chainGrants(newKey.address, oldAddress)
-        // Adopt before announcing so a concurrent answerRequest wraps the new key.
-        mutex.withLock {
-            val s = getState(messageStreamId)
-            s.pubKey = newKey
-            persist(messageStreamId, s)
-        }
-        val ann = JSONObject()
-            .put("t", StreamConstants.PUB_ANNOUNCE)
-            .put("keyId", newKey.keyId)
-            .put("keyHash", EpochKeyCrypto.computeKeyHash(newKey.keyHex))
-            .put("addr", newKey.address)
-            .put("rev", newKey.rev)
-        publishKeys(keysStreamId, ann)
-        mutex.withLock {
-            val s = getState(messageStreamId)
-            applyPubAnnounceLocked(messageStreamId, s, ann, myAddress(), System.currentTimeMillis())
-            s.pubAnnounceFreshness = System.currentTimeMillis()
-            persist(messageStreamId, s)
-        }
-        Log.i(TAG, "publish key reset to rev ${newKey.rev} on ${messageStreamId.takeLast(30)}")
-        onKeyAdopted(messageStreamId, newKey.keyId)
-        // Members cannot write until this announce is readable from storage —
-        // verify retention exactly like a fresh epoch announce.
-        retainAnnounce(messageStreamId, keysStreamId, ann)
-        return newKey.rev
+        return rekeyShared(messageStreamId, keysStreamId, interactions = false, chainGrants)
     }
 
     /** Replaces the interactions key (Sealed), as [rekeyPublishKey] does the publish key. */
     suspend fun rekeyInteractionsKey(
         messageStreamId: String,
         keysStreamId: String,
-        chainGrants: suspend (newAddress: String, oldAddress: String?) -> Unit
+        chainGrants: suspend (newAddress: String, revoke: List<String>) -> Unit
     ): Int {
         check(isOwnAdmin(messageStreamId)) { "only the channel admin can reset the interactions key" }
-        val (newKey, oldAddress) = mutex.withLock {
+        return rekeyShared(messageStreamId, keysStreamId, interactions = true, chainGrants)
+    }
+
+    private suspend fun rekeyShared(
+        messageStreamId: String,
+        keysStreamId: String,
+        interactions: Boolean,
+        chainGrants: suspend (newAddress: String, revoke: List<String>) -> Unit
+    ): Int {
+        // Minting over a pending key the chain cannot settle drops the only
+        // record of a key whose grant may have landed.
+        check(reconcileRekey(messageStreamId, keysStreamId, interactions) != RekeyOutcome.UNREADABLE) {
+            "the previous reset has not settled and the chain cannot be read right now"
+        }
+        val (pending, revoke) = mutex.withLock {
             val s = getState(messageStreamId)
             if (!s.loaded) { loadPersisted(messageStreamId, s); s.loaded = true }
-            val rev = maxOf(s.intKey?.rev ?: 0, s.intAnnounce?.rev ?: 0) + 1
-            Pair(mintInteractionsKey(rev), s.intKey?.address ?: s.intAnnounce?.address)
-        }
-        chainGrants(newKey.address, oldAddress)
-        // Adopt before announcing so a concurrent answerRequest wraps the new key.
-        mutex.withLock {
-            val s = getState(messageStreamId)
-            s.intKey = newKey
+            val held = s.heldOf(interactions)
+            val announced = s.announceOf(interactions)
+            val unsettled = s.pendingOf(interactions)
+            val rev = maxOf(held?.rev ?: 0, announced?.rev ?: 0, unsettled?.key?.rev ?: 0) + 1
+            val oldAddress = held?.address ?: announced?.address
+            val key = if (interactions) mintInteractionsKey(rev) else mintPublishKey(rev)
+            val pending = PendingKey(key, oldAddress, System.currentTimeMillis())
+            s.setPending(interactions, pending)
             persist(messageStreamId, s)
+            // An unsettled earlier re-key may still land: revoking its key too
+            // leaves the new one as the only holder whichever lands last.
+            pending to listOfNotNull(oldAddress, unsettled?.key?.address).map { it.lowercase() }.distinct()
         }
-        val ann = JSONObject()
-            .put("t", StreamConstants.PUB_ANNOUNCE)
-            .put("k", "i")
-            .put("keyId", newKey.keyId)
-            .put("keyHash", EpochKeyCrypto.computeKeyHash(newKey.keyHex))
-            .put("addr", newKey.address)
-            .put("rev", newKey.rev)
+        onRekeyPending(messageStreamId)
+        try {
+            chainGrants(pending.key.address, revoke)
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            if (reconcileRekey(messageStreamId, keysStreamId, interactions) != RekeyOutcome.PROMOTED) throw e
+            return pending.key.rev
+        }
+        promoteRekey(messageStreamId, keysStreamId, interactions, pending.key.keyId)
+        return pending.key.rev
+    }
+
+    /** The pending key becomes the held one, reaches sync, and is announced. */
+    private suspend fun promoteRekey(
+        messageStreamId: String, keysStreamId: String, interactions: Boolean, expectedKeyId: String
+    ): Boolean {
+        // Adopt before announcing so a concurrent answerRequest wraps the new key.
+        val key = mutex.withLock {
+            val s = getState(messageStreamId)
+            val pending = s.pendingOf(interactions)
+            if (pending?.key?.keyId != expectedKeyId) return false
+            s.setHeld(interactions, pending.key)
+            s.setPending(interactions, null)
+            persist(messageStreamId, s)
+            pending.key
+        }
+        onKeyAdopted(messageStreamId, key.keyId)
+        val ann = JSONObject().put("t", StreamConstants.PUB_ANNOUNCE)
+        if (interactions) ann.put("k", "i")
+        ann.put("keyId", key.keyId)
+            .put("keyHash", EpochKeyCrypto.computeKeyHash(key.keyHex))
+            .put("addr", key.address)
+            .put("rev", key.rev)
         publishKeys(keysStreamId, ann)
         mutex.withLock {
             val s = getState(messageStreamId)
-            applyPubAnnounceLocked(messageStreamId, s, ann, myAddress(), System.currentTimeMillis())
-            s.intAnnounceFreshness = System.currentTimeMillis()
+            val now = System.currentTimeMillis()
+            applyPubAnnounceLocked(messageStreamId, s, ann, myAddress(), now)
+            if (interactions) s.intAnnounceFreshness = now else s.pubAnnounceFreshness = now
             persist(messageStreamId, s)
         }
-        Log.i(TAG, "interactions key reset to rev ${newKey.rev} on ${messageStreamId.takeLast(30)}")
-        onKeyAdopted(messageStreamId, newKey.keyId)
+        Log.i(TAG, "${rekeyLabel(interactions)} key reset to rev ${key.rev} on ${messageStreamId.takeLast(30)}")
+        // Members cannot write until this announce is readable from storage —
+        // verify retention exactly like a fresh epoch announce.
         retainAnnounce(messageStreamId, keysStreamId, ann)
-        return newKey.rev
+        return true
+    }
+
+    /**
+     * Settles a pending re-key from what the chain holds. The old key is let
+     * go only once the new one holds its grant on every stream.
+     */
+    internal suspend fun reconcileRekey(
+        messageStreamId: String, keysStreamId: String, interactions: Boolean
+    ): RekeyOutcome {
+        val (settled, pending) = mutex.withLock {
+            val s = getState(messageStreamId)
+            if (!s.loaded) { loadPersisted(messageStreamId, s); s.loaded = true }
+            val pending = s.pendingOf(interactions) ?: return RekeyOutcome.NONE
+            val announced = s.announceOf(interactions)
+            val settled = when {
+                // Another device of the account confirmed and announced it.
+                announced?.keyId == pending.key.keyId ->
+                    RekeyOutcome.PROMOTED.also { s.setHeld(interactions, pending.key) }
+                pending.key.rev <= maxOf(s.heldOf(interactions)?.rev ?: 0, announced?.rev ?: 0) ->
+                    RekeyOutcome.DROPPED
+                else -> null
+            }
+            if (settled != null) {
+                s.setPending(interactions, null)
+                persist(messageStreamId, s)
+            }
+            settled to pending
+        }
+        if (settled == RekeyOutcome.PROMOTED) onKeyAdopted(messageStreamId, pending.key.keyId)
+        if (settled != null) return settled
+
+        val grants = try {
+            readRekeyGrants(messageStreamId, interactions, pending.key.address, pending.oldAddress)
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            Log.w(TAG, "${rekeyLabel(interactions)} re-key unsettled, chain unreadable: ${e.message}")
+            return RekeyOutcome.UNREADABLE
+        }
+        return when {
+            grants.next.all { it } ->
+                if (promoteRekey(messageStreamId, keysStreamId, interactions, pending.key.keyId)) RekeyOutcome.PROMOTED
+                else RekeyOutcome.NONE
+            grants.next.any { it } -> {
+                // Only the publish key's grants are one transaction per
+                // stream: finish the reset the owner already started on the rest.
+                if (interactions) return RekeyOutcome.PARTIAL
+                val missing = grants.streamIds.filterIndexed { index, _ -> !grants.next[index] }
+                try {
+                    completePublishGrants(messageStreamId, pending.key.address, listOfNotNull(pending.oldAddress), missing)
+                } catch (e: CancellationException) {
+                    throw e
+                } catch (e: Exception) {
+                    Log.w(TAG, "${rekeyLabel(interactions)} re-key still partial: ${e.message}")
+                    return RekeyOutcome.PARTIAL
+                }
+                if (promoteRekey(messageStreamId, keysStreamId, interactions, pending.key.keyId)) RekeyOutcome.PROMOTED
+                else RekeyOutcome.NONE
+            }
+            pending.oldAddress != null && !grants.old.all { it } -> RekeyOutcome.INCONSISTENT
+            System.currentTimeMillis() - pending.mintedAt < REKEY_PENDING_MAX_AGE_MS -> RekeyOutcome.KEPT
+            else -> {
+                val dropped = mutex.withLock {
+                    val s = getState(messageStreamId)
+                    val same = s.pendingOf(interactions)?.key?.keyId == pending.key.keyId
+                    if (same) {
+                        s.setPending(interactions, null)
+                        persist(messageStreamId, s)
+                    }
+                    same
+                }
+                if (!dropped) return RekeyOutcome.NONE
+                Log.i(TAG, "${rekeyLabel(interactions)} re-key never landed, pending key dropped on " +
+                    messageStreamId.takeLast(30))
+                RekeyOutcome.DROPPED
+            }
+        }
+    }
+
+    /** Channel-open settle of both shared keys; never fails the open. */
+    private suspend fun settleRekeys(messageStreamId: String, keysStreamId: String) {
+        for (interactions in listOf(false, true)) {
+            try {
+                when (reconcileRekey(messageStreamId, keysStreamId, interactions)) {
+                    RekeyOutcome.UNREADABLE, RekeyOutcome.INCONSISTENT, RekeyOutcome.PARTIAL ->
+                        onRekeyUnsettled(messageStreamId,
+                            if (interactions) INT_REKEY_UNSETTLED else PUB_REKEY_UNSETTLED)
+                    else -> {}
+                }
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                Log.w(TAG, "${rekeyLabel(interactions)} re-key settle failed: ${e.message}")
+            }
+        }
+    }
+
+    private fun rekeyLabel(interactions: Boolean) = if (interactions) "interactions" else "publish"
+    private fun ChannelState.heldOf(interactions: Boolean) = if (interactions) intKey else pubKey
+    private fun ChannelState.announceOf(interactions: Boolean) = if (interactions) intAnnounce else pubAnnounce
+    private fun ChannelState.pendingOf(interactions: Boolean) = if (interactions) intKeyPending else pubKeyPending
+    private fun ChannelState.setHeld(interactions: Boolean, key: PubKey) {
+        if (interactions) intKey = key else pubKey = key
+    }
+    private fun ChannelState.setPending(interactions: Boolean, pending: PendingKey?) {
+        if (interactions) intKeyPending = pending else pubKeyPending = pending
     }
 
     /**

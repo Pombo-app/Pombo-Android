@@ -3,6 +3,7 @@ package com.pombo.android.core
 import org.json.JSONArray
 import org.json.JSONObject
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
@@ -208,6 +209,17 @@ class SyncMergeTest {
                 "epochKeys":{"ch-1":{"epochs":{},"intKey":{"keyId":"i2.y","keyHex":"0xnew","address":"0xcc","rev":2}}},"sliceTs":{}}""")
         ).getJSONObject("epochKeys").getJSONObject("ch-1")
         assertEquals("i2.y", merged.getJSONObject("intKey").getString("keyId"))
+    }
+
+    @Test
+    fun `a pending re-key folds into the stored keys until a key at its rev settles it`() {
+        val local = j("""{"intKey":{"keyId":"i1.x","keyHex":"0xold","address":"0xaa","rev":1}}""")
+        SyncMerge.foldEpochKeySlice(local, j("""{"intKeyPending":{"keyId":"i2.y","keyHex":"0xnew","address":"0xcc","rev":2}}"""))
+        assertEquals("i2.y", local.getJSONObject("intKeyPending").getString("keyId"))
+
+        SyncMerge.foldEpochKeySlice(local, j("""{"intKey":{"keyId":"i2.y","keyHex":"0xnew","address":"0xcc","rev":2}}"""))
+        assertEquals("i2.y", local.getJSONObject("intKey").getString("keyId"))
+        assertFalse(local.has("intKeyPending"))
     }
 
     @Test

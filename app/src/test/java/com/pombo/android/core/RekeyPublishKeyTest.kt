@@ -51,13 +51,13 @@ class RekeyPublishKeyTest {
     }
 
     @Test
-    fun `hands the new publish key to sync once it is announced`() = runBlocking {
+    fun `hands the new publish key to sync before announcing it`() = runBlocking {
         val keys = manager()
 
         val rev = keys.rekeyPublishKey(stream, keysStream) { _, _ -> events += "grants" }
 
         assertEquals(2, rev)
-        assertEquals(listOf("grants", "announce", "adopted"), events)
+        assertEquals(listOf("grants", "adopted", "announce"), events)
         assertEquals(keys.publishKeyFor(stream)?.keyId, adopted.single())
     }
 }
