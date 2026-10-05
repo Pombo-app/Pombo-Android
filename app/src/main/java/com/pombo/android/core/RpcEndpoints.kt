@@ -7,8 +7,10 @@ import org.json.JSONObject
  * Polygon RPC endpoints and the user's selection over them — same keys, labels,
  * order and storage shape as the web's RPC_ENDPOINTS (config.js).
  *
- * What is enabled is exactly what gets used, in the order of the list, first
- * one preferred. Nothing is appended underneath.
+ * What is enabled is exactly what gets used. Nothing is appended underneath.
+ * The order only matters where the app walks the list (gate reads, the first
+ * two of the access quorum, [GasEstimator]); the Streamr SDK sends each
+ * request to one of them at random.
  */
 object RpcEndpoints {
 
@@ -30,15 +32,21 @@ object RpcEndpoints {
 
     val ALL = listOf(
         Endpoint("drpc", "dRPC", "https://polygon.drpc.org", true),
-        Endpoint("publicnode", "PublicNode", "https://polygon-bor-rpc.publicnode.com", true),
+        Endpoint("pocket", "Pocket Network", "https://poly.api.pocket.network", true),
+        Endpoint("sentio", "Sentio", "https://matic.rpc.sentio.xyz", true),
+        Endpoint("blockmachine", "Blockmachine", "https://rpc-polygon.blockmachine.io/", true),
+        Endpoint("tenderly-community", "Tenderly (Polygon community)", "https://tenderly.rpc.polygon.community", true),
         Endpoint("tenderly", "Tenderly", "https://polygon.gateway.tenderly.co", true),
+        Endpoint("quiknode", "QuickNode (public)", "https://rpc-mainnet.matic.quiknode.pro", true),
+        Endpoint("publicnode", "PublicNode", "https://polygon-bor-rpc.publicnode.com", true),
         Endpoint("1rpc", "1RPC (Privacy)", "https://1rpc.io/matic", true)
     )
 
-    /** On by default: the reliable providers, several so a lone one going down is
-     * not an outage and access reads cross-check. 1RPC (privacy relay) stays a row
-     * users can turn on, but its latency and outages hurt as a default. */
-    val DEFAULT_ENABLED = listOf("drpc", "publicnode", "tenderly")
+    /** On by default: providers that answer contract reads reliably without a key
+     * and from both client origins. At most four: the SDK gives each request to
+     * one of them at random, so a degraded one fails its share of calls, and every
+     * client start waits for all of them. */
+    val DEFAULT_ENABLED = listOf("drpc", "pocket", "sentio")
 
     fun byKey(key: String): Endpoint? = ALL.firstOrNull { it.key == key }
 
@@ -141,9 +149,9 @@ object RpcEndpoints {
      * custom URL. 'auto' stood for every endpoint and a provider key for that
      * one alone.
      *
-     * 'custom' keeps the two CORS-safe providers beside it: the bridge used to
-     * append them underneath every choice, and a custom URL that turns out to
-     * refuse the WebView origin would otherwise leave a migrated install with
+     * 'custom' keeps the default providers beside it: the bridge used to
+     * append its own underneath every choice, and a custom URL that turns out
+     * to refuse the WebView origin would otherwise leave a migrated install with
      * nothing to connect to.
      */
     fun fromLegacy(preset: String?, customUrl: String?): Selection {

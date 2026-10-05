@@ -15,15 +15,26 @@ class RpcEndpointsTest {
         selection.rows.filter { it.on }.map { it.key }
 
     @Test
-    fun defaultEnabled_isTheReliableProviders_notOneRpc() {
-        // Several providers ship enabled so the responder's quorum has members to
-        // cross-check with; 1RPC (privacy relay) is available but opt-in.
-        assertTrue("1rpc" in RpcEndpoints.ALL.map { it.key })
-        assertFalse("1rpc" in RpcEndpoints.DEFAULT_ENABLED)
+    fun defaultEnabled_isAtMostFour_allUsableFromTheBridge() {
+        assertTrue(RpcEndpoints.DEFAULT_ENABLED.size in 2..4)
+        RpcEndpoints.DEFAULT_ENABLED.forEach { assertTrue(RpcEndpoints.byKey(it)!!.webviewSafe) }
         assertEquals(
-            RpcEndpoints.ALL.map { it.key }.filter { it != "1rpc" },
-            RpcEndpoints.DEFAULT_ENABLED
+            RpcEndpoints.DEFAULT_ENABLED,
+            keysOn(RpcEndpoints.normalize(emptyList(), ""))
         )
+    }
+
+    @Test
+    fun savedSelection_staysAsItWasWhenTheDefaultChanges() {
+        val saved = RpcEndpoints.normalize(
+            listOf(
+                RpcEndpoints.Row("drpc", true), RpcEndpoints.Row("publicnode", true),
+                RpcEndpoints.Row("tenderly", true), RpcEndpoints.Row("1rpc", false)
+            ),
+            ""
+        )
+        assertEquals(listOf("drpc", "publicnode", "tenderly"), keysOn(saved))
+        assertEquals(RpcEndpoints.Row("pocket", false), saved.rows.first { it.key == "pocket" })
     }
 
     @Test

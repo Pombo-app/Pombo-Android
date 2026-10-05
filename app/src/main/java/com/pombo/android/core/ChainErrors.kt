@@ -41,7 +41,9 @@ object ChainErrors {
             // What the WebView itself says when a request cannot leave.
             "failed\\s*to\\s*fetch", "load\\s*failed",
             // Bridge-specific transient states the ethers list cannot know.
-            "client\\s*not\\s*connected", "bridge\\s*reloaded", "Could not reach"
+            "client\\s*not\\s*connected", "bridge\\s*reloaded", "Could not reach",
+            // Every RPC failed the block-number read (marked by bridgeCall).
+            "argument=\"%internal\""
         ),
         Kind(
             false,
