@@ -17,24 +17,77 @@ import java.io.File
  *
  * Payloads travel as data URLs because that is what the web stores and pushes;
  * keeping the same representation is what makes the two clients interoperable.
+ *
+ * One directory per account: blob sync pushes every unsynced record to the
+ * active account, so images kept for one account must never sit where another
+ * account's store reads.
  */
 class ImageBlobStore(context: Context) {
 
     // filesDir, not cacheDir: Android evicts cacheDir aggressively and these
     // are the only remaining copy once storage retention drops the chunks.
-    private val dir = File(context.filesDir, "image-blobs").apply { mkdirs() }
-    private val ledgerFile = File(context.filesDir, "image-ledger.json")
+    private val root = File(context.filesDir, "image-blobs-v2")
+    // The device-wide layout: its images belong to no account, so nothing may read them.
+    private val deviceWide = listOf(
+        File(context.filesDir, "image-blobs"),
+        File(context.filesDir, "image-ledger.json"),
+        File(context.filesDir, "image-ledger.json.tmp")
+    )
 
     data class Record(val imageId: String, val streamId: String, val synced: Boolean)
 
     private val ledger = LinkedHashMap<String, Record>()
+    private val memoryBlobs = HashMap<String, String>()
     private var loaded = false
+    private var deviceWideDropped = false
+
+    /** The account whose images this store reads and writes; changing it reloads. */
+    @Volatile var scopeAddress: String? = null
+        set(value) = synchronized(this) { field = value?.lowercase(); reset() }
+
+    /** Guest: images live in memory for the session, nothing reaches the disk. */
+    @Volatile var memoryOnly: Boolean = false
+        set(value) = synchronized(this) { field = value; reset() }
+
+    private fun reset() {
+        ledger.clear()
+        memoryBlobs.clear()
+        loaded = false
+    }
+
+    private fun onDisk() = !memoryOnly && scopeAddress != null
+    private fun accountDir() = File(root, scopeAddress ?: "none")
+    private fun ledgerFile() = File(accountDir(), "ledger.json")
+    private fun blobFile(imageId: String) =
+        File(File(accountDir(), "blobs"), imageId.replace(Regex("[^A-Za-z0-9_.-]"), "_"))
+
+    private fun readBlob(imageId: String): String? =
+        if (onDisk()) runCatching { blobFile(imageId).readText() }.getOrNull() else memoryBlobs[imageId]
+
+    private fun hasBlob(imageId: String): Boolean =
+        if (onDisk()) blobFile(imageId).exists() else memoryBlobs.containsKey(imageId)
+
+    private fun writeBlob(imageId: String, dataUrl: String) {
+        if (!onDisk()) { memoryBlobs[imageId] = dataUrl; return }
+        val file = blobFile(imageId)
+        file.parentFile?.mkdirs()
+        file.writeText(dataUrl)
+    }
+
+    private fun deleteBlob(imageId: String) {
+        if (onDisk()) runCatching { blobFile(imageId).delete() } else memoryBlobs.remove(imageId)
+    }
 
     @Synchronized
     private fun ensureLoaded() {
+        if (!deviceWideDropped) {
+            deviceWideDropped = true
+            deviceWide.forEach { runCatching { it.deleteRecursively() } }
+        }
         if (loaded) return
         loaded = true
-        val raw = runCatching { ledgerFile.readText() }.getOrNull() ?: return
+        if (!onDisk()) return
+        val raw = runCatching { ledgerFile().readText() }.getOrNull() ?: return
         runCatching {
             val arr = JSONArray(raw)
             for (i in 0 until arr.length()) {
@@ -51,6 +104,9 @@ class ImageBlobStore(context: Context) {
 
     @Synchronized
     private fun persist() {
+        if (!onDisk()) return
+        val ledgerFile = ledgerFile()
+        ledgerFile.parentFile?.mkdirs()
         val arr = JSONArray()
         ledger.values.forEach {
             arr.put(
@@ -71,19 +127,19 @@ class ImageBlobStore(context: Context) {
         }
     }
 
-    private fun blobFile(imageId: String) = File(dir, imageId.replace(Regex("[^A-Za-z0-9_.-]"), "_"))
-
     /** Stores a blob. Returns false when it was already present. */
     suspend fun save(imageId: String, streamId: String, dataUrl: String, synced: Boolean): Boolean =
         withContext(Dispatchers.IO) {
-            ensureLoaded()
-            if (ledger.containsKey(imageId) && blobFile(imageId).exists()) return@withContext false
-            runCatching { blobFile(imageId).writeText(dataUrl) }.getOrElse { return@withContext false }
+            // Blob and ledger under the same lock as the scope: an account
+            // switch in between would file the image under the next account.
             synchronized(this@ImageBlobStore) {
+                ensureLoaded()
+                if (ledger.containsKey(imageId) && hasBlob(imageId)) return@withContext false
+                runCatching { writeBlob(imageId, dataUrl) }.getOrElse { return@withContext false }
                 ledger[imageId] = Record(imageId, streamId, synced)
                 evictOverCap()
+                persist()
             }
-            persist()
             true
         }
 
@@ -99,22 +155,22 @@ class ImageBlobStore(context: Context) {
         for (victim in evictable) {
             if (ledger.size <= MAX_RECORDS) break
             ledger.remove(victim.imageId)
-            runCatching { blobFile(victim.imageId).delete() }
+            deleteBlob(victim.imageId)
         }
     }
 
     suspend fun load(imageId: String): String? = withContext(Dispatchers.IO) {
-        ensureLoaded()
-        val data = runCatching { blobFile(imageId).readText() }.getOrNull()
-        if (data != null) {
-            // Reinsertion moves the record to the tail of the LinkedHashMap —
-            // that order is what evictOverCap and the persisted ledger use as
-            // recency, so reads keep a blob alive (LRU).
-            synchronized(this@ImageBlobStore) {
+        synchronized(this@ImageBlobStore) {
+            ensureLoaded()
+            val data = readBlob(imageId)
+            if (data != null) {
+                // Reinsertion moves the record to the tail of the LinkedHashMap —
+                // that order is what evictOverCap and the persisted ledger use as
+                // recency, so reads keep a blob alive (LRU).
                 ledger.remove(imageId)?.let { ledger[imageId] = it }
             }
+            data
         }
-        data
     }
 
     /**
@@ -128,10 +184,18 @@ class ImageBlobStore(context: Context) {
             val victims = ledger.values.filter { it.streamId == streamId }
             victims.forEach {
                 ledger.remove(it.imageId)
-                runCatching { blobFile(it.imageId).delete() }
+                deleteBlob(it.imageId)
             }
         }
         persist()
+    }
+
+    /** Erases every image of the active account (the account is being deleted). */
+    suspend fun clearAccount(): Unit = withContext(Dispatchers.IO) {
+        synchronized(this@ImageBlobStore) {
+            if (onDisk()) runCatching { accountDir().deleteRecursively() }
+            reset()
+        }
     }
 
     @Synchronized
@@ -161,7 +225,7 @@ class ImageBlobStore(context: Context) {
     fun forget(imageId: String) {
         ensureLoaded()
         ledger.remove(imageId)
-        runCatching { blobFile(imageId).delete() }
+        deleteBlob(imageId)
         persist()
     }
 
