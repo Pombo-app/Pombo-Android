@@ -15,14 +15,16 @@ import java.io.File
  *
  *  - persisted (the web writes `pombo_ens_<addr>` / `pombo_ens_avatar_<addr>`
  *    to localStorage, so a reload resolves nothing);
- *  - positive results cached for 24h, negatives for 15 minutes, so a transient
- *    RPC failure retries soon instead of sticking for the whole session;
+ *  - names, and a "no name" a provider answered, cached for 24h; a lookup no
+ *    provider answered is kept for 15 minutes, so a transient RPC failure
+ *    retries soon instead of sticking for the whole session;
  *  - in-flight de-duplication that SHARES the result: concurrent callers await
  *    the same lookup rather than skipping it.
  */
 class EnsStore(context: Context) {
 
-    private class Entry(val value: String?, val at: Long)
+    /** [confirmed]: a null that a lookup returned, not one a failure left behind. */
+    private class Entry(val value: String?, val at: Long, val confirmed: Boolean = false)
 
     private val names = HashMap<String, Entry>()
     private val avatars = HashMap<String, Entry>()
@@ -63,7 +65,7 @@ class EnsStore(context: Context) {
                 // being read, and such an entry carries a newer timestamp than
                 // anything on disk. Each side is compared on its own clock.
                 if (at > (names[addr]?.at ?: Long.MIN_VALUE)) {
-                    names[addr] = Entry(name, at)
+                    names[addr] = Entry(name, at, o.optBoolean("nameConfirmed", false))
                     if (name != null) loadedNames[addr] = name else clearedNames += addr
                 }
                 if (avatarAt > (avatars[addr]?.at ?: Long.MIN_VALUE)) {
@@ -78,7 +80,7 @@ class EnsStore(context: Context) {
 
     private fun fresh(entry: Entry?): Boolean {
         if (entry == null) return false
-        val ttl = if (entry.value != null) POSITIVE_TTL_MS else NEGATIVE_TTL_MS
+        val ttl = if (entry.value != null || entry.confirmed) POSITIVE_TTL_MS else NEGATIVE_TTL_MS
         return System.currentTimeMillis() - entry.at < ttl
     }
 
@@ -99,7 +101,7 @@ class EnsStore(context: Context) {
         synchronized(nameInflight) { nameInflight[key] = deferred }
         return try {
             val value = lookup()
-            names[key] = Entry(value, System.currentTimeMillis())
+            names[key] = Entry(value, System.currentTimeMillis(), confirmed = true)
             if (value != null) _resolved.value = _resolved.value + (key to value)
             persist()
             deferred.complete(value)
@@ -140,7 +142,7 @@ class EnsStore(context: Context) {
 
     /**
      * The web's `ensCache` sync slice: `{ address: { name, timestamp } }`.
-     * Positive resolutions only — negatives expire in 15 minutes and would
+     * Positive resolutions only — a "no name" is cheap to re-learn and would
      * just bloat every payload.
      */
     fun exportSyncSlice(): JSONObject {
@@ -182,6 +184,7 @@ class EnsStore(context: Context) {
                 val a = avatars[addr]
                 root.put(addr, JSONObject()
                     .put("name", n?.value ?: JSONObject.NULL)
+                    .put("nameConfirmed", n?.confirmed ?: false)
                     .put("avatar", a?.value ?: JSONObject.NULL)
                     .put("at", n?.at ?: 0L)
                     .put("avatarAt", a?.at ?: 0L))

@@ -1773,13 +1773,18 @@ const api = {
         // multiplies the request count until the free tiers answer HTTP 429
         // (identity.js _doResolveENS learned this the hard way).
         var coverUsed = false;
+        var answered = false;
         for (var i = 0; i < ensProviders.length; i++) {
             try {
                 var name = await api._lookupWithDecoys(ensProviders[i], addr, !coverUsed);
                 coverUsed = true;
+                answered = true;
                 if (name) return { name: name };
             } catch (e) { /* try the next provider */ }
         }
+        // EnsStore keeps a null for a day only when a provider said so; a
+        // lookup that no provider answered must fail instead.
+        if (!answered) throw new Error('no ENS provider answered');
         return { name: null };
     },
 

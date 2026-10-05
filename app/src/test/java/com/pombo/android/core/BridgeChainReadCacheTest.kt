@@ -34,4 +34,9 @@ class BridgeChainReadCacheTest {
         assertTrue(meta.contains("api._gateTokenMetaPending"))
         assertTrue(meta.contains("if (res.readBoth) api._rememberChainFact('tokens'"))
     }
+
+    @Test
+    fun `an ENS lookup no provider answered fails instead of reading as no name`() {
+        assertTrue(body("resolveEns").contains("if (!answered) throw new Error('no ENS provider answered')"))
+    }
 }
