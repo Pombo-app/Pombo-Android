@@ -133,11 +133,23 @@ object RpcEndpoints {
         val rows = (0 until array.length()).mapNotNull { i ->
             array.optJSONObject(i)?.let { Row(it.optString("key"), it.optBoolean("on")) }
         }
-        return normalize(rows, obj.optString("customUrl"))
+        val customUrl = obj.optString("customUrl")
+        if (obj.optInt("v", 2) < 3 && rows.filter { it.on }.map { it.key }.toSet() == PREVIOUS_DEFAULT) {
+            return normalize(ALL.map { Row(it.key, false) } + Row(CUSTOM_KEY, false), customUrl)
+        }
+        return normalize(rows, customUrl)
     }
 
+    /**
+     * A selection saved before the default changed whose enabled set is exactly
+     * this never chose anything: [fromJson] moves it to the current default,
+     * keeping a custom URL as an off row. Saving writes v3, so a later choice is
+     * never moved.
+     */
+    private val PREVIOUS_DEFAULT = setOf("drpc", "publicnode", "tenderly")
+
     fun toJson(selection: Selection): String = JSONObject()
-        .put("v", 2)
+        .put("v", 3)
         .put("rows", JSONArray().apply {
             selection.rows.forEach { put(JSONObject().put("key", it.key).put("on", it.on)) }
         })

@@ -192,4 +192,58 @@ class RpcEndpointsTest {
         assertEquals(start.rows, start.moved(start.rows.first().key, -1).rows)
         assertEquals(start.rows, start.moved(start.rows.last().key, 1).rows)
     }
+
+    private fun saved(version: Int, rows: List<Pair<String, Boolean>>, customUrl: String = "") =
+        org.json.JSONObject()
+            .put("v", version)
+            .put("rows", org.json.JSONArray().apply {
+                rows.forEach { (key, on) -> put(org.json.JSONObject().put("key", key).put("on", on)) }
+            })
+            .put("customUrl", customUrl)
+            .toString()
+
+    private val oldDefault = listOf("drpc", "publicnode", "tenderly")
+
+    @Test
+    fun previousDefault_movesToTheCurrentOne_whateverTheSavedOrder() {
+        val json = saved(2, listOf("tenderly" to true, "drpc" to true, "publicnode" to true, "1rpc" to false))
+        assertEquals(
+            RpcEndpoints.DEFAULT_ENABLED.map { RpcEndpoints.byKey(it)!!.url },
+            RpcEndpoints.fromJson(json).urls
+        )
+    }
+
+    @Test
+    fun previousDefault_keepsACustomUrlAsAnOffRow() {
+        val json = saved(
+            2, oldDefault.map { it to true } + (RpcEndpoints.CUSTOM_KEY to false), "https://my-own-node.example"
+        )
+        val moved = RpcEndpoints.fromJson(json)
+        assertEquals(RpcEndpoints.DEFAULT_ENABLED, keysOn(moved))
+        assertEquals("https://my-own-node.example", moved.customUrl)
+        assertEquals(RpcEndpoints.Row(RpcEndpoints.CUSTOM_KEY, false), moved.rows.first { it.key == RpcEndpoints.CUSTOM_KEY })
+    }
+
+    @Test
+    fun anyOtherSavedChoice_staysAsItWas() {
+        val choices = listOf(
+            saved(2, listOf("drpc" to true, "tenderly" to true)) to listOf("drpc", "tenderly"),
+            saved(2, (oldDefault + "1rpc").map { it to true }) to oldDefault + "1rpc",
+            saved(
+                2, oldDefault.map { it to true } + (RpcEndpoints.CUSTOM_KEY to true), "https://my-own-node.example"
+            ) to oldDefault + RpcEndpoints.CUSTOM_KEY
+        )
+        choices.forEach { (json, enabled) -> assertEquals(enabled, keysOn(RpcEndpoints.fromJson(json))) }
+    }
+
+    @Test
+    fun aChoiceSavedAfterTheChange_isNeverMoved_evenTheOldDefault() {
+        assertEquals(oldDefault, keysOn(RpcEndpoints.fromJson(saved(3, oldDefault.map { it to true }))))
+    }
+
+    @Test
+    fun movedSelection_staysPutOnceSaved() {
+        val moved = RpcEndpoints.fromJson(saved(2, oldDefault.map { it to true }))
+        assertEquals(moved, RpcEndpoints.fromJson(RpcEndpoints.toJson(moved)))
+    }
 }
