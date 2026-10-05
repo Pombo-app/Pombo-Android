@@ -1,6 +1,7 @@
 package com.pombo.android.core
 
 import java.io.File
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
@@ -38,5 +39,10 @@ class BridgeChainReadCacheTest {
     @Test
     fun `an ENS lookup no provider answered fails instead of reading as no name`() {
         assertTrue(body("resolveEns").contains("if (!answered) throw new Error('no ENS provider answered')"))
+    }
+
+    @Test
+    fun `the dead ENS endpoint is gone`() {
+        assertFalse(asset.contains("cloudflare-eth.com"))
     }
 }
