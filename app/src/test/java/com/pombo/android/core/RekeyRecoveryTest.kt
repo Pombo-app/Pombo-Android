@@ -31,6 +31,7 @@ class RekeyRecoveryTest {
     private val oldPub = "0x" + "44".repeat(20)
     private val pendingAddress = "0x" + "55".repeat(20)
     private val hour = 60 * 60 * 1000L
+    private val twoStreams = listOf(stream, "$admin/sealed-2")
 
     private val saved = HashMap<String, JSONObject>()
     private val published = mutableListOf<JSONObject>()
@@ -38,6 +39,8 @@ class RekeyRecoveryTest {
     private val reads = mutableListOf<Boolean>()
     private var grants: () -> EpochKeyManager.RekeyGrants = { throw IllegalStateException("rpc down") }
     private var pendingPushes = 0
+    private val completed = mutableListOf<Triple<String, List<String>, List<String>>>()
+    private var complete: () -> Unit = {}
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Unconfined)
 
     @After fun tearDown() = scope.cancel()
@@ -76,7 +79,8 @@ class RekeyRecoveryTest {
             onKeyAdopted = { _, _ -> },
             readRekeyGrants = { _, interactions, _, _ -> reads += interactions; grants() },
             onRekeyUnsettled = { _, warning -> warnings += warning },
-            onRekeyPending = { pendingPushes++ }
+            onRekeyPending = { pendingPushes++ },
+            completePublishGrants = { _, next, revoke, streamIds -> completed += Triple(next, revoke, streamIds); complete() }
         ).also { runBlocking { it.loadPersistedState(stream) } }
     }
 
@@ -109,7 +113,7 @@ class RekeyRecoveryTest {
     fun `keeps the new key when the grant landed but the call failed`() = runBlocking {
         seed()
         val keys = manager()
-        grants = { EpochKeyManager.RekeyGrants(listOf(true, true), listOf(false, false)) }
+        grants = { EpochKeyManager.RekeyGrants(twoStreams, listOf(true, true), listOf(false, false)) }
 
         val rev = keys.rekeyInteractionsKey(stream, keysStream) { _, _ -> throw IllegalStateException("receipt 503") }
 
@@ -125,7 +129,7 @@ class RekeyRecoveryTest {
     fun `keeps the old key, and the new one pending, when the grant never landed`() = runBlocking {
         seed()
         val keys = manager()
-        grants = { EpochKeyManager.RekeyGrants(listOf(false, false), listOf(true, true)) }
+        grants = { EpochKeyManager.RekeyGrants(twoStreams, listOf(false, false), listOf(true, true)) }
 
         val failure = runCatching {
             keys.rekeyInteractionsKey(stream, keysStream) { _, _ -> throw IllegalStateException("tx reverted") }
@@ -155,7 +159,7 @@ class RekeyRecoveryTest {
     fun `revokes an unsettled earlier key too, and goes above its rev`() = runBlocking {
         seed { put("intKeyPending", pending(System.currentTimeMillis())) }
         val keys = manager()
-        grants = { EpochKeyManager.RekeyGrants(listOf(false, false), listOf(true, true)) }
+        grants = { EpochKeyManager.RekeyGrants(twoStreams, listOf(false, false), listOf(true, true)) }
         var revoked: List<String>? = null
 
         val rev = keys.rekeyInteractionsKey(stream, keysStream) { _, revoke -> revoked = revoke }
@@ -181,7 +185,7 @@ class RekeyRecoveryTest {
     fun `recovers the publish key the same way`() = runBlocking {
         seed()
         val keys = manager()
-        grants = { EpochKeyManager.RekeyGrants(listOf(true, true), listOf(false, false)) }
+        grants = { EpochKeyManager.RekeyGrants(twoStreams, listOf(true, true), listOf(false, false)) }
 
         val rev = keys.rekeyPublishKey(stream, keysStream) { _, _ -> throw IllegalStateException("receipt 503") }
 
@@ -195,7 +199,7 @@ class RekeyRecoveryTest {
     fun `promotes a pending key on open when the chain holds its grant`() = runBlocking {
         seed { put("intKeyPending", pending(System.currentTimeMillis() - 5 * hour)) }
         val keys = manager()
-        grants = { EpochKeyManager.RekeyGrants(listOf(true, true), listOf(false, false)) }
+        grants = { EpochKeyManager.RekeyGrants(twoStreams, listOf(true, true), listOf(false, false)) }
 
         keys.ensureChannelKeys(stream, keysStream, allowMint = false)
 
@@ -209,7 +213,7 @@ class RekeyRecoveryTest {
     fun `keeps a pending key on open while its grant may still land`() = runBlocking {
         seed { put("intKeyPending", pending(System.currentTimeMillis() - hour / 2)) }
         val keys = manager()
-        grants = { EpochKeyManager.RekeyGrants(listOf(false, false), listOf(true, true)) }
+        grants = { EpochKeyManager.RekeyGrants(twoStreams, listOf(false, false), listOf(true, true)) }
 
         keys.ensureChannelKeys(stream, keysStream, allowMint = false)
 
@@ -222,7 +226,7 @@ class RekeyRecoveryTest {
     fun `drops a pending key on open once its grant clearly never landed`() = runBlocking {
         seed { put("intKeyPending", pending(System.currentTimeMillis() - 2 * hour)) }
         val keys = manager()
-        grants = { EpochKeyManager.RekeyGrants(listOf(false, false), listOf(true, true)) }
+        grants = { EpochKeyManager.RekeyGrants(twoStreams, listOf(false, false), listOf(true, true)) }
 
         keys.ensureChannelKeys(stream, keysStream, allowMint = false)
 
@@ -246,12 +250,43 @@ class RekeyRecoveryTest {
     fun `keeps a pending key and warns when neither key holds the grant`() = runBlocking {
         seed { put("intKeyPending", pending(System.currentTimeMillis() - 2 * hour)) }
         val keys = manager()
-        grants = { EpochKeyManager.RekeyGrants(listOf(false, false), listOf(false, false)) }
+        grants = { EpochKeyManager.RekeyGrants(twoStreams, listOf(false, false), listOf(false, false)) }
 
         keys.ensureChannelKeys(stream, keysStream, allowMint = false)
 
         assertEquals("i2.k", record().getJSONObject("intKeyPending").getString("keyId"))
         assertEquals(listOf(EpochKeyManager.INT_REKEY_UNSETTLED), warnings)
+    }
+
+    private fun pendingPub() = key("p2.k", "0x" + "99".repeat(20), 2, "99")
+        .put("oldAddress", oldPub).put("mintedAt", System.currentTimeMillis())
+
+    @Test
+    fun `finishes a publish re-key whose grant landed on one stream only`() = runBlocking {
+        seed { put("pubKeyPending", pendingPub()) }
+        val keys = manager()
+        grants = { EpochKeyManager.RekeyGrants(twoStreams, listOf(true, false), listOf(false, true)) }
+
+        keys.ensureChannelKeys(stream, keysStream, allowMint = false)
+
+        assertEquals(listOf(Triple("0x" + "99".repeat(20), listOf(oldPub), listOf("$admin/sealed-2"))), completed)
+        assertEquals("p2.k", keys.publishKeyFor(stream)?.keyId)
+        assertFalse(record().has("pubKeyPending"))
+        assertTrue(warnings.isEmpty())
+    }
+
+    @Test
+    fun `keeps a half-landed publish re-key pending, and warns, when the missing grant fails again`() = runBlocking {
+        seed { put("pubKeyPending", pendingPub()) }
+        val keys = manager()
+        grants = { EpochKeyManager.RekeyGrants(twoStreams, listOf(true, false), listOf(false, true)) }
+        complete = { throw IllegalStateException("rpc down") }
+
+        keys.ensureChannelKeys(stream, keysStream, allowMint = false)
+
+        assertEquals("p1.k", keys.publishKeyFor(stream)?.keyId)
+        assertEquals("p2.k", record().getJSONObject("pubKeyPending").getString("keyId"))
+        assertEquals(listOf(EpochKeyManager.PUB_REKEY_UNSETTLED), warnings)
     }
 
     @Test
@@ -303,7 +338,7 @@ class RekeyRecoveryTest {
             runCatching { keys.rekeyInteractionsKey(stream, keysStream) { _, _ -> throw IllegalStateException("killed") } }
         }
         val restarted = manager()
-        grants = { EpochKeyManager.RekeyGrants(listOf(true, true), listOf(false, false)) }
+        grants = { EpochKeyManager.RekeyGrants(twoStreams, listOf(true, true), listOf(false, false)) }
 
         restarted.ensureChannelKeys(stream, keysStream, allowMint = false)
 

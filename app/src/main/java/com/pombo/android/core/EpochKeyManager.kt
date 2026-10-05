@@ -118,7 +118,11 @@ class EpochKeyManager(
     /** Owner notice for a re-key the channel open could not settle. */
     private val onRekeyUnsettled: (messageStreamId: String, warning: String) -> Unit = { _, _ -> },
     /** A re-key's key was minted and is pending: sync must carry it before the grant lands. */
-    private val onRekeyPending: (messageStreamId: String) -> Unit = {}
+    private val onRekeyPending: (messageStreamId: String) -> Unit = {},
+    /** Sends the publish key's grant on the streams a reset left without it. */
+    private val completePublishGrants: suspend (
+        messageStreamId: String, newAddress: String, revoke: List<String>, streamIds: List<String>
+    ) -> Unit = { _, _, _, _ -> throw IllegalStateException("publish grants not wired") }
 ) {
     data class Entry(val data: JSONObject, val publisherId: String?, val timestamp: Long)
 
@@ -241,7 +245,7 @@ class EpochKeyManager(
     class PubKey(val keyId: String, val keyHex: String, val address: String, val rev: Int)
     class PendingKey(val key: PubKey, val oldAddress: String?, val mintedAt: Long)
     /** Who holds PUBLISH on chain, stream by stream: the re-key's new key and the one it replaces. */
-    class RekeyGrants(val next: List<Boolean>, val old: List<Boolean>)
+    class RekeyGrants(val streamIds: List<String>, val next: List<Boolean>, val old: List<Boolean>)
     enum class RekeyOutcome { NONE, PROMOTED, DROPPED, KEPT, PARTIAL, UNREADABLE, INCONSISTENT }
     class PubAnnounce(
         val keyId: String, val keyHash: String, val address: String, val rev: Int,
@@ -2113,7 +2117,22 @@ class EpochKeyManager(
             grants.next.all { it } ->
                 if (promoteRekey(messageStreamId, keysStreamId, interactions, pending.key.keyId)) RekeyOutcome.PROMOTED
                 else RekeyOutcome.NONE
-            grants.next.any { it } -> RekeyOutcome.PARTIAL
+            grants.next.any { it } -> {
+                // Only the publish key's grants are one transaction per
+                // stream: finish the reset the owner already started on the rest.
+                if (interactions) return RekeyOutcome.PARTIAL
+                val missing = grants.streamIds.filterIndexed { index, _ -> !grants.next[index] }
+                try {
+                    completePublishGrants(messageStreamId, pending.key.address, listOfNotNull(pending.oldAddress), missing)
+                } catch (e: CancellationException) {
+                    throw e
+                } catch (e: Exception) {
+                    Log.w(TAG, "${rekeyLabel(interactions)} re-key still partial: ${e.message}")
+                    return RekeyOutcome.PARTIAL
+                }
+                if (promoteRekey(messageStreamId, keysStreamId, interactions, pending.key.keyId)) RekeyOutcome.PROMOTED
+                else RekeyOutcome.NONE
+            }
             pending.oldAddress != null && !grants.old.all { it } -> RekeyOutcome.INCONSISTENT
             System.currentTimeMillis() - pending.mintedAt < REKEY_PENDING_MAX_AGE_MS -> RekeyOutcome.KEPT
             else -> {
