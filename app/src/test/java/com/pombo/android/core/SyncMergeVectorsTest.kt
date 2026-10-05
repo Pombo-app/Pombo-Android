@@ -141,6 +141,21 @@ class SyncMergeVectorsTest {
     }
 
     @Test
+    fun `shared keys and pending re-keys merge as on the web`() {
+        val cases = vectors().getJSONArray("keys")
+        assertTrue(cases.length() > 0)
+        for (i in 0 until cases.length()) {
+            val case = cases.getJSONObject(i)
+            val merged = SyncMerge.mergeState(case.getJSONObject("base"), case.getJSONObject("incoming"))
+            val expected = case.getJSONObject("expected")
+            assertTrue(
+                "${case.getString("what")}: epochKeys was ${merged.opt("epochKeys")}, expected ${expected.opt("epochKeys")}",
+                same(merged.opt("epochKeys"), expected.opt("epochKeys"))
+            )
+        }
+    }
+
+    @Test
     fun `sent DMs carry deletions and edits as on the web`() {
         val cases = vectors().getJSONArray("sent")
         assertTrue(cases.length() > 0)

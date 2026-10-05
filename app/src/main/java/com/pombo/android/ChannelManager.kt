@@ -352,6 +352,7 @@ class ChannelManager(
             com.pombo.android.core.EpochKeyManager.RekeyGrants(held("next"), held("old"))
         },
         onRekeyUnsettled = { _, warning -> onGateWarning?.invoke(warning) },
+        onRekeyPending = { onLocalStateChanged() },
         myPrivateKey = myPrivateKey,
         myUsername = myUsername,
         publishRoster = { keysStreamId, data ->

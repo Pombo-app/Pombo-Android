@@ -116,7 +116,9 @@ class EpochKeyManager(
         messageStreamId: String, interactions: Boolean, newAddress: String, oldAddress: String?
     ) -> RekeyGrants = { _, _, _, _ -> throw IllegalStateException("re-key grants unreadable") },
     /** Owner notice for a re-key the channel open could not settle. */
-    private val onRekeyUnsettled: (messageStreamId: String, warning: String) -> Unit = { _, _ -> }
+    private val onRekeyUnsettled: (messageStreamId: String, warning: String) -> Unit = { _, _ -> },
+    /** A re-key's key was minted and is pending: sync must carry it before the grant lands. */
+    private val onRekeyPending: (messageStreamId: String) -> Unit = {}
 ) {
     data class Entry(val data: JSONObject, val publisherId: String?, val timestamp: Long)
 
@@ -2021,6 +2023,7 @@ class EpochKeyManager(
             // leaves the new one as the only holder whichever lands last.
             pending to listOfNotNull(oldAddress, unsettled?.key?.address).map { it.lowercase() }.distinct()
         }
+        onRekeyPending(messageStreamId)
         try {
             chainGrants(pending.key.address, revoke)
         } catch (e: CancellationException) {

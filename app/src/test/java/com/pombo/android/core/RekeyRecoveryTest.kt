@@ -37,6 +37,7 @@ class RekeyRecoveryTest {
     private val warnings = mutableListOf<String>()
     private val reads = mutableListOf<Boolean>()
     private var grants: () -> EpochKeyManager.RekeyGrants = { throw IllegalStateException("rpc down") }
+    private var pendingPushes = 0
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Unconfined)
 
     @After fun tearDown() = scope.cancel()
@@ -74,7 +75,8 @@ class RekeyRecoveryTest {
             resendKeys = { emptyList() },
             onKeyAdopted = { _, _ -> },
             readRekeyGrants = { _, interactions, _, _ -> reads += interactions; grants() },
-            onRekeyUnsettled = { _, warning -> warnings += warning }
+            onRekeyUnsettled = { _, warning -> warnings += warning },
+            onRekeyPending = { pendingPushes++ }
         ).also { runBlocking { it.loadPersistedState(stream) } }
     }
 
@@ -82,14 +84,18 @@ class RekeyRecoveryTest {
     private fun intAnnounces() = published.filter { it.optString("t") == StreamConstants.PUB_ANNOUNCE && it.optString("k") == "i" }
 
     @Test
-    fun `writes the new key down before the grant is sent`() = runBlocking {
+    fun `writes the new key down, and hands it to sync, before the grant is sent`() = runBlocking {
         seed()
         val keys = manager()
         var atGrant: JSONObject? = null
         var granted: String? = null
+        var pushesAtGrant = 0
 
-        keys.rekeyInteractionsKey(stream, keysStream) { next, _ -> granted = next; atGrant = JSONObject(record().toString()) }
+        keys.rekeyInteractionsKey(stream, keysStream) { next, _ ->
+            granted = next; atGrant = JSONObject(record().toString()); pushesAtGrant = pendingPushes
+        }
 
+        assertEquals(1, pushesAtGrant)
         val pendingAtGrant = atGrant!!.getJSONObject("intKeyPending")
         assertEquals(granted, pendingAtGrant.getString("address"))
         assertEquals(2, pendingAtGrant.getInt("rev"))
