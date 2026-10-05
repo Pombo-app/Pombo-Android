@@ -2718,6 +2718,9 @@ class AppViewModel(app: Application) : AndroidViewModel(app), PomboBridge.Listen
      */
     fun testRpc(all: Boolean = false) {
         val selection = _rpcSelection.value
+        if (all && bridge.pageReady) {
+            viewModelScope.launch { runCatching { bridge.call("rpcHealthProbe", timeoutMs = 15_000) } }
+        }
         probeRpcUrls(
             selection.rows
                 .filter { all || it.on }
