@@ -6,6 +6,8 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
 import org.json.JSONObject
 import java.io.File
@@ -39,8 +41,20 @@ class EnsStore(context: Context) {
     val avatarUrls: StateFlow<Map<String, String>> = _avatarUrls.asStateFlow()
 
     private val file = File(context.filesDir, "ens-cache.json")
+    private val loadLock = Mutex()
+    @Volatile private var loaded = false
 
-    suspend fun warmUp() = withContext(Dispatchers.IO) {
+    /** Reads the disk cache, once; [name] and [avatar] wait for it. */
+    suspend fun warmUp() {
+        if (loaded) return
+        loadLock.withLock {
+            if (loaded) return
+            readDisk()
+            loaded = true
+        }
+    }
+
+    private suspend fun readDisk() = withContext(Dispatchers.IO) {
         try {
             if (!file.exists()) return@withContext
             val root = JSONObject(file.readText())
@@ -92,6 +106,7 @@ class EnsStore(context: Context) {
      * cold or stale. Concurrent callers share one lookup.
      */
     suspend fun name(address: String, lookup: suspend () -> String?): String? {
+        warmUp()
         val key = address.lowercase()
         names[key]?.let { if (fresh(it)) return it.value }
 
@@ -117,6 +132,7 @@ class EnsStore(context: Context) {
 
     /** Same contract for the avatar text record. */
     suspend fun avatar(address: String, lookup: suspend () -> String?): String? {
+        warmUp()
         val key = address.lowercase()
         avatars[key]?.let { if (fresh(it)) return it.value }
 
