@@ -2641,6 +2641,44 @@ class AppViewModel(app: Application) : AndroidViewModel(app), PomboBridge.Listen
         commitRpcSelection()
     }
 
+    // ==================== RPC endpoint health (bridge api.rpcHealthProbe) ====================
+
+    private val _rpcHealth = MutableStateFlow<com.pombo.android.core.RpcHealth.Report?>(null)
+    val rpcHealth: StateFlow<com.pombo.android.core.RpcHealth.Report?> = _rpcHealth.asStateFlow()
+
+    /** When the bridge's client was built with the set it reports, for the rebuild gap. */
+    private var rpcHealthAppliedAt = 0L
+    private var rpcHealthRebuildJob: kotlinx.coroutines.Job? = null
+
+    override fun onBridgeRpcHealth(reportJson: String) {
+        val report = com.pombo.android.core.RpcHealth.parse(reportJson) ?: return
+        if (report.applied != _rpcHealth.value?.applied) rpcHealthAppliedAt = System.currentTimeMillis()
+        _rpcHealth.value = report
+        com.pombo.android.core.GasEstimator.rpcUrls = report.usable
+        maybeRebuildForRpcHealth()
+    }
+
+    /** Reload the bridge when the healthy set changed: at most every ten minutes, never mid-write. */
+    private fun maybeRebuildForRpcHealth() {
+        rpcHealthRebuildJob?.cancel()
+        val report = _rpcHealth.value ?: return
+        if (report.applied.toSet() == report.usable.toSet()) return
+        val now = System.currentTimeMillis()
+        val writing = com.pombo.android.ui.ChainGuard.isApproved()
+        if (com.pombo.android.core.RpcHealth.shouldRebuild(report.applied, report.usable, rpcHealthAppliedAt, now, writing)) {
+            android.util.Log.i("PomboRpc", "RPC health: reloading the bridge for ${report.usable}")
+            _status.value = NetStatus.CONNECTING
+            bridge.reconnect()
+            return
+        }
+        val wait = if (writing) 3_000L
+        else maxOf(3_000L, rpcHealthAppliedAt + com.pombo.android.core.RpcHealth.MIN_REBUILD_INTERVAL_MS - now)
+        rpcHealthRebuildJob = viewModelScope.launch {
+            delay(wait)
+            maybeRebuildForRpcHealth()
+        }
+    }
+
     /** Forget the last probe run, so a panel that reopens measures afresh. */
     fun clearRpcProbes() {
         _rpcProbes.value = emptyMap()
@@ -2680,6 +2718,9 @@ class AppViewModel(app: Application) : AndroidViewModel(app), PomboBridge.Listen
      */
     fun testRpc(all: Boolean = false) {
         val selection = _rpcSelection.value
+        if (all && bridge.pageReady) {
+            viewModelScope.launch { runCatching { bridge.call("rpcHealthProbe", timeoutMs = 15_000) } }
+        }
         probeRpcUrls(
             selection.rows
                 .filter { all || it.on }

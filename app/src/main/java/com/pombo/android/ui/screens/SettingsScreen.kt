@@ -1171,6 +1171,7 @@ private fun PolygonRpcCard(vm: AppViewModel) {
     val probes by vm.rpcProbes.collectAsState()
     val testing by vm.rpcTesting.collectAsState()
     val notice by vm.rpcNotice.collectAsState()
+    val health by vm.rpcHealth.collectAsState()
     var open by remember { mutableStateOf(false) }
     var adding by remember { mutableStateOf(false) }
 
@@ -1245,6 +1246,14 @@ private fun PolygonRpcCard(vm: AppViewModel) {
             color = Color.White.copy(alpha = 0.25f), fontSize = 12.sp
         )
         Spacer(Modifier.height(10.dp))
+        val fallback = health?.fallback == true
+        if (fallback) {
+            Text(
+                "No endpoint passed the health check, so all of them are in use.",
+                color = Color(0xFFFACC15).copy(alpha = 0.90f), fontSize = 11.sp
+            )
+            Spacer(Modifier.height(6.dp))
+        }
 
         selection.rows.forEachIndexed { index, row ->
             val url = selection.urlFor(row.key)
@@ -1252,6 +1261,8 @@ private fun PolygonRpcCard(vm: AppViewModel) {
                 name = selection.labelFor(row.key),
                 host = (url ?: "").removePrefix("https://"),
                 checked = row.on,
+                health = url?.takeIf { row.on }?.let { health?.verdicts?.get(it) },
+                fallback = fallback,
                 probe = url?.let { probes[it] },
                 testing = testing,
                 canMoveUp = index > 0,
@@ -1332,6 +1343,8 @@ private fun RpcEndpointRow(
     name: String,
     host: String,
     checked: Boolean,
+    health: com.pombo.android.core.RpcHealth.Verdict?,
+    fallback: Boolean,
     probe: AppViewModel.RpcProbe?,
     testing: Boolean,
     canMoveUp: Boolean,
@@ -1363,17 +1376,30 @@ private fun RpcEndpointRow(
             modifier = Modifier.size(26.dp)
         )
         Spacer(Modifier.width(8.dp))
-        Text(
-            name,
-            color = if (checked) PomboColors.Text else Color.White.copy(alpha = 0.50f),
-            fontSize = 13.sp
-        )
-        Spacer(Modifier.width(6.dp))
-        Text(
-            host, color = Color.White.copy(alpha = 0.25f), fontSize = 10.sp,
-            maxLines = 1, overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis,
-            modifier = Modifier.weight(1f)
-        )
+        Column(Modifier.weight(1f)) {
+            Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                Text(
+                    name,
+                    color = if (checked) PomboColors.Text else Color.White.copy(alpha = 0.50f),
+                    fontSize = 13.sp
+                )
+                Spacer(Modifier.width(6.dp))
+                Text(
+                    host, color = Color.White.copy(alpha = 0.25f), fontSize = 10.sp,
+                    maxLines = 1, overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis,
+                    modifier = Modifier.weight(1f)
+                )
+            }
+            if (health != null && !health.ok) {
+                val at = java.text.SimpleDateFormat("HH:mm", java.util.Locale.getDefault())
+                    .format(java.util.Date(health.at))
+                Text(
+                    "${if (fallback) "failing" else "excluded"}: ${com.pombo.android.core.RpcHealth.describe(health)} at $at",
+                    color = Color(0xFFF87171).copy(alpha = 0.80f), fontSize = 10.sp,
+                    maxLines = 2, overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis
+                )
+            }
+        }
         Spacer(Modifier.width(6.dp))
         RpcProbeLabel(probe, testing)
         if (onRemove != null) {
