@@ -239,6 +239,7 @@ class AppViewModel(app: Application) : AndroidViewModel(app), PomboBridge.Listen
             pushRegistry.clearAccount()
             walletTokenStore.clearAccount(store.address)
             blobStore.clearAccount()
+            previewStore.clearAccount()
             disconnect()
             toast("Account deleted", com.pombo.android.ui.ToastKind.INFO)
         }
@@ -1643,6 +1644,9 @@ class AppViewModel(app: Application) : AndroidViewModel(app), PomboBridge.Listen
         failedOutbox.memoryOnly = guest
         blobStore.scopeAddress = address
         blobStore.memoryOnly = guest
+        previewStore.scopeAddress = address
+        previewStore.memoryOnly = guest
+        viewModelScope.launch { previewStore.warmUp() }
         sentReactionsStore.scopeAddress = address
         sentReactionsStore.memoryOnly = guest
         pushRegistry.scopeAddress = address
@@ -1692,6 +1696,7 @@ class AppViewModel(app: Application) : AndroidViewModel(app), PomboBridge.Listen
         sentDmStore.scopeAddress = store.address
         failedOutbox.scopeAddress = store.address
         blobStore.scopeAddress = store.address
+        previewStore.scopeAddress = store.address
         sentReactionsStore.scopeAddress = store.address
         pushRegistry.scopeAddress = store.address
         settingsStore.scopeAddress = store.address
