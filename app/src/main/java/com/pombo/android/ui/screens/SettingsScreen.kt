@@ -1473,6 +1473,7 @@ private fun SecurityPanel(vm: AppViewModel) {
     var keyVisible by remember { mutableStateOf(false) }
     var deleteVerified by remember { mutableStateOf(false) }
     val noDeviceLock = remember { !com.pombo.android.ui.DeviceAuth.canAuthenticate(context) }
+    val isGuest by vm.isGuest.collectAsState()
 
     // The unlocked private key renders on this panel — keep it out of
     // screenshots, recordings and the recents thumbnail (M-I1).
@@ -1497,7 +1498,7 @@ private fun SecurityPanel(vm: AppViewModel) {
         DangerCard(title = "Private Key", hint = "Anyone with this key has full control of your account") {
             val key = revealedKey
             if (key == null) {
-                DangerButton("Unlock Key", enabled = !noDeviceLock) {
+                DangerButton("Unlock Key", enabled = !noDeviceLock && !isGuest) {
                     activity?.let {
                         com.pombo.android.ui.DeviceAuth.authenticate(
                             it, "Unlock private key",
@@ -1560,7 +1561,7 @@ private fun SecurityPanel(vm: AppViewModel) {
 
         DangerCard(title = "Delete Account", hint = "Permanently delete this account and all its data") {
             if (!deleteVerified) {
-                DangerButton("Verify", enabled = !noDeviceLock) {
+                DangerButton("Verify", enabled = !noDeviceLock && !isGuest) {
                     activity?.let {
                         com.pombo.android.ui.DeviceAuth.authenticate(
                             it, "Delete account",

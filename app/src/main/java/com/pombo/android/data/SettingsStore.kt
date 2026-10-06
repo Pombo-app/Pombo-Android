@@ -37,6 +37,14 @@ class SettingsStore(context: Context) {
     private fun scoped(name: String) =
         if (scopeAddress.isNullOrEmpty()) name else "${name}_${scopeAddress!!.lowercase()}"
 
+    fun clearAccount() {
+        val scope = scopeAddress?.lowercase()?.ifEmpty { null } ?: return
+        val suffix = "_$scope"
+        val edit = prefs.edit()
+        prefs.all.keys.filter { it.endsWith(suffix) }.forEach { edit.remove(it) }
+        edit.apply()
+    }
+
     /**
      * The last merged sync payload, kept verbatim. Pushing a payload rebuilt
      * only from local state would drop the slices this client does not model

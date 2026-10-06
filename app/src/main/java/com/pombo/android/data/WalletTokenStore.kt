@@ -40,6 +40,11 @@ class WalletTokenStore(context: Context) {
         save(address, list(address).filterNot { it.equals(token, ignoreCase = true) })
     }
 
+    fun clearAccount(address: String?) {
+        if (address.isNullOrEmpty()) return
+        prefs.edit().remove(key(address)).apply()
+    }
+
     private fun save(address: String, tokens: List<String>) {
         prefs.edit().putString(key(address), JSONArray(tokens).toString()).apply()
     }

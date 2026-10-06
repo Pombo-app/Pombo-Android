@@ -127,6 +127,11 @@ class InviteStore(context: Context) {
 
     private fun dismissedFullKey(): String = "${DISMISSED_FULL}_${scopeAddress!!.lowercase()}"
 
+    fun clearAccount() {
+        if (scopeAddress.isNullOrEmpty()) return
+        prefs.edit().remove(key()).remove(dismissedKey()).remove(dismissedFullKey()).apply()
+    }
+
     data class StoredInvite(
         val inviteId: String,
         val from: String,

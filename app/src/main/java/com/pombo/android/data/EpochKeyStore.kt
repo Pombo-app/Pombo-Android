@@ -50,4 +50,14 @@ class EpochKeyStore(context: Context) {
     fun clear(messageStreamId: String) {
         prefs.edit().remove(key(messageStreamId)).apply()
     }
+
+    fun clearAccount() {
+        val scope = scopeAddress?.lowercase()?.ifEmpty { null } ?: return
+        if (memoryOnly) return
+        // By prefix only: another account's key for a channel this one owns contains this address too.
+        val prefix = "${scope}_"
+        val edit = prefs.edit()
+        prefs.all.keys.filter { it.startsWith(prefix) }.forEach { edit.remove(it) }
+        edit.apply()
+    }
 }

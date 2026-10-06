@@ -63,6 +63,11 @@ class SyncStore(context: Context) {
             .apply()
     }
 
+    fun clearAccount() {
+        if (scopeAddress.isNullOrEmpty()) return
+        clear()
+    }
+
     private companion object {
         /** Web keeps 300 applied timestamps; 50 left a thinner margin against
          *  a storage replica serving a deep page of old snapshots. */

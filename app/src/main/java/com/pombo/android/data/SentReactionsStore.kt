@@ -66,6 +66,12 @@ class SentReactionsStore(context: Context) {
 
     fun exportAll(): JSONObject = if (memoryOnly) JSONObject() else readAll()
 
+    @Synchronized
+    fun clearAccount() {
+        if (memoryOnly || scopeAddress.isNullOrEmpty()) return
+        prefs.edit().remove(key()).apply()
+    }
+
     /** Replaces with a merged slice — post-SyncMerge it is a superset union. */
     @Synchronized
     fun importAll(slice: JSONObject) {

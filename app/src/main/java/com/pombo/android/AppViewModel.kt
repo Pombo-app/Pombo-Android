@@ -196,7 +196,7 @@ class AppViewModel(app: Application) : AndroidViewModel(app), PomboBridge.Listen
      * exposed unguarded here only because the guard is a UI concern (it needs
      * an Activity to host the prompt).
      */
-    fun exportPrivateKey(): String? = store.privateKey
+    fun exportPrivateKey(): String? = if (_isGuest.value) null else store.privateKey
 
     /** Blocked peers, for the Privacy panel. */
     val blockedPeers: Set<String> get() = settingsStore.blockedPeers
@@ -217,16 +217,27 @@ class AppViewModel(app: Application) : AndroidViewModel(app), PomboBridge.Listen
      * shown in the Security panel. The caller must have authenticated first.
      */
     fun deleteAccount() {
+        // A guest session leaves the stored account current: deleting here would erase that account's key.
+        if (_isGuest.value) return
         viewModelScope.launch {
             // Wipe the account-scoped data first, while the storage scope still
             // points at this account. disconnect() drops the keystore entry and
             // repoints everything, so doing it the other way round would leave
-            // this account's channels and contacts orphaned on disk.
+            // this account's data orphaned on disk.
             manager.replaceChannels(emptyList())
-            contactsStore.save(emptyList())
             _contacts.value = emptyList()
-            settingsStore.blockedPeers = emptySet()
-            settingsStore.syncBase = null
+            channelStore.clearAccount()
+            contactsStore.clearAccount()
+            inviteStore.clearAccount()
+            sentDmStore.clearAccount()
+            sentReactionsStore.clearAccount()
+            failedOutbox.clearAccount()
+            epochKeyStore.clearAccount()
+            unreadStore.clearAccount()
+            settingsStore.clearAccount()
+            syncStore.clearAccount()
+            pushRegistry.clearAccount()
+            walletTokenStore.clearAccount(store.address)
             blobStore.clearAccount()
             disconnect()
             toast("Account deleted", com.pombo.android.ui.ToastKind.INFO)
@@ -2369,6 +2380,7 @@ class AppViewModel(app: Application) : AndroidViewModel(app), PomboBridge.Listen
         manager.closeCurrent()
         sync.cancelAutoPush()
         store.clear()
+        applyStorageScope(store.address, guest = false)
         _accounts.value = store.accounts()
         _address.value = store.address
         _username.value = store.username

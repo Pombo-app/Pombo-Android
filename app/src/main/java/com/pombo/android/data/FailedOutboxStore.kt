@@ -61,6 +61,15 @@ class FailedOutboxStore(context: Context) {
         prefs.edit().remove(key(streamId)).apply()
     }
 
+    fun clearAccount() {
+        val scope = scopeAddress?.lowercase()?.ifEmpty { null } ?: return
+        if (memoryOnly) return
+        val prefix = "failed_${scope}_"
+        val edit = prefs.edit()
+        prefs.all.keys.filter { it.startsWith(prefix) }.forEach { edit.remove(it) }
+        edit.apply()
+    }
+
     private fun save(streamId: String, entries: List<JSONObject>) {
         if (entries.isEmpty()) {
             prefs.edit().remove(key(streamId)).apply()

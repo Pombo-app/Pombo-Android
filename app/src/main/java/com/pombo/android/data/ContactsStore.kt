@@ -84,5 +84,10 @@ class ContactsStore(context: Context) {
         prefs.edit().putString(key(), arr.toString()).apply()
     }
 
+    fun clearAccount() {
+        if (memoryOnly || scopeAddress.isNullOrEmpty()) return
+        prefs.edit().remove(key()).apply()
+    }
+
     private companion object { const val KEY = "contacts" }
 }
