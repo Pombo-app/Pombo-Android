@@ -135,7 +135,7 @@ class AppViewModel(app: Application) : AndroidViewModel(app), PomboBridge.Listen
         unreadStore = unreadStore,
         epochKeyStore = epochKeyStore,
         adminFloorStore = adminFloorStore,
-        transferDir = java.io.File(app.filesDir, "transfers"),
+        transferDir = com.pombo.android.core.TransferDirs.forScope(app, store.address, guest = false, session = null),
         isTrustedContact = { addr -> _contacts.value.any { it.address.equals(addr, ignoreCase = true) } },
         isBlockedPeer = { addr -> addr.lowercase() in settingsStore.blockedPeers },
         persistBlockedPeer = { addr ->
@@ -240,6 +240,8 @@ class AppViewModel(app: Application) : AndroidViewModel(app), PomboBridge.Listen
             walletTokenStore.clearAccount(store.address)
             blobStore.clearAccount()
             previewStore.clearAccount()
+            transferSends.toList().forEach { it.cancel() }
+            manager.clearAccountTransfers()
             disconnect()
             toast("Account deleted", com.pombo.android.ui.ToastKind.INFO)
         }
@@ -1633,6 +1635,7 @@ class AppViewModel(app: Application) : AndroidViewModel(app), PomboBridge.Listen
      * leave behind — any channels or contacts.
      */
     private fun applyStorageScope(address: String?, guest: Boolean) {
+        moveTransfers(address, guest)
         channelStore.scopeAddress = address
         channelStore.memoryOnly = guest
         contactsStore.scopeAddress = address
@@ -1840,6 +1843,9 @@ class AppViewModel(app: Application) : AndroidViewModel(app), PomboBridge.Listen
             // Background, non-critical: picks up admin renames for channels the
             // user already joined (web does this right after the initial render).
             runCatching { manager.refreshChannelMetadataFromGraph() }
+        }
+        viewModelScope.launch(kotlinx.coroutines.Dispatchers.IO) {
+            com.pombo.android.core.TransferDirs.sweep(app, manager.transferDir)
         }
         // A Keystore invalidation (lock screen removed, backup restore) forces
         // SecurePrefs to reset the affected files so the app can boot at all —
@@ -3666,12 +3672,32 @@ class AppViewModel(app: Application) : AndroidViewModel(app), PomboBridge.Listen
         return Triple(name ?: "file", size, mime)
     }
 
+    /** Sends still running: an account switch cancels them, or they would finish under the next identity. */
+    private val transferSends = java.util.Collections.synchronizedSet(HashSet<kotlinx.coroutines.Job>())
+
+    private fun trackSend(job: kotlinx.coroutines.Job): kotlinx.coroutines.Job {
+        transferSends += job
+        job.invokeOnCompletion { transferSends -= job }
+        return job
+    }
+
+    // The reset deletes partials under the directory it is handed, so the directory moves only after it.
+    private fun moveTransfers(address: String?, guest: Boolean) {
+        manager.resetTransfers()
+        transferSends.toList().forEach { it.cancel() }
+        val next = com.pombo.android.core.TransferDirs.forScope(getApplication(), address, guest, _address.value)
+        manager.transferDir = next
+        viewModelScope.launch(kotlinx.coroutines.Dispatchers.IO) {
+            com.pombo.android.core.TransferDirs.sweep(getApplication(), next)
+        }
+    }
+
     /**
      * Shares a document Uri over the P2P swarm (web InputUI routes non-images
      * to mediaController.sendFile; this is that path). Name/size come from the
      * resolver — SAF display names are the only honest name a content Uri has.
      */
-    fun sendFile(uri: android.net.Uri) = viewModelScope.launch {
+    fun sendFile(uri: android.net.Uri) = trackSend(viewModelScope.launch {
         try {
             val (name, size, mime) = documentInfo(uri)
                 ?: run { _lastError.value = "Could not read the file size"; return@launch }
@@ -3684,10 +3710,10 @@ class AppViewModel(app: Application) : AndroidViewModel(app), PomboBridge.Listen
         } catch (e: Exception) {
             _lastError.value = "File send failed: ${e.message}"
         }
-    }
+    })
 
     /** Shares a video Uri over the P2P swarm (web sendVideo → sendFile). */
-    fun sendVideo(uri: android.net.Uri) = viewModelScope.launch {
+    fun sendVideo(uri: android.net.Uri) = trackSend(viewModelScope.launch {
         try {
             val (name, size, mime) = documentInfo(uri)
                 ?: run { _lastError.value = "Could not read the file size"; return@launch }
@@ -3700,7 +3726,7 @@ class AppViewModel(app: Application) : AndroidViewModel(app), PomboBridge.Listen
         } catch (e: Exception) {
             _lastError.value = "Video send failed: ${e.message}"
         }
-    }
+    })
 
     /**
      * Shares a document Uri over the storage nodes (Persistent File Sharing —
@@ -3708,7 +3734,7 @@ class AppViewModel(app: Application) : AndroidViewModel(app), PomboBridge.Listen
      * the source (chunk i = bytes i*upc..), so the slicer opens a SEEKABLE file
      * descriptor; compression reads it sequentially via [openStream].
      */
-    fun sendStorageFile(uri: android.net.Uri) = viewModelScope.launch {
+    fun sendStorageFile(uri: android.net.Uri) = trackSend(viewModelScope.launch {
         try {
             val (name, size, mime) = documentInfo(uri)
                 ?: run { _lastError.value = "Could not read the file size"; return@launch }
@@ -3747,7 +3773,7 @@ class AppViewModel(app: Application) : AndroidViewModel(app), PomboBridge.Listen
         } catch (e: Exception) {
             _lastError.value = "Storage share failed: ${e.message}"
         }
-    }
+    })
 
     fun toggleReaction(messageId: String, emoji: String, add: Boolean) = viewModelScope.launch {
         // Web wording: a raw exception string means nothing to the user.
