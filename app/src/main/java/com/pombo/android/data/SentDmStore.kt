@@ -102,6 +102,15 @@ class SentDmStore(context: Context) {
         prefs.edit().remove(key(streamId)).apply()
     }
 
+    fun clearAccount() {
+        val scope = scopeAddress?.lowercase()?.ifEmpty { null } ?: return
+        if (memoryOnly) return
+        val prefix = "sent_${scope}_"
+        val edit = prefs.edit()
+        prefs.all.keys.filter { it.startsWith(prefix) }.forEach { edit.remove(it) }
+        edit.remove(deletedKey()).apply()
+    }
+
     /**
      * Applies an edit in place so the stored copy matches what was published.
      * [at] is the edit's own timestamp: the sync keeps the latest edit.

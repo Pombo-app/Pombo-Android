@@ -127,6 +127,11 @@ class PushRegistry(context: Context) {
     private fun checkedKey(): String =
         if (scopeAddress.isNullOrEmpty()) CHECKED_KEY else "${CHECKED_KEY}_${scopeAddress!!.lowercase()}"
 
+    fun clearAccount() {
+        if (scopeAddress.isNullOrEmpty()) return
+        prefs.edit().remove(key()).remove(endpointsKey()).remove(checkedKey()).apply()
+    }
+
     /** Advances the watermark so the same message never notifies twice. */
     fun updateLastSeen(streamId: String, timestamp: Long) {
         val entries = all().map {

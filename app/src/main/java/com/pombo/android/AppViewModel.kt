@@ -221,12 +221,21 @@ class AppViewModel(app: Application) : AndroidViewModel(app), PomboBridge.Listen
             // Wipe the account-scoped data first, while the storage scope still
             // points at this account. disconnect() drops the keystore entry and
             // repoints everything, so doing it the other way round would leave
-            // this account's channels and contacts orphaned on disk.
+            // this account's data orphaned on disk.
             manager.replaceChannels(emptyList())
-            contactsStore.save(emptyList())
             _contacts.value = emptyList()
-            settingsStore.blockedPeers = emptySet()
-            settingsStore.syncBase = null
+            channelStore.clearAccount()
+            contactsStore.clearAccount()
+            inviteStore.clearAccount()
+            sentDmStore.clearAccount()
+            sentReactionsStore.clearAccount()
+            failedOutbox.clearAccount()
+            epochKeyStore.clearAccount()
+            unreadStore.clearAccount()
+            settingsStore.clearAccount()
+            syncStore.clearAccount()
+            pushRegistry.clearAccount()
+            walletTokenStore.clearAccount(store.address)
             blobStore.clearAccount()
             disconnect()
             toast("Account deleted", com.pombo.android.ui.ToastKind.INFO)

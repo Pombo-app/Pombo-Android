@@ -128,6 +128,13 @@ class UnreadStore(context: Context) {
         persist(next)
     }
 
+    @Synchronized
+    fun clearAccount() {
+        if (scopeAddress.isNullOrEmpty()) return
+        prefs.edit().remove(key()).remove(watermarkKey()).apply()
+        _counts.value = emptyMap()
+    }
+
     /** Drops counts for channels that no longer exist (left, blocked, deleted). */
     @Synchronized
     fun retainOnly(streamIds: Set<String>) {

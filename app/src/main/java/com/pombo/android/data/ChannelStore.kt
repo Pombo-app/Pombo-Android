@@ -96,6 +96,11 @@ class ChannelStore(context: Context) {
         if (scopeAddress.isNullOrEmpty()) KEY_ORDER
         else "${KEY_ORDER}_${scopeAddress!!.lowercase()}"
 
+    fun clearAccount() {
+        if (memoryOnly || scopeAddress.isNullOrEmpty()) return
+        prefs.edit().remove(key()).remove(leftAtKey()).remove(orderKey()).apply()
+    }
+
     private companion object {
         const val KEY_CHANNELS = "channels"
         const val KEY_LEFT_AT = "channels_left_at"
