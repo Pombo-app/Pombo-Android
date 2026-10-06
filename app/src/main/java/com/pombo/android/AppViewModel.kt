@@ -227,6 +227,7 @@ class AppViewModel(app: Application) : AndroidViewModel(app), PomboBridge.Listen
             _contacts.value = emptyList()
             settingsStore.blockedPeers = emptySet()
             settingsStore.syncBase = null
+            blobStore.clearAccount()
             disconnect()
             toast("Account deleted", com.pombo.android.ui.ToastKind.INFO)
         }
@@ -1629,6 +1630,8 @@ class AppViewModel(app: Application) : AndroidViewModel(app), PomboBridge.Listen
         sentDmStore.memoryOnly = guest
         failedOutbox.scopeAddress = address
         failedOutbox.memoryOnly = guest
+        blobStore.scopeAddress = address
+        blobStore.memoryOnly = guest
         sentReactionsStore.scopeAddress = address
         sentReactionsStore.memoryOnly = guest
         pushRegistry.scopeAddress = address
@@ -1677,6 +1680,7 @@ class AppViewModel(app: Application) : AndroidViewModel(app), PomboBridge.Listen
         inviteStore.scopeAddress = store.address
         sentDmStore.scopeAddress = store.address
         failedOutbox.scopeAddress = store.address
+        blobStore.scopeAddress = store.address
         sentReactionsStore.scopeAddress = store.address
         pushRegistry.scopeAddress = store.address
         settingsStore.scopeAddress = store.address
