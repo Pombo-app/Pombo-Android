@@ -2378,6 +2378,7 @@ class AppViewModel(app: Application) : AndroidViewModel(app), PomboBridge.Listen
         manager.closeCurrent()
         sync.cancelAutoPush()
         store.clear()
+        applyStorageScope(store.address, guest = false)
         _accounts.value = store.accounts()
         _address.value = store.address
         _username.value = store.username

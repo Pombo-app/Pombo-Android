@@ -7,9 +7,9 @@ import org.junit.Test
 /**
  * Source guard: AppViewModel cannot be instantiated in a JVM test.
  *
- * Every store is cleared while the scope still points at the deleted account;
- * disconnect() drops the account, and anything cleared after it is cleared
- * under some other scope.
+ * Every store is cleared while the scope still points at the deleted account,
+ * and only then does disconnect() move the scope to the account that remains;
+ * the other way round erases the remaining account's data.
  */
 class DeleteAccountWiringTest {
 
@@ -35,5 +35,16 @@ class DeleteAccountWiringTest {
             assertTrue("deleteAccount no longer clears $store", clear >= 0)
             assertTrue("$store must be cleared before disconnect()", clear < disconnect)
         }
+    }
+
+    @Test
+    fun `disconnect moves the scope only after the account is dropped, before reconnecting`() {
+        val body = body(vm, "fun disconnect()")
+        val drop = body.indexOf("store.clear()")
+        val scope = body.indexOf("applyStorageScope(store.address, guest = false)")
+        val reconnect = body.indexOf("bridge.reconnect()")
+        assertTrue("disconnect no longer re-scopes the stores", scope >= 0)
+        assertTrue("the scope must move after store.clear()", drop in 0 until scope)
+        assertTrue("the scope must move before reconnecting", scope < reconnect)
     }
 }
