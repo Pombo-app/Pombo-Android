@@ -32,7 +32,7 @@ class DeleteAccountWiringTest {
         listOf(
             "channelStore", "contactsStore", "inviteStore", "sentDmStore", "sentReactionsStore",
             "failedOutbox", "epochKeyStore", "unreadStore", "settingsStore", "syncStore",
-            "pushRegistry", "walletTokenStore", "blobStore"
+            "pushRegistry", "walletTokenStore", "blobStore", "previewStore"
         ).forEach { store ->
             val clear = body.indexOf("$store.clearAccount(")
             assertTrue("deleteAccount no longer clears $store", clear >= 0)

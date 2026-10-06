@@ -2561,6 +2561,7 @@ class ChannelManager(
      */
     suspend fun scanChannelActivity(channel: Channel) {
         val streamId = channel.messageStreamId
+        val previewScope = previewStore.generation()
         try {
             bridge.awaitConnected()
             val args = JSONObject()
@@ -2634,7 +2635,7 @@ class ChannelManager(
                 if (isContent) newContent++
             }
 
-            best?.let { previewStore.put(streamId, it) }
+            best?.let { previewStore.put(streamId, it, previewScope) }
             if (newContent > 0) unreadStore.add(streamId, newContent)
             if (maxTs > since) unreadStore.setWatermark(streamId, maxTs)
         } catch (e: Exception) {
