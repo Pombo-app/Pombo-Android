@@ -3,6 +3,9 @@ package com.pombo.android.core
 import android.content.Context
 import io.mockk.every
 import io.mockk.mockk
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.async
+import kotlinx.coroutines.awaitAll
 import kotlinx.coroutines.runBlocking
 import org.json.JSONObject
 import org.junit.Assert.assertEquals
@@ -44,5 +47,30 @@ class EnsStoreTest {
         storeOnDisk(JSONObject().put("name", JSONObject.NULL).put("at", twentyMinutesAgo))
         val store = EnsStore(context).apply { warmUp() }
         assertEquals("found.eth", store.name("0xabc") { "found.eth" })
+    }
+
+    @Test
+    fun `a lookup made before warmUp sees what is on disk`() = runBlocking {
+        storeOnDisk(JSONObject().put("name", "on.disk.eth").put("at", twentyMinutesAgo))
+        var lookups = 0
+        assertEquals("on.disk.eth", EnsStore(context).name("0xabc") { lookups++; "net.eth" })
+        assertEquals(0, lookups)
+    }
+
+    @Test
+    fun `concurrent first lookups all wait for the disk`() = runBlocking {
+        storeOnDisk(
+            JSONObject().put("name", JSONObject.NULL).put("nameConfirmed", true).put("at", twentyMinutesAgo)
+                .put("avatar", "https://a.example/a.png").put("avatarAt", twentyMinutesAgo)
+        )
+        val store = EnsStore(context)
+        var lookups = 0
+        val results = listOf(
+            async(Dispatchers.Default) { store.name("0xabc") { lookups++; "net.eth" } },
+            async(Dispatchers.Default) { store.name("0xABC") { lookups++; "net.eth" } },
+            async(Dispatchers.Default) { store.avatar("0xabc") { lookups++; "https://net/a.png" } }
+        ).awaitAll()
+        assertEquals(listOf(null, null, "https://a.example/a.png"), results)
+        assertEquals(0, lookups)
     }
 }
