@@ -110,6 +110,9 @@ class SeedRegistry(private val dir: () -> File) {
 
     fun all(): List<Entry> = synchronized(lock) { entries().values.toList() }
 
+    /** Forgets what was read: the next call reads the directory [dir] points at now. */
+    fun reload() = synchronized(lock) { cache = null }
+
     /**
      * Drops entries past [EXPIRE_MS] and returns them, so the caller can delete
      * the backing piece files — the registry does not own PieceStore's naming.

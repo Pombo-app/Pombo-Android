@@ -220,6 +220,24 @@ class StorageMedia(
     }
     fun isDownloading(transferId: String): Boolean = _downloads.value[transferId]?.status == "downloading"
 
+    /** Bumped by [reset]: progress from a transfer started before it belongs to the account that was left. */
+    private val generation = java.util.concurrent.atomic.AtomicInteger()
+
+    /**
+     * Forgets every transfer before the account changes. The callers cancel
+     * the Jobs; what they publish while unwinding is dropped by [generation].
+     */
+    fun reset() {
+        generation.incrementAndGet()
+        warmUpJobs.values.forEach { it.cancel() }
+        warmUpJobs.clear()
+        warmedUp.clear()
+        _uploads.value = emptyMap()
+        _downloads.value = emptyMap()
+        completed.clear()
+        chunkIdentities.clear()
+    }
+
     /**
      * Any upload or download still in flight — drives the background foreground
      * service (so a transfer survives a channel switch or the app backgrounding).
@@ -477,7 +495,7 @@ class StorageMedia(
         val msgId = messageId ?: Protocol.generateMessageId()
         val maxB = StorageMediaConfig.CHUNK_KB * 1024
 
-        val up = UploadState(tid, source.size)
+        val up = UploadState(tid, source.size, generation.get())
         emit(up)
 
         // Single-slot dispatcher: engine coordination never runs two coroutines at once.
@@ -1036,6 +1054,9 @@ class StorageMedia(
         epochOpener: ((ByteArray, Long) -> ByteArray?)? = null
     ) {
         val tid = meta.transferId
+        val startedAt = generation.get()
+        val dir = transferDir()
+        fun publishDl(p: DownloadProgress) { if (generation.get() == startedAt) _downloads.update { it + (tid to p) } }
         if (isDownloading(tid)) { Log.w(TAG, "storage download already running: $tid"); return }
         if (completed.containsKey(tid)) { Log.i(TAG, "storage file already downloaded: $tid"); return }
         val total = meta.totalChunks ?: throw IllegalStateException("Announce has no chunk count")
@@ -1062,7 +1083,7 @@ class StorageMedia(
 
         val isCompressed = meta.compression != "none" && meta.compression.isNotEmpty()
         val staging = withContext(Dispatchers.IO) {
-            StorageStagingStore.open(transferDir().also { it.mkdirs() }, tid, compressedSize, chunkDataSize, total)
+            StorageStagingStore.open(dir.also { it.mkdirs() }, tid, compressedSize, chunkDataSize, total)
         }
 
         var status = "downloading"
@@ -1075,12 +1096,10 @@ class StorageMedia(
             // ETA from the byte rate and the average chunk size (received are
             // compressed chunks, so scale by chunkDataSize, not originalSize).
             val eta = if (rate != null && rate > 0 && done < total) (total - done).toLong() * chunkDataSize / rate else null
-            _downloads.update {
-                it + (tid to DownloadProgress(
-                    tid, status, if (total > 0) done * 100 / total else 0, done, total,
-                    bytesReceived, meta.originalSize, rate, phase, null, eta
-                ))
-            }
+            publishDl(DownloadProgress(
+                tid, status, if (total > 0) done * 100 / total else 0, done, total,
+                bytesReceived, meta.originalSize, rate, phase, null, eta
+            ))
         }
         var lastEmitDl = 0L
         fun emitDlThrottled() { val now = perf(); if (now - lastEmitDl >= 150) { lastEmitDl = now; emitDl() } }
@@ -1111,7 +1130,7 @@ class StorageMedia(
             }
         }
 
-        _downloads.update { it + (tid to DownloadProgress(tid, status, 0, staging.completedChunks(), total, bytesReceived, meta.originalSize, null, null)) }
+        publishDl(DownloadProgress(tid, status, 0, staging.completedChunks(), total, bytesReceived, meta.originalSize, null, null))
 
         val dlStart = perf()
         try {
@@ -1155,19 +1174,17 @@ class StorageMedia(
                 Log.i(TAG, "Storage download fetch: $total chunks (${compressedSize / 1024}KB) in ${fetchMs}ms = ${fetchKBs}KB/s")
                 phase = "Finishing write to disk…"; emitDl()
                 val asmStart = perf()
-                val outFile = withContext(Dispatchers.IO) { assemble(staging, tid, isCompressed) { p -> phase = p; emitDlThrottled() } }
-                completed[tid] = outFile
+                val outFile = withContext(Dispatchers.IO) { assemble(staging, dir, tid, isCompressed) { p -> phase = p; emitDlThrottled() } }
+                if (generation.get() == startedAt) completed[tid] = outFile
                 status = "complete"; phase = null
                 bytesReceived = meta.originalSize
                 emitDl()
                 Log.i(TAG, "Storage download complete: ${meta.fileName} ($total chunks); assemble ${perf() - asmStart}ms")
             } else {
                 status = "error"
-                _downloads.update {
-                    it + (tid to DownloadProgress(tid, status, staging.completedChunks() * 100 / max(1, total),
-                        staging.completedChunks(), total, bytesReceived, meta.originalSize, null, null,
-                        "Storage incomplete — some chunks are missing. Retry later."))
-                }
+                publishDl(DownloadProgress(tid, status, staging.completedChunks() * 100 / max(1, total),
+                    staging.completedChunks(), total, bytesReceived, meta.originalSize, null, null,
+                    "Storage incomplete — some chunks are missing. Retry later."))
                 // Keep the partial staging on disk for a later resume.
                 staging.close()
                 Log.w(TAG, "Incomplete storage download: ${staging.completedChunks()}/$total preserved on disk")
@@ -1179,24 +1196,23 @@ class StorageMedia(
             // than an error.
             status = "paused"
             val done = staging.completedChunks()
-            _downloads.update { it + (tid to DownloadProgress(tid, status, if (total > 0) done * 100 / total else 0, done, total, bytesReceived, meta.originalSize, null, null)) }
+            publishDl(DownloadProgress(tid, status, if (total > 0) done * 100 / total else 0, done, total, bytesReceived, meta.originalSize, null, null))
             runCatching { staging.close() }
             throw e
         } catch (e: Exception) {
             status = "error"
-            _downloads.update { it + (tid to DownloadProgress(tid, status, 0, staging.completedChunks(), total, bytesReceived, meta.originalSize, null, null, e.message)) }
+            publishDl(DownloadProgress(tid, status, 0, staging.completedChunks(), total, bytesReceived, meta.originalSize, null, null, e.message))
             runCatching { staging.close() }
             throw e
         }
     }
 
     /** Assemble the staged file: inflate to a .bin output when compressed, else the staged file IS the download. */
-    private fun assemble(staging: StorageStagingStore, tid: String, isCompressed: Boolean, onPhase: (String) -> Unit): File {
+    private fun assemble(staging: StorageStagingStore, dir: File, tid: String, isCompressed: Boolean, onPhase: (String) -> Unit): File {
         if (!isCompressed) {
             staging.close() // stop writing; the .spart file is the finished download
             return staging.stagedFile()
         }
-        val dir = transferDir()
         val staged = staging.stagedFile()
         val out = File(dir, "psf_$tid.bin")
         if (out.exists()) out.delete()
@@ -1302,7 +1318,7 @@ class StorageMedia(
 
     // ==================== progress plumbing ====================
 
-    private class UploadState(val tid: String, val fileSize: Long) {
+    private class UploadState(val tid: String, val fileSize: Long, val generation: Int) {
         var stage = "processing"; var phase = "Processing…"; var percent = 0
         var bytesSent = 0L; var totalBytes: Long? = null
         var instBps: Long? = null; var avgBps: Long? = null; var etaSec: Long? = null
@@ -1311,8 +1327,8 @@ class StorageMedia(
     }
 
     @Volatile private var lastEmit = 0L
-    private fun emit(up: UploadState) = setProgress(up.snapshot())
-    private fun emitThrottled(up: UploadState) { val now = perf(); if (now - lastEmit >= 150) { lastEmit = now; setProgress(up.snapshot()) } }
+    private fun emit(up: UploadState) { if (up.generation == generation.get()) setProgress(up.snapshot()) }
+    private fun emitThrottled(up: UploadState) { val now = perf(); if (now - lastEmit >= 150) { lastEmit = now; emit(up) } }
     private fun setProgress(p: UploadProgress) = _uploads.update { it + (p.transferId to p) }
     private fun clearProgress(tid: String) = _uploads.update { it - tid }
 

@@ -187,6 +187,8 @@ class MediaController(
         @Volatile var failed: String? = null
         /** Set by [pauseDownload] — stops [pump] from issuing new requests. */
         @Volatile var paused: Boolean = false
+        /** Set by [reset]: whatever is still unwinding belongs to the account that was left. */
+        @Volatile var dropped: Boolean = false
     }
 
     private val incoming = ConcurrentHashMap<String, Transfer>()
@@ -297,6 +299,33 @@ class MediaController(
         _progress.value = _progress.value - fileId
         Log.i(TAG, "download cancelled $fileId")
         return transfer.messageStreamId to transfer.isDm
+    }
+
+    /**
+     * Drops every transfer before the account changes. Downloads stop and their
+     * partial bytes go; seeds stop serving but keep their bytes and registry
+     * entry, so they come back when the account does. [dir] is the directory
+     * of the account being left: [transferDir] may already point elsewhere.
+     */
+    fun reset(dir: File) {
+        val partials = incoming.keys.toList()
+        for (transfer in incoming.values) {
+            transfer.dropped = true
+            transfer.discovery?.cancel()
+            transfer.inFlight.values.forEach { it.cancel() }
+            transfer.inFlight.clear()
+            runCatching { transfer.store.close() }
+        }
+        incoming.clear()
+        partials.forEach { PieceStore.delete(dir, it) }
+        seeding.values.forEach { runCatching { it.store.close() } }
+        seeding.clear()
+        uploads.clear()
+        _uploadStats.value = emptyMap()
+        _progress.value = emptyMap()
+        emitSeeds()
+        registry.reload()
+        Log.i(TAG, "transfers reset: ${partials.size} download(s) dropped")
     }
 
     /**
@@ -785,6 +814,8 @@ class MediaController(
     }
 
     private fun completeDownload(transfer: Transfer) {
+        // The registry already reads the next account's directory.
+        if (transfer.dropped) return
         val metadata = transfer.metadata
         transfer.discovery?.cancel()
         transfer.inFlight.values.forEach { it.cancel() }
@@ -1179,6 +1210,7 @@ class MediaController(
     }
 
     private fun emitProgress(transfer: Transfer, done: Boolean = false) {
+        if (transfer.dropped) return
         publish(
             Progress(
                 fileId = transfer.metadata.fileId,

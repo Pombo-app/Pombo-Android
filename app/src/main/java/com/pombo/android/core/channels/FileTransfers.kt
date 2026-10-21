@@ -118,8 +118,9 @@ internal class FileTransfers(private val manager: ChannelManager) {
 
         // The wire requires exactly 36 UTF-8 bytes — a random UUID is exactly that.
         val fileId = java.util.UUID.randomUUID().toString()
+        val dir = transferDir
         val store = withContext(Dispatchers.IO) {
-            com.pombo.android.core.PieceStore.open(transferDir, fileId, fileSize)
+            com.pombo.android.core.PieceStore.open(dir, fileId, fileSize)
         }
         val pieceHashes = ArrayList<String>(com.pombo.android.core.MediaConfig.pieceCount(fileSize))
         try {
@@ -154,7 +155,7 @@ internal class FileTransfers(private val manager: ChannelManager) {
             }
         } catch (e: Exception) {
             store.close()
-            com.pombo.android.core.PieceStore.delete(transferDir, fileId)
+            com.pombo.android.core.PieceStore.delete(dir, fileId)
             throw e
         }
 
@@ -206,7 +207,7 @@ internal class FileTransfers(private val manager: ChannelManager) {
             // but a failed announce must not strand a bubble that looks sent.
             _messages.value = _messages.value.filterNot { it.id == id }
             store.close()
-            com.pombo.android.core.PieceStore.delete(transferDir, fileId)
+            com.pombo.android.core.PieceStore.delete(dir, fileId)
             throw e
         }
         confirmMessage(id)
@@ -588,6 +589,26 @@ internal class FileTransfers(private val manager: ChannelManager) {
         scope.launch {
             job?.join()
             storageMedia.discardDownload(transferId)
+        }
+    }
+
+    /**
+     * Stops every transfer before the account changes: downloads are cancelled
+     * and their partial bytes deleted under [dir], the directory of the account
+     * being left — a cancelled Job unwinds after the scope has moved on.
+     */
+    fun resetTransfers(dir: java.io.File) {
+        val unfinished = storageMedia.downloads.value.filterValues { it.status != "complete" }.keys
+        val jobs = storageDownloadJobs.values.toList()
+        storageDownloadJobs.clear()
+        storageTransferChannel.clear()
+        _storageTransferPhase.value = emptyMap()
+        storageMedia.reset()
+        media.reset(dir)
+        jobs.forEach { it.cancel() }
+        scope.launch {
+            jobs.forEach { it.join() }
+            unfinished.forEach { com.pombo.android.core.StorageStagingStore.delete(dir, it) }
         }
     }
 

@@ -172,7 +172,7 @@ class ChannelManager(
      * may evict a cache directory at any moment, and a half-evicted transfer
      * would resume against a bitmap claiming pieces that are gone.
      */
-    internal val transferDir: java.io.File,
+    @Volatile internal var transferDir: java.io.File,
     /** Trust level 2 in the web comes from the trusted-contacts list. */
     internal val isTrustedContact: (String) -> Boolean = { false },
     /** Blocked peers (web secureStorage.isBlocked) — a synced slice. */
@@ -7322,6 +7322,16 @@ class ChannelManager(
         files.reseedFile(fileId, messageStreamId)
 
     fun inactiveSeeds() = files.inactiveSeeds()
+
+    /** Stops every transfer of the account in scope; call before [transferDir] moves. */
+    fun resetTransfers() = files.resetTransfers(transferDir)
+
+    /** Stops every transfer and erases the account's transfer directory (the account is being deleted). */
+    suspend fun clearAccountTransfers() {
+        val dir = transferDir
+        files.resetTransfers(dir)
+        withContext(Dispatchers.IO) { dir.deleteRecursively() }
+    }
 
     fun downloadFile(messageId: String) = files.downloadFile(messageId)
 
