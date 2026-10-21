@@ -44,6 +44,7 @@ class AppViewModel(app: Application) : AndroidViewModel(app), PomboBridge.Listen
     private val blobStore = com.pombo.android.core.ImageBlobStore(app)
     private val sentDmStore = com.pombo.android.data.SentDmStore(app)
     private val failedOutbox = com.pombo.android.data.FailedOutboxStore(app)
+    private val pendingCreateStore = com.pombo.android.data.PendingCreateStore(app)
     private val sentReactionsStore = com.pombo.android.data.SentReactionsStore(app)
     private val epochKeyStore = com.pombo.android.data.EpochKeyStore(app)
     private val adminFloorStore = com.pombo.android.core.AdminFloorStore(app)
@@ -131,6 +132,7 @@ class AppViewModel(app: Application) : AndroidViewModel(app), PomboBridge.Listen
         sentDmStore = sentDmStore,
         sentReactionsStore = sentReactionsStore,
         failedOutbox = failedOutbox,
+        pendingCreateStore = pendingCreateStore,
         inviteStore = inviteStore,
         unreadStore = unreadStore,
         epochKeyStore = epochKeyStore,
@@ -234,6 +236,7 @@ class AppViewModel(app: Application) : AndroidViewModel(app), PomboBridge.Listen
             sentDmStore.clearAccount()
             sentReactionsStore.clearAccount()
             failedOutbox.clearAccount()
+            pendingCreateStore.clearAccount()
             epochKeyStore.clearAccount()
             unreadStore.clearAccount()
             settingsStore.clearAccount()
@@ -1647,6 +1650,8 @@ class AppViewModel(app: Application) : AndroidViewModel(app), PomboBridge.Listen
         sentDmStore.memoryOnly = guest
         failedOutbox.scopeAddress = address
         failedOutbox.memoryOnly = guest
+        pendingCreateStore.scopeAddress = address
+        pendingCreateStore.memoryOnly = guest
         blobStore.scopeAddress = address
         blobStore.memoryOnly = guest
         previewStore.scopeAddress = address
@@ -1663,6 +1668,7 @@ class AppViewModel(app: Application) : AndroidViewModel(app), PomboBridge.Listen
         epochKeyStore.scopeAddress = address
         epochKeyStore.memoryOnly = guest
         manager.reloadChannels()
+        manager.pendingCreates.refresh()
         // Same-process cache, keyed only by messageStreamId — reloading the
         // store above does nothing for a channel already opened this
         // session; without this the new identity would keep reading the
@@ -1700,6 +1706,7 @@ class AppViewModel(app: Application) : AndroidViewModel(app), PomboBridge.Listen
         inviteStore.scopeAddress = store.address
         sentDmStore.scopeAddress = store.address
         failedOutbox.scopeAddress = store.address
+        pendingCreateStore.scopeAddress = store.address
         blobStore.scopeAddress = store.address
         previewStore.scopeAddress = store.address
         sentReactionsStore.scopeAddress = store.address
@@ -2883,45 +2890,77 @@ class AppViewModel(app: Application) : AndroidViewModel(app), PomboBridge.Listen
             "Create channel",
             "Creates \"${spec.name}\" — $streamCount streams, their permissions and storage."
         ) {
+            withCreateProgress(spec.type, "Creating channel...", "Failed to create channel") { onProgress ->
+                manager.createChannel(
+                    name = spec.name,
+                    type = spec.type,
+                    password = spec.password,
+                    exposure = spec.exposure,
+                    readOnly = spec.readOnly,
+                    description = spec.description,
+                    language = spec.language,
+                    category = spec.category,
+                    members = spec.members,
+                    classification = spec.classification,
+                    storageProvider = spec.storageProvider,
+                    customStorageAddress = spec.customStorageAddress,
+                    storageDays = spec.storageDays,
+                    gateMode = spec.gateMode,
+                    gateToken = spec.gateToken,
+                    gateMinBalance = spec.gateMinBalance,
+                    gatePrice = spec.gatePrice,
+                    gateDuration = spec.gateDurationSeconds,
+                    wireIdentity = spec.wireIdentity,
+                    onProgress = onProgress
+                )
+            }
+        }
+    }
 
+    /** Interrupted channel creations with something on chain (ChatsScreen: Finish / Discard). */
+    val interruptedCreates get() = manager.interruptedCreates
+
+    /** Sends only the transactions an interrupted creation still lacks. */
+    fun finishInterruptedCreate(basePath: String) = viewModelScope.launch {
+        val record = manager.interruptedCreates.value.find { it.basePath == basePath } ?: return@launch
+        chainAction("Finish channel", "Finishes \"${record.name}\": only the transactions still missing are sent.") {
+            withCreateProgress(record.type, "Finishing channel...", "Could not finish the channel") { onProgress ->
+                manager.finishPendingCreate(basePath, onProgress)
+            }
+        }
+    }
+
+    fun discardInterruptedCreate(basePath: String) {
+        runCatching { manager.discardPendingCreate(basePath) }
+            .onFailure { toast("Could not discard: ${it.message}", com.pombo.android.ui.ToastKind.ERROR) }
+    }
+
+    /**
+     * A channel creation under the progress toast. A finished creation's
+     * skipped steps still tick, so the ring ends full either way.
+     */
+    private suspend fun withCreateProgress(
+        type: String, title: String, failure: String, create: suspend (onProgress: () -> Unit) -> Channel
+    ) {
+        val streamCount = if (type == "gated") 5 else 4
         // createStream + setPermissions per stream + storage (bridge does
         // addToStorageNode and setStorageDayCount in one call, unlike the web).
         // The -2 is the only stream with no storage. Public/password:
         // 4+4+3 = 11. Gated adds the gate deploy and the keys stream (-4,
         // with storage): 1+5+5+4 = 15.
-        val totalSteps = when (spec.type) {
+        val totalSteps = when (type) {
             "gated" -> 15
             else -> 11
         }
         val id = toast(
-            "Creating channel...", com.pombo.android.ui.ToastKind.LOADING, Long.MAX_VALUE,
+            title, com.pombo.android.ui.ToastKind.LOADING, Long.MAX_VALUE,
             subtitle = "This may take a minute",
             progress = com.pombo.android.ui.ToastProgress(0, totalSteps, "Creating Channel...")
         )
         var step = 0
         _busy.value = true
         try {
-            val channel = manager.createChannel(
-                name = spec.name,
-                type = spec.type,
-                password = spec.password,
-                exposure = spec.exposure,
-                readOnly = spec.readOnly,
-                description = spec.description,
-                language = spec.language,
-                category = spec.category,
-                members = spec.members,
-                classification = spec.classification,
-                storageProvider = spec.storageProvider,
-                customStorageAddress = spec.customStorageAddress,
-                storageDays = spec.storageDays,
-                gateMode = spec.gateMode,
-                gateToken = spec.gateToken,
-                gateMinBalance = spec.gateMinBalance,
-                gatePrice = spec.gatePrice,
-                gateDuration = spec.gateDurationSeconds,
-                wireIdentity = spec.wireIdentity
-            ) {
+            val channel = create {
                 step += 1
                 val label = when {
                     step <= streamCount -> "Creating Channel..."
@@ -2937,13 +2976,13 @@ class AppViewModel(app: Application) : AndroidViewModel(app), PomboBridge.Listen
             // The creator's device answers key requests by default, and the
             // toggle registers its own wake tag, so the background path needs
             // nothing else from the user.
-            if (spec.type == "gated") setKeyResponder(channel, on = true, quiet = true)
+            if (type == "gated") setKeyResponder(channel, on = true, quiet = true)
         } catch (e: Exception) {
             dismissToast(id)
-            toast("Failed to create channel: ${e.message ?: "unknown error"}", com.pombo.android.ui.ToastKind.ERROR, 5000L)
+            toast("$failure: ${e.message ?: "unknown error"}", com.pombo.android.ui.ToastKind.ERROR, 5000L)
+            viewModelScope.launch { runCatching { manager.reconcilePendingCreates() } }
         } finally {
             _busy.value = false
-        }
         }
     }
 
@@ -3851,6 +3890,7 @@ class AppViewModel(app: Application) : AndroidViewModel(app), PomboBridge.Listen
         viewModelScope.launch {
             kotlinx.coroutines.delay(BRIDGE_CONNECT_BACKGROUND_DELAY_MS)
             manager.resumeOwedRotations()
+            if (!_isGuest.value) runCatching { manager.reconcilePendingCreates() }
             // force: a (re)connect rebuilds the bridge's JS world, so whatever
             // the previous session subscribed no longer exists there. This is
             // the one place the inbox replay is supposed to run.
