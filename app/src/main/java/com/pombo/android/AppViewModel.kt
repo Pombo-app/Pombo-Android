@@ -220,6 +220,8 @@ class AppViewModel(app: Application) : AndroidViewModel(app), PomboBridge.Listen
         // A guest session leaves the stored account current: deleting here would erase that account's key.
         if (_isGuest.value) return
         viewModelScope.launch {
+            // Best effort: the local wipe never waits on Play Services or fails because of it.
+            runCatching { kotlinx.coroutines.withTimeoutOrNull(5_000) { push.rotateToken() } }
             // Wipe the account-scoped data first, while the storage scope still
             // points at this account. disconnect() drops the keystore entry and
             // repoints everything, so doing it the other way round would leave

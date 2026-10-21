@@ -27,7 +27,14 @@ class PushRelayClient(
     private val bridge: PomboBridge,
     private val registry: PushRegistry,
     /** On-chain storage endpoints of a stream (the providers that hold it). */
-    private val resolveEndpoints: suspend (streamId: String) -> List<String> = { emptyList() }
+    private val resolveEndpoints: suspend (streamId: String) -> List<String> = { emptyList() },
+    private val deleteFcmToken: suspend () -> Unit = {
+        suspendCancellableCoroutine<Unit> { cont ->
+            FirebaseMessaging.getInstance().deleteToken()
+                .addOnSuccessListener { cont.resume(Unit) }
+                .addOnFailureListener { cont.resumeWithException(it) }
+        }
+    }
 ) {
 
     private val prefs = context.applicationContext
@@ -138,6 +145,19 @@ class PushRelayClient(
             prefs.edit().remove("fcm_token").putBoolean("needs_reregister", true).apply()
             runCatching { FirebaseMessaging.getInstance().deleteToken() }
         }
+    }
+
+    /**
+     * Retires this install's delivery token. The relay keys its rows on
+     * (tag, token) with no account in them, and a one-byte tag is shared with
+     * other accounts' channels, so one account's rows cannot be removed one
+     * by one: they die with the token, on the first wake that reaches it. The
+     * account that remains re-registers its own rows on the next connect.
+     */
+    suspend fun rotateToken() {
+        if (cachedToken == null) return
+        prefs.edit().remove("fcm_token").putBoolean("needs_reregister", true).apply()
+        deleteFcmToken()
     }
 
     /**
