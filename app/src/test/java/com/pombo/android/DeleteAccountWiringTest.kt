@@ -41,6 +41,15 @@ class DeleteAccountWiringTest {
     }
 
     @Test
+    fun `the push token is retired first, bounded and never failing the wipe`() {
+        val body = body(vm, "fun deleteAccount()")
+        val rotate = body.indexOf("runCatching { kotlinx.coroutines.withTimeoutOrNull(5_000) { push.rotateToken() } }")
+        assertTrue("deleteAccount no longer retires the push token, or does it unbounded", rotate >= 0)
+        assertTrue("a guest must never reach it", body.indexOf("if (_isGuest.value) return") in 0 until rotate)
+        assertTrue("it must run before the stores are cleared", rotate < body.indexOf("channelStore.clearAccount()"))
+    }
+
+    @Test
     fun `disconnect moves the scope only after the account is dropped, before reconnecting`() {
         val body = body(vm, "fun disconnect()")
         val drop = body.indexOf("store.clear()")
