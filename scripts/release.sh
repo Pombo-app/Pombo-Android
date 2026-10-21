@@ -78,6 +78,11 @@ fi
 echo "==> tagging $TAG"
 git tag -a "$TAG" -m "$TAG"
 
+# Never from incremental outputs: Kotlin does not always recompile a class
+# when an interface it implements changes, and the stale class ships.
+echo "==> cleaning"
+./gradlew clean
+
 echo "==> running tests"
 ./gradlew testDebugUnitTest
 
