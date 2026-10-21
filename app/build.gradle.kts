@@ -103,6 +103,9 @@ android {
     }
     kotlinOptions {
         jvmTarget = "17"
+        // Default bodies live in the interface itself, so adding one never
+        // needs every implementing class recompiled.
+        freeCompilerArgs += "-Xjvm-default=all"
     }
     buildFeatures {
         compose = true
