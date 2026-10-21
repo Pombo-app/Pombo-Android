@@ -664,6 +664,7 @@ class EpochKeyManager(
             if (changed) persist(messageStreamId, s)
             haveKeys = s.epochs.isNotEmpty()
             toBootstrap = s.announces.isEmpty() && isOwnAdmin(messageStreamId)
+            dropHeldKidsLocked(s)
             toRequest = s.announces.isNotEmpty()
                 && (missingEpochsLocked(s).isNotEmpty() || needsPubKeyLocked(messageStreamId, s)
                     || needsInteractionsKeyLocked(s) || s.missingKids.isNotEmpty())
@@ -898,6 +899,11 @@ class EpochKeyManager(
     private fun missingEpochsLocked(s: ChannelState): List<Int> {
         val adopted = s.epochs.values.map { it.epoch }.toSet()
         return s.announces.keys.filter { it !in adopted }
+    }
+
+    /** Caller holds the lock. A kid noted missing whose key is held since is not missing: left in, it keeps a request going forever. */
+    private fun dropHeldKidsLocked(s: ChannelState) {
+        s.missingKids.removeAll { it in s.epochs }
     }
 
     /** Caller holds the lock. A Sealed channel is not writable until
@@ -1812,6 +1818,7 @@ class EpochKeyManager(
             // -5 grants publish to the interactions key alone.
             // `anchorless`: no announce to name what is missing, so the request
             // asks from the first epoch and takes whatever a member still holds.
+            dropHeldKidsLocked(s)
             val stranded = s.missingKids.mapNotNull {
                 it.substringBefore('.').toIntOrNull()
             }
@@ -2384,8 +2391,9 @@ class EpochKeyManager(
         var known = 0
         var inForce = -1
         val lookup = mutex.withLock {
-            val s = state[messageStreamId]
-            val entry = s?.epochs?.get(kid)
+            val s = getState(messageStreamId)
+            if (!s.loaded) { loadPersisted(messageStreamId, s); s.loaded = true }
+            val entry = s.epochs[kid]
             if (entry == null) null else {
                 val fresh = !gated || kidIsFreshLocked(s, kid, entry.epoch, live, timestamp)
                 if (!fresh) {
@@ -2455,8 +2463,9 @@ class EpochKeyManager(
     ): ByteArray? {
         val parsed = EpochKeyCrypto.parseBinaryEpochEnvelope(bytes) ?: return null
         val lookup = mutex.withLock {
-            val s = state[messageStreamId]
-            val entry = s?.epochs?.get(parsed.kid)
+            val s = getState(messageStreamId)
+            if (!s.loaded) { loadPersisted(messageStreamId, s); s.loaded = true }
+            val entry = s.epochs[parsed.kid]
             if (entry == null) null else {
                 val fresh = !gated || kidIsFreshLocked(s, parsed.kid, entry.epoch, live, timestamp)
                 Pair(entry.keyHex, fresh)
