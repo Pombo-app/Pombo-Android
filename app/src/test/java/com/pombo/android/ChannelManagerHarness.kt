@@ -36,7 +36,9 @@ import org.json.JSONObject
 class ChannelManagerHarness(
     channels: List<Channel> = emptyList(),
     private val trustedContacts: Set<String> = emptySet(),
-    failedOutbox: com.pombo.android.data.FailedOutboxStore? = null
+    failedOutbox: com.pombo.android.data.FailedOutboxStore? = null,
+    pendingCreateStore: com.pombo.android.data.PendingCreateStore? = null,
+    val epochKeyStore: com.pombo.android.data.EpochKeyStore = mockk(relaxed = true)
 ) {
     /** Throwaway key; the channel pseudonym is minted from it, so it must be real. */
     val myKey = "0x4f3edf983ac636a65a842ce7c78d9aa706d3b113bce9c46f30d7d21715b23b1d"
@@ -88,9 +90,10 @@ class ChannelManagerHarness(
             blobStore = mockk(relaxed = true),
             sentDmStore = mockk(relaxed = true),
             failedOutbox = failedOutbox,
+            pendingCreateStore = pendingCreateStore,
             inviteStore = mockk(relaxed = true),
             unreadStore = unreadStore,
-            epochKeyStore = mockk(relaxed = true),
+            epochKeyStore = epochKeyStore,
             adminFloorStore = adminFloorStore,
             transferDir = java.io.File(System.getProperty("java.io.tmpdir"), "pombo-tests"),
             isTrustedContact = { addr -> addr.lowercase() in trustedContacts },

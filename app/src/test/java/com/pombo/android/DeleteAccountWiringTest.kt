@@ -31,7 +31,7 @@ class DeleteAccountWiringTest {
         val disconnect = body.lastIndexOf("disconnect()")
         listOf(
             "channelStore", "contactsStore", "inviteStore", "sentDmStore", "sentReactionsStore",
-            "failedOutbox", "epochKeyStore", "unreadStore", "settingsStore", "syncStore",
+            "failedOutbox", "pendingCreateStore", "epochKeyStore", "unreadStore", "settingsStore", "syncStore",
             "pushRegistry", "walletTokenStore", "blobStore", "previewStore"
         ).forEach { store ->
             val clear = body.indexOf("$store.clearAccount(")

@@ -161,6 +161,8 @@ class ChannelManager(
     private val sentReactionsStore: com.pombo.android.data.SentReactionsStore? = null,
     /** Failed text sends, so their Retry survives a restart. */
     private val failedOutbox: com.pombo.android.data.FailedOutboxStore? = null,
+    /** Channel creations a kill interrupted, so they can be finished or discarded. */
+    private val pendingCreateStore: com.pombo.android.data.PendingCreateStore? = null,
     private val inviteStore: com.pombo.android.data.InviteStore,
     private val unreadStore: com.pombo.android.data.UnreadStore,
     /** Persisted epoch keys for gated channels (-4 protocol, N-A). */
@@ -1941,6 +1943,128 @@ class ChannelManager(
     ): Channel {
         val addr = myAddress() ?: throw IllegalStateException("No identity")
         require(type != "password" || !password.isNullOrEmpty()) { "Password channel requires a password" }
+        val sealed = type == "gated" && wireIdentity == "sealed"
+        // Stored before the first transaction: the stream ids and the shared
+        // keys exist before anything is paid for.
+        val pending = com.pombo.android.data.PendingCreate(
+            basePath = "${addr.lowercase()}/${PomboCrypto.randomHex(8)}",
+            owner = addr.lowercase(),
+            name = name, type = type, password = password, exposure = exposure, readOnly = readOnly,
+            description = description, language = language, category = category,
+            members = members, classification = classification,
+            storageProvider = storageProvider, customStorageAddress = customStorageAddress, storageDays = storageDays,
+            gateMode = gateMode, gateToken = gateToken, gateMinBalance = gateMinBalance,
+            gatePrice = gatePrice, gateDuration = gateDuration, wireIdentity = wireIdentity,
+            // Sealed (the default for gated): the SHARED publish key is minted
+            // up front so its address rides the permission batch.
+            publishKey = if (sealed) epochKeys.mintPublishKey() else null,
+            // The second shared key: same mechanics, wider distribution. Every
+            // member holds it, read-only included — it carries the -5 (reactions)
+            // and the -2 (presence), so participating never depends on being
+            // allowed to post.
+            interactionsKey = if (sealed) epochKeys.mintInteractionsKey() else null,
+            // The only way back to a gate clone whose address was never seen.
+            startBlock = if (type == "gated") bridge.call("blockNumber").getLong("block") else null,
+            gateAddress = null,
+            startedAt = System.currentTimeMillis()
+        )
+        pendingCreates.begin(pending)
+        return runCreate(pending, resume = false, onProgress)
+    }
+
+    /** Creations a kill interrupted; the chain decides what is left of each. */
+    internal val pendingCreates = com.pombo.android.core.channels.PendingCreates(
+        records = { pendingCreateStore?.load() ?: emptyList() },
+        put = { pendingCreateStore?.put(it) },
+        remove = { pendingCreateStore?.remove(it) },
+        streamExists = { streamId ->
+            bridge.call("streamExists", JSONObject().put("streamId", streamId)).getBoolean("exists")
+        },
+        findGate = { record -> findCreatedGate(record) }
+    )
+
+    /** Interrupted creations with something on chain, for Finish / Discard. */
+    val interruptedCreates: StateFlow<List<com.pombo.android.data.PendingCreate>> get() = pendingCreates.resumable
+
+    private suspend fun findCreatedGate(record: com.pombo.android.data.PendingCreate): String? {
+        val fromBlock = record.startBlock ?: return null
+        val claimed = (_channels.value.mapNotNull { it.gateAddress } +
+            (pendingCreateStore?.load()?.mapNotNull { it.gateAddress } ?: emptyList())).distinct()
+        val res = bridge.call("gateFindCreated", JSONObject()
+            .put("owner", record.owner).put("fromBlock", fromBlock)
+            .put("mode", record.gateMode).put("claimed", JSONArray(claimed)), 120_000)
+        return if (res.isNull("gate")) null else res.getString("gate").lowercase()
+    }
+
+    suspend fun reconcilePendingCreates() = pendingCreates.reconcileAll()
+
+    /**
+     * Sends what an interrupted creation still lacks, asking the chain before
+     * each write, and saves the channel.
+     */
+    suspend fun finishPendingCreate(basePath: String, onProgress: () -> Unit = {}): Channel {
+        val record = pendingCreates.get(basePath)
+            ?: throw IllegalStateException("This channel creation is no longer pending")
+        if (pendingCreates.reconcile(record) != com.pombo.android.core.channels.PendingCreates.State.RESUMABLE) {
+            throw IllegalStateException("This channel creation cannot be finished right now")
+        }
+        check(pendingCreates.claim(basePath)) { "This channel is still being created" }
+        val current = pendingCreates.get(basePath) ?: run {
+            pendingCreates.release(basePath)
+            throw IllegalStateException("This channel creation is no longer pending")
+        }
+        return runCreate(current, resume = true, onProgress)
+    }
+
+    /**
+     * Forgets an interrupted creation. Whatever of it landed stays on chain
+     * unused: deleting streams costs a transaction each.
+     */
+    fun discardPendingCreate(basePath: String) = pendingCreates.discard(basePath)
+
+    /** A creation must not write into the account the user switched to meanwhile. */
+    private fun assertCreator(owner: String) {
+        check(myAddress()?.lowercase() == owner) {
+            "The account changed during channel creation; finish it from the account that started it"
+        }
+    }
+
+    /**
+     * The creation transactions, then the channel record. Resuming asks the
+     * chain before every write and sends only what is missing.
+     *
+     * The end is ordered: the channel is saved, its shared keys adopted, and
+     * only then the pending record dropped — the record is the only copy of
+     * keys the stream grants already name.
+     */
+    private suspend fun runCreate(
+        start: com.pombo.android.data.PendingCreate, resume: Boolean, onProgress: () -> Unit
+    ): Channel = try {
+        createFrom(start, resume, onProgress)
+    } finally {
+        pendingCreates.release(start.basePath)
+    }
+
+    private suspend fun createFrom(
+        start: com.pombo.android.data.PendingCreate, resume: Boolean, onProgress: () -> Unit
+    ): Channel {
+        val name = start.name
+        val type = start.type
+        val password = start.password
+        val exposure = start.exposure
+        val readOnly = start.readOnly
+        val description = start.description
+        val language = start.language
+        val category = start.category
+        val members = start.members
+        val classification = start.classification
+        val storageProvider = start.storageProvider
+        val customStorageAddress = start.customStorageAddress
+        val storageDays = start.storageDays
+        val gateMode = start.gateMode
+        val wireIdentity = start.wireIdentity
+        val sharedPub = start.publishKey
+        val interactionsPub = start.interactionsKey
 
         // Gated (N-C): the gate clone comes FIRST — its address goes into the
         // -1 metadata and receives every stream grant. One factory tx; the
@@ -1952,33 +2076,25 @@ class ChannelManager(
         // (a bad combination reverts InvalidParams after the deploy gas was
         // spent).
         val gateAddress: String? = if (type == "gated") {
-            val createArgs = JSONObject().put("mode", gateMode)
-                .put("wireIdentity", if (wireIdentity == "sealed") 1 else 0)
-                .put("readOnly", readOnly)
-            gateToken?.let { createArgs.put("token", it) }
-            gateMinBalance?.let { createArgs.put("minBalance", it) }
-            gatePrice?.let { createArgs.put("price", it) }
-            gateDuration?.let { createArgs.put("duration", it) }
-            val res = bridge.call("gateCreate", createArgs, 180_000)
-            val gate = res.optString("gate").lowercase().ifEmpty { null }
-                ?: throw IllegalStateException("gateCreate returned no clone address")
-            Log.i(TAG, "Gate clone created: " + gate)
-            onProgress()
-            gate
+            start.gateAddress ?: run {
+                val createArgs = JSONObject().put("mode", gateMode)
+                    .put("wireIdentity", if (wireIdentity == "sealed") 1 else 0)
+                    .put("readOnly", readOnly)
+                start.gateToken?.let { createArgs.put("token", it) }
+                start.gateMinBalance?.let { createArgs.put("minBalance", it) }
+                start.gatePrice?.let { createArgs.put("price", it) }
+                start.gateDuration?.let { createArgs.put("duration", it) }
+                val res = bridge.call("gateCreate", createArgs, 180_000)
+                val gate = res.optString("gate").lowercase().ifEmpty { null }
+                    ?: throw IllegalStateException("gateCreate returned no clone address")
+                Log.i(TAG, "Gate clone created: " + gate)
+                assertCreator(start.owner)
+                pendingCreates.update(start.copy(gateAddress = gate))
+                gate
+            }.also { onProgress() }
         } else null
 
-        // Sealed (the default for gated): mint the
-        // SHARED publish key now so its address rides the permission batch.
-        val sharedPub = if (type == "gated" && wireIdentity == "sealed")
-            epochKeys.mintPublishKey() else null
-        // The second shared key: same mechanics, wider distribution. Every
-        // member holds it, read-only included — it carries the -5 (reactions)
-        // and the -2 (presence), so participating never depends on being
-        // allowed to post.
-        val interactionsPub = if (type == "gated" && wireIdentity == "sealed")
-            epochKeys.mintInteractionsKey() else null
-
-        val base = "${addr.lowercase()}/${PomboCrypto.randomHex(8)}"
+        val base = start.basePath
         val messageStreamId = "$base${StreamConstants.SUFFIX_MESSAGE}"
         val ephemeralStreamId = "$base${StreamConstants.SUFFIX_EPHEMERAL}"
         val adminStreamId = "$base${StreamConstants.SUFFIX_ADMIN}"
@@ -2019,30 +2135,30 @@ class ChannelManager(
         val interMeta = JSONObject().put("a", "pombo").put("v", "1").put("ln", messageStreamId).put("k", "interactions")
 
         // Streams SERIALLY (parallel causes on-chain nonce conflicts) with retries
-        createStreamRetry(messageStreamId, msgMeta.toString(), StreamConstants.MSG_PARTITIONS); onProgress()
-        createStreamRetry(ephemeralStreamId, ephMeta.toString(), StreamConstants.EPH_PARTITIONS); onProgress()
-        createStreamRetry(adminStreamId, admMeta.toString(), StreamConstants.ADMIN_PARTITIONS); onProgress()
+        createStreamRetry(messageStreamId, msgMeta.toString(), StreamConstants.MSG_PARTITIONS, resume); onProgress()
+        createStreamRetry(ephemeralStreamId, ephMeta.toString(), StreamConstants.EPH_PARTITIONS, resume); onProgress()
+        createStreamRetry(adminStreamId, admMeta.toString(), StreamConstants.ADMIN_PARTITIONS, resume); onProgress()
         // Keys stream (-4): gated only. Lives outside -3 on purpose — any
         // member must publish KEY_REQUEST/KEY_WRAP here, while -3 stays
         // owner-only publish (web streamr.js createStream, N-A).
         if (type == "gated") {
-            createStreamRetry(keysStreamId, keysMeta.toString(), StreamConstants.KEYS_PARTITIONS); onProgress()
+            createStreamRetry(keysStreamId, keysMeta.toString(), StreamConstants.KEYS_PARTITIONS, resume); onProgress()
         }
         // Interactions (-5): every channel type. Permissions are per stream,
         // so a read-only channel that keeps reactions on the -1 loses them
         // along with the ability to post; and off the -1 a last-N read
         // comes back with conversation instead of emoji.
-        createStreamRetry(interactionsStreamId, interMeta.toString(), StreamConstants.INTERACTIONS_PARTITIONS); onProgress()
+        createStreamRetry(interactionsStreamId, interMeta.toString(), StreamConstants.INTERACTIONS_PARTITIONS, resume); onProgress()
 
         val publicRW = JSONArray().put(JSONObject().put("public", true).put("permissions", JSONArray(listOf("subscribe", "publish"))))
         val publicRead = JSONArray().put(JSONObject().put("public", true).put("permissions", JSONArray(listOf("subscribe"))))
         when (type) {
             "public", "password" -> {
-                setPermissionsRetry(messageStreamId, if (readOnly) publicRead else publicRW); onProgress()
-                setPermissionsRetry(ephemeralStreamId, publicRW); onProgress()   // presence needs public publish
-                setPermissionsRetry(adminStreamId, publicRead); onProgress()     // publish is the owner\x27s by ownership
+                setPermissionsRetry(messageStreamId, if (readOnly) publicRead else publicRW, resume); onProgress()
+                setPermissionsRetry(ephemeralStreamId, publicRW, resume); onProgress()   // presence needs public publish
+                setPermissionsRetry(adminStreamId, publicRead, resume); onProgress()     // publish is the owner\x27s by ownership
                 // Read-only means members do not POST; reacting stays theirs.
-                setPermissionsRetry(interactionsStreamId, publicRW); onProgress()
+                setPermissionsRetry(interactionsStreamId, publicRW, resume); onProgress()
             }
             "gated" -> {
                 // ONE grantee for every stream: the gate clone (N-C, Q7).
@@ -2104,20 +2220,23 @@ class ChannelManager(
                     put(JSONObject().put("userId", interactionsPub.address)
                         .put("permissions", JSONArray(listOf("publish"))))
                 } else contentPerms
-                setPermissionsRetry(messageStreamId, contentPerms); onProgress()
-                setPermissionsRetry(ephemeralStreamId, ephemeralPerms); onProgress()
-                setPermissionsRetry(adminStreamId, adminPerms); onProgress()
-                setPermissionsRetry(keysStreamId, clonePerms); onProgress()
+                setPermissionsRetry(messageStreamId, contentPerms, resume); onProgress()
+                setPermissionsRetry(ephemeralStreamId, ephemeralPerms, resume); onProgress()
+                setPermissionsRetry(adminStreamId, adminPerms, resume); onProgress()
+                setPermissionsRetry(keysStreamId, clonePerms, resume); onProgress()
                 // -5 carries the interactions key in Sealed (every member
                 // publishes under it) and the clone in Visible.
-                setPermissionsRetry(interactionsStreamId, interactionPerms); onProgress()
+                setPermissionsRetry(interactionsStreamId, interactionPerms, resume); onProgress()
                 // Initial members: ONE gate transaction. Failure is non-fatal
                 // (the owner re-adds from the members UI).
                 if (members.isNotEmpty()) {
                     try {
-                        bridge.call("gateAllowBatch", JSONObject()
-                            .put("gate", gateAddress)
-                            .put("users", JSONArray(members)), 180_000)
+                        val toAllow = if (resume) notAllowed(gateAddress!!, members) else members
+                        if (toAllow.isNotEmpty()) {
+                            bridge.call("gateAllowBatch", JSONObject()
+                                .put("gate", gateAddress)
+                                .put("users", JSONArray(toAllow)), 180_000)
+                        }
                     } catch (e: Exception) {
                         Log.w(TAG, "gateAllowBatch failed (re-add members later): ${e.message}")
                     }
@@ -2141,12 +2260,12 @@ class ChannelManager(
         var admDays: Int? = null
         var keyDays: Int? = null
         var interDays: Int? = null
-        try { msgDays = addStorageRetry(messageStreamId, storageNode, storageDays) } catch (e: Exception) {
+        try { msgDays = addStorageRetry(messageStreamId, storageNode, storageDays, resume) } catch (e: Exception) {
             storageOk = false
             Log.w(TAG, "Storage on -1 failed; continuing without history: ${e.message}")
         }
         onProgress()
-        try { admDays = addStorageRetry(adminStreamId, storageNode, storageDays) } catch (e: Exception) {
+        try { admDays = addStorageRetry(adminStreamId, storageNode, storageDays, resume) } catch (e: Exception) {
             Log.w(TAG, "Storage on -3 failed; continuing without admin history: ${e.message}")
         }
         onProgress()
@@ -2155,14 +2274,14 @@ class ChannelManager(
         // (The web shipped without this once — the announce was never retained
         // and joiners could not even ask for the key.)
         if (type == "gated") {
-            try { keyDays = addStorageRetry(keysStreamId, storageNode, storageDays) } catch (e: Exception) {
+            try { keyDays = addStorageRetry(keysStreamId, storageNode, storageDays, resume) } catch (e: Exception) {
                 Log.w(TAG, "Storage on -4 failed; key exchange limited to live members: ${e.message}")
             }
             onProgress()
         }
         // -5 needs storage in every channel type: reactions must persist,
         // which is why they could not live on the storage-less -2.
-        try { interDays = addStorageRetry(interactionsStreamId, storageNode, storageDays) } catch (e: Exception) {
+        try { interDays = addStorageRetry(interactionsStreamId, storageNode, storageDays, resume) } catch (e: Exception) {
             Log.w(TAG, "Storage on -5 failed; reactions will not persist: ${e.message}")
         }
         onProgress()
@@ -2190,6 +2309,8 @@ class ChannelManager(
             scope.launch { ensurePasswordChallengeRetained(adminStreamId, password) }
         }
 
+        assertCreator(start.owner)
+        val addr = myAddress() ?: throw IllegalStateException("No identity")
         val channel = Channel(
             messageStreamId = messageStreamId,
             ephemeralStreamId = ephemeralStreamId,
@@ -2225,7 +2346,17 @@ class ChannelManager(
         addChannel(channel)
         sharedPub?.let { epochKeys.adoptPublishKey(messageStreamId, it) }
         interactionsPub?.let { epochKeys.adoptInteractionsKey(messageStreamId, it) }
+        pendingCreates.complete(start.basePath)
         return channel
+    }
+
+    /** The users a Closed gate does not allow yet; all of them when the chain cannot say (allowing twice only costs gas). */
+    private suspend fun notAllowed(gate: String, users: List<String>): List<String> = try {
+        val missing = bridge.call("gateNotAllowed", JSONObject().put("gate", gate).put("users", JSONArray(users)))
+            .getJSONArray("missing")
+        (0 until missing.length()).map { missing.getString(it) }
+    } catch (e: Exception) {
+        users
     }
 
     /** Publishes the password challenge on -3/P2, sealed with the password. */
@@ -2270,13 +2401,17 @@ class ChannelManager(
         Log.w(TAG, "PASSWORD_CHALLENGE not retained after $maxAttempts attempts — joiners may see CHALLENGE_NOT_FOUND")
     }
 
-    private suspend fun createStreamRetry(id: String, description: String, partitions: Int) = retryWrite(7) { onlyIfMissing ->
+    private suspend fun createStreamRetry(
+        id: String, description: String, partitions: Int, resume: Boolean = false
+    ) = retryWrite(7, resume) { onlyIfMissing ->
         bridge.call("createStream", JSONObject()
             .put("id", id).put("description", description).put("partitions", partitions)
             .put("onlyIfMissing", onlyIfMissing), 120_000)
     }
 
-    internal suspend fun setPermissionsRetry(streamId: String, assignments: JSONArray) = retryWrite(7) { onlyIfMissing ->
+    internal suspend fun setPermissionsRetry(
+        streamId: String, assignments: JSONArray, resume: Boolean = false
+    ) = retryWrite(7, resume) { onlyIfMissing ->
         bridge.call("setPermissions", JSONObject()
             .put("streamId", streamId).put("assignments", assignments)
             .put("onlyIfMissing", onlyIfMissing), 120_000)
@@ -2296,9 +2431,9 @@ class ChannelManager(
      * fails on its own.
      */
     private suspend fun addStorageRetry(
-        streamId: String, nodeAddress: String = STORAGE_NODE, storageDays: Int = 180
+        streamId: String, nodeAddress: String = STORAGE_NODE, storageDays: Int = 180, resume: Boolean = false
     ): Int? {
-        val res = retryWrite(7) { onlyIfMissing ->
+        val res = retryWrite(7, resume) { onlyIfMissing ->
             bridge.call("addToStorageNode", JSONObject()
                 .put("streamId", streamId).put("nodeAddress", nodeAddress)
                 .put("storageDays", storageDays).put("onlyIfMissing", onlyIfMissing), 120_000)
@@ -2310,11 +2445,14 @@ class ChannelManager(
      * [retry] for an on-chain write. A write whose receipt read failed has
      * usually landed, so from the second attempt on the bridge asks the chain
      * first and sends only what is missing; a read that fails throws before
-     * anything is sent, and the next attempt asks again.
+     * anything is sent, and the next attempt asks again. [resume] asks from
+     * the first attempt, for writes an earlier session may have made.
      */
-    private suspend fun <T> retryWrite(times: Int, block: suspend (onlyIfMissing: Boolean) -> T): T {
+    private suspend fun <T> retryWrite(
+        times: Int, resume: Boolean = false, block: suspend (onlyIfMissing: Boolean) -> T
+    ): T {
         var attempt = 0
-        return retry(times) { block(attempt++ > 0) }
+        return retry(times) { block(resume || attempt++ > 0) }
     }
 
     private suspend fun <T> retry(times: Int, block: suspend () -> T): T {

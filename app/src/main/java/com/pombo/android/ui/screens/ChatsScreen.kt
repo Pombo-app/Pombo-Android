@@ -267,6 +267,24 @@ internal fun ChatsTab(vm: AppViewModel, onCreate: () -> Unit, onJoin: () -> Unit
             }
         }
 
+        val interrupted by vm.interruptedCreates.collectAsState()
+        var confirmDiscard by remember { mutableStateOf<com.pombo.android.data.PendingCreate?>(null) }
+        interrupted.forEach { pending ->
+            InterruptedCreateRow(
+                pending,
+                enabled = !busy,
+                onFinish = { vm.finishInterruptedCreate(pending.basePath) },
+                onDiscard = { confirmDiscard = pending }
+            )
+        }
+        confirmDiscard?.let { pending ->
+            DiscardCreateDialog(
+                pending,
+                onDismiss = { confirmDiscard = null },
+                onDiscard = { confirmDiscard = null; vm.discardInterruptedCreate(pending.basePath) }
+            )
+        }
+
         if (filtered.isEmpty()) {
             Box(Modifier.weight(1f).fillMaxWidth(), contentAlignment = Alignment.Center) {
                 Text(
@@ -642,6 +660,83 @@ private fun ChannelInvitesSection(
                 onAccept = { onAccepted(); vm.acceptInvite(invite) },
                 onDismiss = null
             )
+        }
+    }
+}
+
+/** A creation a kill interrupted after something of it landed: Finish sends what is missing. */
+@Composable
+private fun InterruptedCreateRow(
+    pending: com.pombo.android.data.PendingCreate,
+    enabled: Boolean,
+    onFinish: () -> Unit,
+    onDiscard: () -> Unit
+) {
+    Column(
+        Modifier
+            .padding(horizontal = 10.dp, vertical = 4.dp)
+            .fillMaxWidth()
+            .background(Color.White.copy(alpha = 0.02f), RoundedCornerShape(12.dp))
+            .border(1.dp, Color.White.copy(alpha = 0.04f), RoundedCornerShape(12.dp))
+            .padding(horizontal = 12.dp, vertical = 10.dp)
+    ) {
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Text(
+                pending.name, color = PomboColors.Text, fontSize = 14.sp, fontWeight = FontWeight.Medium,
+                maxLines = 1, overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis,
+                modifier = Modifier.weight(1f, fill = false)
+            )
+            Text(" · creation interrupted", color = Color.White.copy(alpha = 0.40f), fontSize = 12.sp, maxLines = 1)
+        }
+        Spacer(Modifier.height(8.dp))
+        Row(Modifier.alpha(if (enabled) 1f else 0.4f), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            Box(
+                Modifier.background(Color.White.copy(alpha = 0.90f), RoundedCornerShape(6.dp))
+                    .clickableNoRipple { if (enabled) onFinish() }
+                    .padding(horizontal = 12.dp, vertical = 4.dp)
+            ) {
+                Text("Finish", color = Color(0xFF0A0A0A), fontSize = 11.sp, fontWeight = FontWeight.Medium)
+            }
+            Box(
+                Modifier.background(Color.White.copy(alpha = 0.10f), RoundedCornerShape(6.dp))
+                    .clickableNoRipple { if (enabled) onDiscard() }
+                    .padding(horizontal = 12.dp, vertical = 4.dp)
+            ) {
+                Text("Discard", color = Color.White.copy(alpha = 0.70f), fontSize = 11.sp, fontWeight = FontWeight.Medium)
+            }
+        }
+    }
+}
+
+@Composable
+private fun DiscardCreateDialog(
+    pending: com.pombo.android.data.PendingCreate,
+    onDismiss: () -> Unit,
+    onDiscard: () -> Unit
+) {
+    PomboDialogFrame("Discard this channel?", onDismiss) {
+        Text(
+            "“${pending.name}” will not be created. What already reached the chain stays there, " +
+                "unused, and the POL it cost is not refunded.",
+            color = Color.White.copy(alpha = 0.50f), fontSize = 13.sp
+        )
+        Spacer(Modifier.height(20.dp))
+        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            Box(
+                Modifier.weight(1f)
+                    .background(Color.White.copy(alpha = 0.05f), RoundedCornerShape(12.dp))
+                    .clickableNoRipple(onDismiss)
+                    .padding(vertical = 10.dp),
+                contentAlignment = Alignment.Center
+            ) { Text("Keep", color = Color.White.copy(alpha = 0.60f), fontSize = 14.sp) }
+            Box(
+                Modifier.weight(1f)
+                    .background(PomboColors.Danger.copy(alpha = 0.12f), RoundedCornerShape(12.dp))
+                    .border(1.dp, PomboColors.Danger.copy(alpha = 0.30f), RoundedCornerShape(12.dp))
+                    .clickableNoRipple(onDiscard)
+                    .padding(vertical = 10.dp),
+                contentAlignment = Alignment.Center
+            ) { Text("Discard", color = PomboColors.Danger, fontSize = 14.sp, fontWeight = FontWeight.Medium) }
         }
     }
 }
