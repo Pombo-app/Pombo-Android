@@ -434,12 +434,8 @@ internal class ChannelImages(private val manager: ChannelManager) {
         scope.launch {
             val dataUrl = blobStore.load(imageId) ?: return@launch
             val (bytes, mime) = com.pombo.android.core.ImageBlobStore.fromDataUrl(dataUrl) ?: return@launch
-            synchronized(manager) {
-                _messages.value = _messages.value.map {
-                    if (it.imageId == imageId && it.imageBytes == null) {
-                        it.copy(imageBytes = bytes, imageMime = mime, pending = false)
-                    } else it
-                }
+            manager.patchImage(imageId) {
+                if (it.imageBytes == null) it.copy(imageBytes = bytes, imageMime = mime, pending = false) else it
             }
         }
     }
@@ -609,9 +605,7 @@ internal class ChannelImages(private val manager: ChannelManager) {
 
         pendingImages.remove(imageId)
         // Web media.js dispatches assembled data by imageId — order-independent.
-        _messages.value = _messages.value.map {
-            if (it.imageId == imageId) it.copy(imageBytes = assembled, imageMime = p.finalMime, pending = false) else it
-        }
+        manager.patchImage(imageId) { it.copy(imageBytes = assembled, imageMime = p.finalMime, pending = false) }
 
         // Ledger it, exactly as media.js does after a successful assembly. This
         // covers RECEIVED images too, which until now lived only in memory:
