@@ -51,9 +51,7 @@ class SyncManager(
     /** How often an open, foreground app asks storage whether another device pushed. */
     private val checkIntervalMs: Long = 60_000L,
     /** Storage re-reads after a push, measured from the publish. */
-    private val confirmAtMs: LongArray = longArrayOf(5_000L, 10_000L, 20_000L, 40_000L),
-    /** Blob pushes are not read back; the overlay is kept this long for them to leave. */
-    private val blobLeaveAfterMs: Long = 30_000L
+    private val confirmAtMs: LongArray = longArrayOf(5_000L, 10_000L, 20_000L, 40_000L)
 ) {
 
     private val TAG = "PomboSync"
@@ -561,22 +559,25 @@ class SyncManager(
 
     private val blobChunkChars = com.pombo.android.core.SyncChunks.CHUNK_CHARS
 
-    /** Publishes locally-held images that no device has synced yet. */
+    /**
+     * Publishes locally-held images that no device has synced yet. A blob is
+     * synced only once storage is seen to hold every row of it; until then it
+     * stays pending, and the next push reads it back before sending it again
+     * (the rule [pushSync] follows).
+     */
     suspend fun pushImageBlobs() {
         if (isGuest() || _syncing.value) return
         val me = myAddress()?.lowercase() ?: return
         val key = myPrivateKey() ?: return
         val inbox = "$me/Pombo-DM-1"
-        val pending = blobStore.unsynced()
-        if (pending.isEmpty()) return
+        if (blobStore.unsynced().isEmpty()) return
         if (!inboxExists()) return
 
-        // Sealed-to-self v2 under a throwaway publisher, one seal per message.
-        suspend fun publish(payload: JSONObject) {
-            sealPublishToSelf(inbox, StreamConstants.P_SYNC_BLOBS, payload, key, me)
-        }
+        settlePendingBlobs(inbox, blobStore.unsynced().filter { it.pendingPublishers.isNotEmpty() })
+        val pending = blobStore.unsynced().filter { it.pendingPublishers.isEmpty() }
 
-        var published = 0
+        val sentAt = System.currentTimeMillis()
+        val sent = mutableListOf<String>()
         for (record in pending) {
             if (accountChanged(me)) break
             val data = blobStore.load(record.imageId)
@@ -587,51 +588,93 @@ class SyncManager(
                 continue
             }
             try {
-                if (data.length <= blobChunkChars) {
-                    publish(JSONObject()
-                        .put("type", "sync_blob").put("v", 2)
-                        .put("ts", System.currentTimeMillis())
-                        .put("imageId", record.imageId)
-                        .put("streamId", record.streamId)
-                        .put("data", data))
-                } else {
-                    val chunkCount = (data.length + blobChunkChars - 1) / blobChunkChars
-                    for (i in 0 until chunkCount) {
-                        val slice = data.substring(
-                            i * blobChunkChars,
-                            minOf((i + 1) * blobChunkChars, data.length)
-                        )
-                        publish(JSONObject()
-                            .put("type", "sync_blob_chunk").put("v", 2)
-                            .put("ts", System.currentTimeMillis())
-                            .put("imageId", record.imageId)
-                            .put("streamId", record.streamId)
-                            .put("chunkIndex", i)
-                            .put("chunkCount", chunkCount)
-                            .put("data", slice))
-                    }
-                    publish(JSONObject()
-                        .put("type", "sync_blob_manifest").put("v", 2)
-                        .put("ts", System.currentTimeMillis())
-                        .put("imageId", record.imageId)
-                        .put("streamId", record.streamId)
-                        .put("chunkCount", chunkCount)
-                        .put("totalLength", data.length))
-                }
-                blobStore.markSynced(record.imageId)
-                published++
+                val sealed = blobMessages(record, data).map { sealToSelf(it, key, me) }
+                blobStore.markPending(record.imageId, sealed.map { it.publisherId }, System.currentTimeMillis())
+                for (message in sealed) publishSealed(inbox, StreamConstants.P_SYNC_BLOBS, message)
+                sent.add(record.imageId)
             } catch (e: Exception) {
-                // Leave it unsynced so the next run retries this one blob.
                 Log.w(TAG, "blob push failed for ${record.imageId}: ${e.message}")
             }
         }
         Log.d(TAG, "blob push: ${pending.size} pending processed")
-        if (published > 0) {
+        if (sent.isNotEmpty()) {
             blobLeaveJob?.cancel()
             blobLeaveJob = scope.launch {
-                delay(blobLeaveAfterMs)
+                confirmBlobs(inbox, sent, sentAt)
                 leaveStreamPart(inbox, StreamConstants.P_SYNC_BLOBS)
             }
+        }
+    }
+
+    /** A blob as it travels: one message, or chunks and then their manifest. */
+    private fun blobMessages(record: com.pombo.android.core.ImageBlobStore.Record, data: String): List<JSONObject> {
+        if (data.length <= blobChunkChars) {
+            return listOf(JSONObject()
+                .put("type", "sync_blob").put("v", 2)
+                .put("ts", System.currentTimeMillis())
+                .put("imageId", record.imageId)
+                .put("streamId", record.streamId)
+                .put("data", data))
+        }
+        val chunkCount = (data.length + blobChunkChars - 1) / blobChunkChars
+        val messages = (0 until chunkCount).map { i ->
+            JSONObject()
+                .put("type", "sync_blob_chunk").put("v", 2)
+                .put("ts", System.currentTimeMillis())
+                .put("imageId", record.imageId)
+                .put("streamId", record.streamId)
+                .put("chunkIndex", i)
+                .put("chunkCount", chunkCount)
+                .put("data", data.substring(i * blobChunkChars, minOf((i + 1) * blobChunkChars, data.length)))
+        }
+        return messages + JSONObject()
+            .put("type", "sync_blob_manifest").put("v", 2)
+            .put("ts", System.currentTimeMillis())
+            .put("imageId", record.imageId)
+            .put("streamId", record.streamId)
+            .put("chunkCount", chunkCount)
+            .put("totalLength", data.length)
+    }
+
+    /** Reads blobs a push left pending; the verdicts follow [settlePendingPush]. */
+    private suspend fun settlePendingBlobs(inbox: String, records: List<com.pombo.android.core.ImageBlobStore.Record>) {
+        if (records.isEmpty()) return
+        val held = readEnvelopes(inbox, StreamConstants.P_SYNC_BLOBS, records.minOf { it.pendingSince })
+        val now = System.currentTimeMillis()
+        for (record in records) {
+            when {
+                held != null && verdictOf(held, record.pendingPublishers) == Verdict.CONFIRMED ->
+                    blobStore.markSynced(record.imageId)
+                held != null || now - record.pendingSince >= unknownMaxAgeMs ->
+                    blobStore.clearPending(record.imageId)
+            }
+        }
+        Log.d(TAG, "blob read-back: ${records.size} pending, storage ${if (held == null) "did not answer" else "answered"}")
+    }
+
+    /** Reads freshly pushed blobs back on the schedule of a sync push. */
+    private suspend fun confirmBlobs(inbox: String, imageIds: List<String>, sentAt: Long) {
+        fun open() = blobStore.unsynced().filter { it.imageId in imageIds && it.pendingPublishers.isNotEmpty() }
+        var answered = false
+        var waited = 0L
+        for (at in confirmAtMs) {
+            delay(at - waited)
+            waited = at
+            val records = open()
+            if (records.isEmpty()) break
+            val held = readEnvelopes(inbox, StreamConstants.P_SYNC_BLOBS, sentAt) ?: continue
+            answered = true
+            records.filter { verdictOf(held, it.pendingPublishers) == Verdict.CONFIRMED }
+                .forEach { blobStore.markSynced(it.imageId) }
+        }
+        val left = open()
+        when {
+            left.isEmpty() -> Log.d(TAG, "blob push confirmed by storage")
+            answered -> {
+                left.forEach { blobStore.clearPending(it.imageId) }
+                Log.w(TAG, "blob push not confirmed by storage for ${left.size} image(s), they will be sent again")
+            }
+            else -> Log.w(TAG, "blob push unconfirmed: storage did not answer, ${left.size} image(s) will be read back first")
         }
     }
 
@@ -763,19 +806,10 @@ class SyncManager(
     }
 
     /**
-     * Sealed-to-self v2, sealed natively — the identity key never enters the
-     * WebView; the throwaway key crosses because it is also the publishing
-     * identity (bridge publishAs).
+     * A message sealed to self (v2, sealed natively — the identity key never
+     * enters the WebView), and the throwaway identity that will publish it: its
+     * key crosses because it is also the publishing identity (bridge publishAs).
      */
-    private suspend fun sealPublishToSelf(
-        streamId: String,
-        partition: Int,
-        payload: JSONObject,
-        privateKey: String,
-        address: String
-    ): JSONObject = publishSealed(streamId, partition, sealToSelf(payload, privateKey, address))
-
-    /** A message sealed to self, and the throwaway identity that will publish it. */
     private class Sealed(val envelope: JSONObject, val ephemeralKey: String, val publisherId: String)
 
     private suspend fun sealToSelf(payload: JSONObject, privateKey: String, address: String): Sealed {

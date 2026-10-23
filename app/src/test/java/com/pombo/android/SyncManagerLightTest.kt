@@ -114,7 +114,7 @@ class SyncManagerLightTest {
             myAddress = { address }, myPrivateKey = { key }, isGuest = { false },
             exportLocal = { JSONObject(export.toString()) },
             importMerged = {}, syncMode = { mode },
-            checkIntervalMs = 50L, confirmAtMs = longArrayOf(10L, 20L, 30L, 40L), blobLeaveAfterMs = 10L
+            checkIntervalMs = 50L, confirmAtMs = longArrayOf(10L, 20L, 30L, 40L)
         )
     }
 
