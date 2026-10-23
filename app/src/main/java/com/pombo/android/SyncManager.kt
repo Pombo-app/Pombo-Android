@@ -64,11 +64,14 @@ class SyncManager(
     /** A snapshot is a RUN of messages, so the window must hold several. */
     private val maxPayloads = 60
 
-    /** Rows beyond our own read back with them: pushes from other devices in between. */
-    private val confirmSlack = 10
-
     /** A confirmed state is sent again after this long: storage keeps rows only for the inbox retention. */
     private val confirmedMaxAgeMs = 7L * 24 * 60 * 60 * 1000
+
+    /** A push storage could not tell about is read again rather than resent, until it is this old. */
+    private val unknownMaxAgeMs = 24L * 60 * 60 * 1000
+
+    /** Read-back windows start this much before the push, for the publisher's clock. */
+    private val readBackSkewMs = 60_000L
 
     private val ownRowsKept = 64
 
@@ -79,9 +82,10 @@ class SyncManager(
     private var blobLeaveJob: Job? = null
     private var watchJob: Job? = null
 
-    /** Every sync message has its own throwaway publisher, so this names one row. */
-    private fun rowKey(timestamp: Long, publisherId: String?) =
-        "$timestamp:${(publisherId ?: "").lowercase()}"
+    /** Every sync message has its own throwaway publisher, so its address names one row. */
+    private fun rowKey(publisherId: String?) = (publisherId ?: "").lowercase()
+
+    private enum class Verdict { CONFIRMED, ABSENT, UNKNOWN }
 
     private val _syncing = MutableStateFlow(false)
     val syncing: StateFlow<Boolean> = _syncing.asStateFlow()
@@ -175,6 +179,7 @@ class SyncManager(
         try {
             val seq = changeSeq.get()
             if (accountChanged(me)) return null
+            if (pendingHash == null && !settlePendingPush(inbox)) return null
             val data = exportLocal()
             val hash = stateHash(data)
             if (isConfirmedState(hash) || hash == pendingHash) {
@@ -197,21 +202,21 @@ class SyncManager(
             Log.d(TAG, "push: ${payload.toString().length} B, " +
                 "${payload.optJSONObject("data")?.optJSONArray("channels")?.length() ?: 0} channel(s), " +
                 "${messages.size} message(s)")
-            val rows = mutableListOf<String>()
+            val sealed = messages.map { sealToSelf(it, key, me) }
+            val publishers = sealed.map { it.publisherId }
+            store.pendingPush = com.pombo.android.data.SyncStore.PendingPush(hash, publishers, ts)
             publishing = true
             try {
-                for (message in messages) {
+                for (message in sealed) {
                     if (accountChanged(me)) return null
-                    sealPublishToSelf(inbox, StreamConstants.P_SYNC, message, key, me).let {
-                        rows.add(rowKey(it.optLong("timestamp"), it.optString("publisherId")))
-                    }
+                    publishSealed(inbox, StreamConstants.P_SYNC, message)
                 }
             } finally {
                 publishing = false
             }
             if (accountChanged(me)) return null
-            noteOwnRows(rows)
-            confirmPush(inbox, hash, rows)
+            noteOwnRows(publishers)
+            confirmPush(inbox, hash, publishers, ts)
 
             // Our own snapshot is by definition already applied locally.
             store.recordApplied(listOf(ts))
@@ -248,36 +253,46 @@ class SyncManager(
 
     /**
      * Reads a push back from storage, then takes the node out of the sync
-     * partition (web _confirmPush): the overlay is only needed to publish. An
-     * unconfirmed push leaves it all the same and marks the state dirty, so the
-     * next trigger sends it again. Rows from another device met on the way are
-     * pulled.
+     * partition (web _confirmPush): the overlay is only needed to publish. A
+     * push storage answered without leaves the state dirty to be sent again;
+     * one storage never answered about stays pending, and the next push reads
+     * it back before sending anything. Rows from another device met on the way
+     * are pulled.
      */
-    private fun confirmPush(inbox: String, hash: String, rows: List<String>) {
+    private fun confirmPush(inbox: String, hash: String, publishers: List<String>, sentAt: Long) {
         confirmJob?.cancel()
         pendingHash = hash
-        val wanted = rows.toSet()
         confirmJob = scope.launch {
             var held = emptyList<Pair<Long, String>>()
-            var confirmed = false
+            var verdict = Verdict.UNKNOWN
             var waited = 0L
             for (at in confirmAtMs) {
                 delay(at - waited)
                 waited = at
-                held = readRows(inbox, StreamConstants.P_SYNC, wanted.size + confirmSlack) ?: emptyList()
-                confirmed = wanted.isNotEmpty() && held.map { rowKey(it.first, it.second) }.containsAll(wanted)
-                if (confirmed) break
+                held = readEnvelopes(inbox, StreamConstants.P_SYNC, sentAt) ?: continue
+                verdict = verdictOf(held, publishers)
+                if (verdict == Verdict.CONFIRMED) break
             }
             pendingHash = null
-            if (confirmed) {
-                store.confirmedHash = hash
-                store.confirmedAt = System.currentTimeMillis()
-                Log.d(TAG, "push confirmed by storage")
-            } else if (wanted.isNotEmpty()) {
-                Log.w(TAG, "push not confirmed by storage, it will be sent again")
-                store.dirty = true
+            val stillOurs = store.pendingPush?.publishers == publishers
+            when (verdict) {
+                Verdict.CONFIRMED -> {
+                    store.confirmedHash = hash
+                    store.confirmedAt = System.currentTimeMillis()
+                    if (stillOurs) store.pendingPush = null
+                    Log.d(TAG, "push confirmed by storage")
+                }
+                Verdict.ABSENT -> {
+                    if (stillOurs) store.pendingPush = null
+                    store.dirty = true
+                    Log.w(TAG, "push not confirmed by storage, it will be sent again")
+                }
+                Verdict.UNKNOWN -> {
+                    store.dirty = true
+                    Log.w(TAG, "push unconfirmed: storage did not answer, it will be read back before any resend")
+                }
             }
-            val foreign = held.any { rowKey(it.first, it.second) !in ownRowKeys && it.first > pulledRowTs }
+            val foreign = held.any { rowKey(it.second) !in ownRowKeys && it.first > pulledRowTs }
             // A push in flight re-joins the partition and leaves it when confirmed.
             if (!publishing) leaveStreamPart(inbox, StreamConstants.P_SYNC)
             if (foreign && syncMode() != com.pombo.android.data.SyncMode.MANUAL_ONLY) {
@@ -285,6 +300,60 @@ class SyncManager(
                 if (applied > 0) try { pullImageBlobs() } catch (e: Exception) { /* next pull */ }
             }
         }
+    }
+
+    /**
+     * Settles a push left pending (frozen in the background, killed, or never
+     * answered about) before anything is published again: only a read that
+     * answered without its rows lets the state go out a second time. Returns
+     * false when storage could not tell and the push is still young enough to
+     * wait for another read.
+     */
+    private suspend fun settlePendingPush(inbox: String): Boolean {
+        val pending = store.pendingPush ?: return true
+        val held = readEnvelopes(inbox, StreamConstants.P_SYNC, pending.at)
+        when (if (held == null) Verdict.UNKNOWN else verdictOf(held, pending.publishers)) {
+            Verdict.CONFIRMED -> {
+                store.confirmedHash = pending.hash
+                store.confirmedAt = System.currentTimeMillis()
+                store.pendingPush = null
+                noteOwnRows(pending.publishers)
+                Log.d(TAG, "earlier push confirmed by storage")
+            }
+            Verdict.ABSENT -> {
+                store.pendingPush = null
+                Log.w(TAG, "earlier push not on storage, its state may be sent again")
+            }
+            Verdict.UNKNOWN -> {
+                if (System.currentTimeMillis() - pending.at < unknownMaxAgeMs) {
+                    Log.w(TAG, "earlier push still unconfirmed and storage did not answer: not sending again yet")
+                    return false
+                }
+                store.pendingPush = null
+                Log.w(TAG, "earlier push unconfirmed for a day, its state may be sent again")
+            }
+        }
+        return true
+    }
+
+    private fun verdictOf(held: List<Pair<Long, String>>, publishers: Collection<String>): Verdict =
+        if (held.map { rowKey(it.second) }.containsAll(publishers)) Verdict.CONFIRMED else Verdict.ABSENT
+
+    /** (timestamp, publisher) of every row stored since [since]; null when storage did not answer. */
+    private suspend fun readEnvelopes(inbox: String, partition: Int, since: Long): List<Pair<Long, String>>? = try {
+        val res = bridge.call("resendEnvelopes", JSONObject()
+            .put("streamId", inbox)
+            .put("partition", partition)
+            .put("from", since - readBackSkewMs)
+            .put("to", System.currentTimeMillis() + readBackSkewMs), 60_000)
+        if (res.optJSONObject("readError") != null) null
+        else res.optJSONArray("rows")?.let { rows ->
+            (0 until rows.length()).mapNotNull { i ->
+                rows.optJSONObject(i)?.let { it.optLong("timestamp") to it.optString("publisherId") }
+            }
+        }
+    } catch (e: Exception) {
+        null
     }
 
     /** (timestamp, publisher) of a partition's newest rows; null when the read failed. */
@@ -323,7 +392,7 @@ class SyncManager(
         if (syncMode() == com.pombo.android.data.SyncMode.MANUAL_ONLY) return 0
         val inbox = inboxId() ?: return 0
         val newest = readRows(inbox, StreamConstants.P_SYNC, 1)?.maxByOrNull { it.first } ?: return 0
-        if (rowKey(newest.first, newest.second) in ownRowKeys || newest.first <= pulledRowTs) return 0
+        if (rowKey(newest.second) in ownRowKeys || newest.first <= pulledRowTs) return 0
         return pullSync()
     }
 
@@ -480,7 +549,11 @@ class SyncManager(
         }
         cancelAutoPush()
         scope.launch {
-            try { pushSync() } catch (e: Exception) { /* dirty survives for the next run */ }
+            try {
+                pushSync()
+            } catch (e: Exception) {
+                Log.w(TAG, "background push failed, dirty kept: ${e.message}")
+            }
         }
     }
 
@@ -700,7 +773,12 @@ class SyncManager(
         payload: JSONObject,
         privateKey: String,
         address: String
-    ): JSONObject {
+    ): JSONObject = publishSealed(streamId, partition, sealToSelf(payload, privateKey, address))
+
+    /** A message sealed to self, and the throwaway identity that will publish it. */
+    private class Sealed(val envelope: JSONObject, val ephemeralKey: String, val publisherId: String)
+
+    private suspend fun sealToSelf(payload: JSONObject, privateKey: String, address: String): Sealed {
         val recipientPub = com.pombo.android.core.EthereumSigner.compressedPublicKey(privateKey)
         val (envelope, ephemeralPk) = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.Default) {
             com.pombo.android.core.SealedSenderCrypto.seal(payload, privateKey, address, recipientPub)
@@ -710,12 +788,15 @@ class SyncManager(
         // 150 KB slice lands near 227 KB.
         val wire = envelope.toString().length
         if (wire > WIRE_WARN_BYTES) Log.w(TAG, "wire message $wire B — near the network ceiling")
-        return bridge.call("publishAs", JSONObject()
+        return Sealed(envelope, ephemeralPk, com.pombo.android.core.EthereumSigner.address(ephemeralPk).lowercase())
+    }
+
+    private suspend fun publishSealed(streamId: String, partition: Int, sealed: Sealed): JSONObject =
+        bridge.call("publishAs", JSONObject()
             .put("streamId", streamId)
             .put("partition", partition)
-            .put("content", envelope)
-            .put("privateKey", ephemeralPk), 60_000)
-    }
+            .put("content", sealed.envelope)
+            .put("privateKey", sealed.ephemeralKey), 60_000)
 
     private suspend fun inboxExists(): Boolean = try {
         val me = myAddress() ?: return false
