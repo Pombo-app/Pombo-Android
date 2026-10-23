@@ -32,6 +32,19 @@ class WriteRetryConfirmTest {
         assertEquals(listOf(false, true), flags)
     }
 
+    @Test fun `a retention change cut by the network is sent again only if the chain lacks it`() {
+        val flags = mutableListOf<Boolean>()
+        coEvery { h.bridge.call("setStorageDays", any(), any()) } answers {
+            flags += secondArg<JSONObject>().optBoolean("onlyIfMissing")
+            if (flags.size == 1) throw IllegalStateException("Failed to fetch")
+            JSONObject().put("ok", true)
+        }
+
+        runBlocking { h.manager.setStorageDaysRetry("${h.me}/Pombo-DM-1", 30) }
+
+        assertEquals(listOf(false, true), flags)
+    }
+
     @Test fun `a write that fails for good is not retried`() {
         var calls = 0
         coEvery { h.bridge.call("setPermissions", any(), any()) } answers {

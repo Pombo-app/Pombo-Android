@@ -49,6 +49,13 @@ object ChainErrors {
             false,
             "The transaction ran out of gas",
             "gas\\s*limit", "out\\s*of\\s*gas", "intrinsic\\s*gas\\s*too\\s*low"
+        ),
+        // Last, so every kind above wins: the SDK's contract-call wrapper with
+        // no code or reason after the call name is how a cut connection arrives.
+        Kind(
+            true,
+            "Network error, try again",
+            "Error while executing contract call \"[^\"]*\"\\s*$"
         )
     )
 
