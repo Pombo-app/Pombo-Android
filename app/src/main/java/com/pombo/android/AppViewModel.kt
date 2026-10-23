@@ -3576,11 +3576,7 @@ class AppViewModel(app: Application) : AndroidViewModel(app), PomboBridge.Listen
         val inbox = myInboxStreamId() ?: return@launch
         chainAction("Change inbox retention", "Sets DM history retention to $days days (1 transaction).") {
             runWithToast("Updating retention…", "Retention updated", "Failed to update retention") {
-                bridge.call(
-                    "setStorageDays",
-                    JSONObject().put("streamId", inbox).put("storageDays", days),
-                    120_000
-                )
+                manager.setStorageDaysRetry(inbox, days)
             }
         }
         diagnoseInbox()

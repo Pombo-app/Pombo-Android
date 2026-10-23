@@ -2424,6 +2424,12 @@ class ChannelManager(
         bridge.call("setPermissions", JSONObject().put("items", items).put("onlyIfMissing", onlyIfMissing), 120_000)
     }
 
+    /** The retention of one stream, retried without changing it twice. */
+    internal suspend fun setStorageDaysRetry(streamId: String, days: Int) = retryWrite(7) { onlyIfMissing ->
+        bridge.call("setStorageDays", JSONObject()
+            .put("streamId", streamId).put("storageDays", days).put("onlyIfMissing", onlyIfMissing), 120_000)
+    }
+
     /**
      * Assigns the node and asks for the retention. Returns the retention that
      * ACTUALLY landed, null when it did not: the bridge attaches the node and
