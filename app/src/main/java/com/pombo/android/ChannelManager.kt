@@ -7833,6 +7833,17 @@ class ChannelManager(
         }
     }
 
+    /** [patchMessage] for every bubble showing [imageId]; an image assembles inside the history batch. */
+    @Synchronized
+    internal fun patchImage(imageId: String, transform: (UiMessage) -> UiMessage) {
+        mergeBuffer?.let { buf ->
+            for (i in buf.indices) if (buf[i].imageId == imageId) buf[i] = transform(buf[i])
+        }
+        if (_messages.value.any { it.imageId == imageId }) {
+            _messages.value = _messages.value.map { if (it.imageId == imageId) transform(it) else it }
+        }
+    }
+
 
     @Synchronized
     private fun applyEdit(id: String, newText: String) {

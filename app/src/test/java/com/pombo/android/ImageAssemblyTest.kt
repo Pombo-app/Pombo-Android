@@ -1,6 +1,7 @@
 package com.pombo.android
 
 import com.pombo.android.core.StreamConstants
+import io.mockk.coEvery
 import io.mockk.every
 import io.mockk.mockkStatic
 import io.mockk.unmockkStatic
@@ -8,6 +9,7 @@ import org.json.JSONArray
 import org.json.JSONObject
 import org.junit.After
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Before
@@ -103,6 +105,29 @@ class ImageAssemblyTest {
         deliver(chunk(index = 1, bytes = two))
         deliver(manifest(chunks = listOf(one, two)))
         assertEquals("helloworld!", String(bubble()!!.imageBytes!!))
+    }
+
+    /** History lands as one batched merge, and the image assembles before that merge flushes. */
+    @Test
+    fun `an image whose chunks and manifest arrive in one history page assembles`() {
+        val rows = listOf(chunk(index = 0, bytes = one), chunk(index = 1, bytes = two), manifest(chunks = listOf(one, two)))
+        coEvery { h.bridge.call("resend", any(), any()) } answers {
+            val args = secondArg<JSONObject>()
+            val messages = JSONArray()
+            if (args.optString("streamId") == streamId && args.optInt("partition") == StreamConstants.P_MESSAGES) {
+                rows.forEachIndexed { i, row ->
+                    messages.put(JSONObject().put("content", row).put("meta", JSONObject()
+                        .put("publisherId", peer).put("signer", peer).put("timestamp", 1_750_000_000_000L + i)))
+                }
+            }
+            JSONObject().put("messages", messages)
+        }
+
+        manager.openChannel(streamId)
+
+        val image = bubble()
+        assertNotNull("the history page painted no bubble", image)
+        assertEquals("helloworld!", image!!.imageBytes?.let { String(it) })
     }
 
     @Test
