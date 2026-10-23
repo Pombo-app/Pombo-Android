@@ -2464,14 +2464,16 @@ class ChannelManager(
     private suspend fun <T> retry(times: Int, block: suspend () -> T): T {
         var delayMs = 1_000L
         var last: Exception? = null
-        repeat(times) {
+        repeat(times) { attempt ->
             try { return block() } catch (e: Exception) {
                 last = e
                 // Web utils/retry.js shouldRetry: only NETWORK/NONCE failures
                 // can turn out differently on a retry. A deterministic revert
                 // or an empty wallet used to be retried 7× — a minute of
                 // waiting for seven identical failures.
-                if (!com.pombo.android.core.ChainErrors.isTransient(e)) throw e
+                val transient = com.pombo.android.core.ChainErrors.isTransient(e)
+                Log.w(TAG, "chain write attempt ${attempt + 1}/$times failed (transient=$transient): ${e.message}")
+                if (!transient) throw e
                 delay(delayMs)
                 delayMs = (delayMs * 2).coerceAtMost(30_000L)
             }

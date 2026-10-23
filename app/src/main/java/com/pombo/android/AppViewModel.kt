@@ -3993,6 +3993,7 @@ class AppViewModel(app: Application) : AndroidViewModel(app), PomboBridge.Listen
             false
         } catch (e: Exception) {
             dismissToast(id)
+            android.util.Log.w("PomboAction", "$failure: ${e.message}")
             toast(
                 "$failure: ${com.pombo.android.core.ChainErrors.friendly(e)}",
                 com.pombo.android.ui.ToastKind.ERROR, 5000L
@@ -4022,6 +4023,7 @@ class AppViewModel(app: Application) : AndroidViewModel(app), PomboBridge.Listen
             true
         } catch (e: Exception) {
             dismissToast(id)
+            android.util.Log.w("PomboAction", "$failure: ${e.message}")
             // Chain failures arrive as raw ethers strings; map the known ones
             // to the web's friendly texts (utils/chainErrors.js). Anything
             // unrecognised passes through untouched, so non-chain flows keep
