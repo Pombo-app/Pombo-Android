@@ -34,7 +34,17 @@ class ImageBlobStore(context: Context) {
         File(context.filesDir, "image-ledger.json.tmp")
     )
 
-    data class Record(val imageId: String, val streamId: String, val synced: Boolean)
+    /**
+     * [pendingPublishers] is set between publishing a blob and seeing it on storage: such a record
+     * stays unsynced, so eviction keeps it and a later push reads it back before sending it again.
+     */
+    data class Record(
+        val imageId: String,
+        val streamId: String,
+        val synced: Boolean,
+        val pendingPublishers: List<String> = emptyList(),
+        val pendingSince: Long = 0L
+    )
 
     private val ledger = LinkedHashMap<String, Record>()
     private val memoryBlobs = HashMap<String, String>()
@@ -94,7 +104,12 @@ class ImageBlobStore(context: Context) {
                 val o = arr.optJSONObject(i) ?: continue
                 val id = o.optString("imageId")
                 if (id.isEmpty()) continue
-                ledger[id] = Record(id, o.optString("streamId"), o.optBoolean("synced", false))
+                val publishers = o.optJSONArray("pendingPublishers")
+                ledger[id] = Record(
+                    id, o.optString("streamId"), o.optBoolean("synced", false),
+                    publishers?.let { arr -> (0 until arr.length()).map { arr.optString(it) } } ?: emptyList(),
+                    o.optLong("pendingSince", 0L)
+                )
             }
         }.onFailure {
             // Silent-empty masked corruption for good; at least say it happened.
@@ -109,12 +124,14 @@ class ImageBlobStore(context: Context) {
         ledgerFile.parentFile?.mkdirs()
         val arr = JSONArray()
         ledger.values.forEach {
-            arr.put(
-                JSONObject()
-                    .put("imageId", it.imageId)
-                    .put("streamId", it.streamId)
-                    .put("synced", it.synced)
-            )
+            val o = JSONObject()
+                .put("imageId", it.imageId)
+                .put("streamId", it.streamId)
+                .put("synced", it.synced)
+            if (it.pendingPublishers.isNotEmpty()) {
+                o.put("pendingPublishers", JSONArray(it.pendingPublishers)).put("pendingSince", it.pendingSince)
+            }
+            arr.put(o)
         }
         // Write-then-rename: truncate-in-place plus a mid-write process death
         // equalled a zeroed ledger and orphaned every blob on disk.
@@ -216,7 +233,26 @@ class ImageBlobStore(context: Context) {
         ensureLoaded()
         val rec = ledger[imageId] ?: return
         if (rec.synced) return
-        ledger[imageId] = rec.copy(synced = true)
+        ledger[imageId] = rec.copy(synced = true, pendingPublishers = emptyList(), pendingSince = 0L)
+        persist()
+    }
+
+    /** Records the rows of a blob about to be published; written before the first one goes out. */
+    @Synchronized
+    fun markPending(imageId: String, publishers: List<String>, at: Long) {
+        ensureLoaded()
+        val rec = ledger[imageId] ?: return
+        ledger[imageId] = rec.copy(pendingPublishers = publishers, pendingSince = at)
+        persist()
+    }
+
+    /** Forgets a push storage turned out not to hold, so the next push sends the blob again. */
+    @Synchronized
+    fun clearPending(imageId: String) {
+        ensureLoaded()
+        val rec = ledger[imageId] ?: return
+        if (rec.pendingPublishers.isEmpty()) return
+        ledger[imageId] = rec.copy(pendingPublishers = emptyList(), pendingSince = 0L)
         persist()
     }
 

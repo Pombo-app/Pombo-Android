@@ -33,8 +33,15 @@ class SyncManagerLightTest {
     @Volatile private var dirty = false
     private var confirmedHash: String? = null
     private var confirmedAt = 0L
+    @Volatile private var pendingPush: SyncStore.PendingPush? = null
     @Volatile private var rows = JSONArray()
     @Volatile private var resendMs = 0L
+    /** The throwaway publisher of every row that reached storage, in publish order. */
+    private val stored = CopyOnWriteArrayList<String>()
+    /** Whether storage keeps what is published; when false, reads answer without it. */
+    @Volatile private var storageKeeps = true
+    /** Whether storage answers read-backs at all. */
+    @Volatile private var storageAnswers = true
     @Volatile private var onPublish: () -> Unit = {}
     @Volatile private var export = JSONObject("""{"channels":[],"username":"Bob","sliceTs":{"username":1}}""")
     @Volatile private var address = ME
@@ -53,6 +60,13 @@ class SyncManagerLightTest {
         .put("content", JSONObject())
         .put("meta", JSONObject().put("timestamp", timestamp).put("publisherId", publisher))
 
+    /** A publish as storage records it: under the throwaway identity it was handed. */
+    private fun publishedBy(args: JSONObject): JSONObject {
+        val publisher = com.pombo.android.core.EthereumSigner.address(args.getString("privateKey")).lowercase()
+        stored.add(publisher)
+        return JSONObject().put("ok", true).put("timestamp", 5000L).put("publisherId", publisher)
+    }
+
     private fun waitFor(cond: () -> Boolean) {
         val end = System.currentTimeMillis() + 3_000
         while (!cond() && System.currentTimeMillis() < end) Thread.sleep(5)
@@ -66,6 +80,8 @@ class SyncManagerLightTest {
         every { store.confirmedHash = any() } answers { confirmedHash = firstArg() }
         every { store.confirmedAt } answers { confirmedAt }
         every { store.confirmedAt = any() } answers { confirmedAt = firstArg() }
+        every { store.pendingPush } answers { pendingPush }
+        every { store.pendingPush = any() } answers { pendingPush = firstArg() }
         every { store.appliedTs() } returns emptySet()
         every { blobStore.unsynced() } returns emptyList()
         coEvery { bridge.call(any(), any(), any()) } answers {
@@ -76,11 +92,18 @@ class SyncManagerLightTest {
                 "getPeerPublicKey" -> JSONObject().put("publicKey", "0x02aa")
                 "publishAs" -> {
                     onPublish()
-                    JSONObject().put("ok", true).put("timestamp", 5000L).put("publisherId", "0xEph")
+                    publishedBy(args)
                 }
                 "resend" -> {
                     if (resendMs > 0) Thread.sleep(resendMs)
                     JSONObject().put("messages", rows)
+                }
+                "resendEnvelopes" -> {
+                    if (resendMs > 0) Thread.sleep(resendMs)
+                    if (!storageAnswers) throw IllegalStateException("bridge call timed out")
+                    val held = JSONArray()
+                    if (storageKeeps) stored.forEach { held.put(JSONObject().put("timestamp", 5000L).put("publisherId", it)) }
+                    JSONObject().put("rows", held)
                 }
                 "leaveStreamPart" -> { left.add(args.optInt("partition")); JSONObject().put("ok", true) }
                 else -> JSONObject()
@@ -91,7 +114,7 @@ class SyncManagerLightTest {
             myAddress = { address }, myPrivateKey = { key }, isGuest = { false },
             exportLocal = { JSONObject(export.toString()) },
             importMerged = {}, syncMode = { mode },
-            checkIntervalMs = 50L, confirmAtMs = longArrayOf(10L, 20L, 30L, 40L), blobLeaveAfterMs = 10L
+            checkIntervalMs = 50L, confirmAtMs = longArrayOf(10L, 20L, 30L, 40L)
         )
     }
 
@@ -154,7 +177,7 @@ class SyncManagerLightTest {
         val published = java.util.concurrent.atomic.AtomicInteger()
         coEvery { bridge.call("publishAs", any(), any()) } coAnswers {
             if (published.incrementAndGet() == 2) inFlight.await()
-            JSONObject().put("ok", true).put("timestamp", 5000L).put("publisherId", "0xEph")
+            publishedBy(secondArg())
         }
 
         sync.scheduleAutoPush(10L)
@@ -179,7 +202,7 @@ class SyncManagerLightTest {
                 inFlight.await()
                 throw IllegalStateException("publish failed")
             }
-            JSONObject().put("ok", true).put("timestamp", 5000L).put("publisherId", "0xEph")
+            publishedBy(secondArg())
         }
 
         sync.scheduleAutoPush(10L)
@@ -203,7 +226,7 @@ class SyncManagerLightTest {
         val published = java.util.concurrent.atomic.AtomicInteger()
         coEvery { bridge.call("publishAs", any(), any()) } coAnswers {
             if (published.incrementAndGet() == 2) inFlight.await()
-            JSONObject().put("ok", true).put("timestamp", 5000L).put("publisherId", "0xEph")
+            publishedBy(secondArg())
         }
 
         sync.scheduleAutoPush(10L)
@@ -231,7 +254,7 @@ class SyncManagerLightTest {
                 inFlight.await()
                 throw IllegalStateException("bridge reloaded")
             }
-            JSONObject().put("ok", true).put("timestamp", 5000L).put("publisherId", "0xEph")
+            publishedBy(secondArg())
         }
 
         sync.scheduleAutoPush(10L)
@@ -246,15 +269,80 @@ class SyncManagerLightTest {
     }
 
     @Test
-    fun `an unconfirmed push leaves too and its state is sent again`() = runBlocking {
-        rows = JSONArray()
+    fun `a push storage answered without leaves too and its state is sent again`() = runBlocking {
+        storageKeeps = false
         sync.pushSync()
         waitFor { left.isNotEmpty() }
 
         assertTrue(dirty)
         assertNull(confirmedHash)
+        assertNull(pendingPush)
         calls.clear()
         sync.pushSync()
+        assertTrue("publishAs" in calls)
+    }
+
+    @Test
+    fun `the pending push is recorded before its first row goes out`() = runBlocking {
+        val atFirstPublish = java.util.concurrent.atomic.AtomicReference<SyncStore.PendingPush?>()
+        onPublish = { if (stored.isEmpty()) atFirstPublish.set(pendingPush) }
+        sync.pushSync()
+
+        assertNotNull(atFirstPublish.get())
+        assertEquals(stored.toList(), atFirstPublish.get()!!.publishers)
+    }
+
+    @Test
+    fun `a push storage never answered about is read back instead of sent again`() = runBlocking {
+        storageAnswers = false
+        sync.pushSync()
+        waitFor { left.isNotEmpty() }
+
+        assertTrue(dirty)
+        assertNotNull(pendingPush)
+        assertNull(confirmedHash)
+        calls.clear()
+        assertNull(sync.pushSync())
+        assertFalse("publishAs" in calls)
+        assertTrue("resendEnvelopes" in calls)
+
+        storageAnswers = true
+        calls.clear()
+        assertNull(sync.pushSync())
+        assertFalse("publishAs" in calls)
+        assertNotNull(confirmedHash)
+        assertNull(pendingPush)
+        assertFalse(dirty)
+    }
+
+    @Test
+    fun `a publish that fails after its rows reached storage is not sent again`() = runBlocking {
+        coEvery { bridge.call("publishAs", any(), any()) } coAnswers {
+            publishedBy(secondArg())
+            throw IllegalStateException("bridge call timed out")
+        }
+        dirty = true
+        val failed = try { sync.pushSync(); false } catch (e: IllegalStateException) { true }
+
+        assertTrue(failed)
+        assertNotNull(pendingPush)
+        assertTrue(dirty)
+        calls.clear()
+        assertNull(sync.pushSync())
+        assertFalse("publishAs" in calls)
+        assertNotNull(confirmedHash)
+        assertNull(pendingPush)
+        assertFalse(dirty)
+    }
+
+    @Test
+    fun `a push storage could not tell about for a day is sent again`() = runBlocking {
+        pendingPush = SyncStore.PendingPush("an older state", listOf("0x" + "ab".repeat(20)),
+            System.currentTimeMillis() - 25L * 60 * 60 * 1000)
+        storageAnswers = false
+        dirty = true
+        sync.pushSync()
+
         assertTrue("publishAs" in calls)
     }
 
@@ -274,9 +362,9 @@ class SyncManagerLightTest {
 
     @Test
     fun `a check does not pull this device's own push back`() = runBlocking {
-        rows = JSONArray().put(row(5000, "0xeph"))
         sync.pushSync()
         waitFor { left.isNotEmpty() }
+        rows = JSONArray().put(row(5000, stored.last()))
         calls.clear()
 
         assertEquals(0, sync.checkForNewSnapshot())

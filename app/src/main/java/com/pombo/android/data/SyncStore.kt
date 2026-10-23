@@ -2,6 +2,7 @@ package com.pombo.android.data
 
 import android.content.Context
 import org.json.JSONArray
+import org.json.JSONObject
 
 /**
  * Sync bookkeeping (web: the `_appliedTs` / dirty-flag localStorage keys).
@@ -37,6 +38,27 @@ class SyncStore(context: Context) {
         get() = prefs.getLong(key("confirmed_at"), 0L)
         set(v) = prefs.edit().putLong(key("confirmed_at"), v).apply()
 
+    /** A push whose rows storage has not been seen to hold yet: its state, and the throwaway publisher of each row. */
+    data class PendingPush(val hash: String, val publishers: List<String>, val at: Long)
+
+    var pendingPush: PendingPush?
+        get() = prefs.getString(key("pending_push"), null)?.let { raw ->
+            runCatching {
+                val o = JSONObject(raw)
+                val arr = o.getJSONArray("publishers")
+                PendingPush(o.getString("hash"), (0 until arr.length()).map { arr.getString(it) }, o.getLong("at"))
+            }.getOrNull()
+        }
+        // commit, not apply: the record must be on disk before the first row goes out, or a process
+        // frozen and killed mid-push would come back with nothing telling it to read before resending.
+        set(v) {
+            val edit = prefs.edit()
+            if (v == null) edit.remove(key("pending_push"))
+            else edit.putString(key("pending_push"), JSONObject()
+                .put("hash", v.hash).put("publishers", JSONArray(v.publishers)).put("at", v.at).toString())
+            edit.commit()
+        }
+
     fun appliedTs(): Set<Long> = try {
         val raw = prefs.getString(key("applied_ts"), null) ?: return emptySet()
         val arr = JSONArray(raw)
@@ -60,6 +82,7 @@ class SyncStore(context: Context) {
             .remove(key("last_sync_ts"))
             .remove(key("confirmed_hash"))
             .remove(key("confirmed_at"))
+            .remove(key("pending_push"))
             .apply()
     }
 
