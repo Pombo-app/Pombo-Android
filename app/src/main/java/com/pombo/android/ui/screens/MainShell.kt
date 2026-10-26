@@ -12,6 +12,7 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.interaction.MutableInteractionSource
+import androidx.compose.foundation.interaction.collectIsPressedAsState
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -874,3 +875,22 @@ internal fun Modifier.clickableNoRipple(onClick: () -> Unit): Modifier = this.cl
     indication = null,
     onClick = onClick
 )
+
+// Layout size stays [size] so the header keeps its height; Compose already
+// expands the touch target of a smaller clickable to 48 dp.
+@Composable
+internal fun HeaderIconButton(
+    size: Dp,
+    onClick: () -> Unit,
+    content: @Composable androidx.compose.foundation.layout.BoxScope.() -> Unit
+) {
+    val interaction = remember { MutableInteractionSource() }
+    val pressed by interaction.collectIsPressedAsState()
+    Box(
+        Modifier.size(size)
+            .drawBehind { if (pressed) drawCircle(Color.White.copy(alpha = 0.12f), radius = 24.dp.toPx()) }
+            .clickable(interactionSource = interaction, indication = null, onClick = onClick),
+        contentAlignment = Alignment.Center,
+        content = content
+    )
+}

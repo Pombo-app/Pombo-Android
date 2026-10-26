@@ -236,16 +236,10 @@ internal fun ExploreTab(vm: AppViewModel, onCreate: () -> Unit, onConnect: () ->
                         )
                     }
                 } else {
-                    Box(
-                        Modifier.size(38.dp)
-                            .background(Color.White.copy(alpha = 0.05f), RoundedCornerShape(11.dp))
-                            .border(1.dp, Color.White.copy(alpha = 0.10f), RoundedCornerShape(11.dp))
-                            .clickableNoRipple { searchExpanded = true },
-                        contentAlignment = Alignment.Center
-                    ) {
+                    HeaderIconButton(38.dp, { searchExpanded = true }) {
                         Icon(
                             Icons.Outlined.Search, contentDescription = "Search channels",
-                            tint = Color.White.copy(alpha = 0.5f), modifier = Modifier.size(16.dp)
+                            tint = Color.White.copy(alpha = 0.5f), modifier = Modifier.size(24.dp)
                         )
                     }
                 }
@@ -372,17 +366,11 @@ private fun ExploreLanguageFilter(selected: String, onPick: (String) -> Unit) {
     var open by remember { mutableStateOf(false) }
     val active = selected.isNotEmpty()
     Box {
-        Box(
-            Modifier.size(38.dp)
-                .background(Color.White.copy(alpha = 0.05f), RoundedCornerShape(11.dp))
-                .border(1.dp, if (active) PomboColors.Accent.copy(alpha = 0.5f) else Color.White.copy(alpha = 0.10f), RoundedCornerShape(11.dp))
-                .clickableNoRipple { open = true },
-            contentAlignment = Alignment.Center
-        ) {
+        HeaderIconButton(38.dp, { open = true }) {
             Icon(
                 Icons.Outlined.Public, contentDescription = "Language filter",
                 tint = if (active) PomboColors.Accent else Color.White.copy(alpha = 0.5f),
-                modifier = Modifier.size(16.dp)
+                modifier = Modifier.size(24.dp)
             )
         }
         androidx.compose.material3.DropdownMenu(

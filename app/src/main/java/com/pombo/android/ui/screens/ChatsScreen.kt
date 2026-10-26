@@ -138,24 +138,18 @@ internal fun ChatsTab(vm: AppViewModel, onCreate: () -> Unit, onJoin: () -> Unit
             } else {
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     // Join by stream ID. Creating a channel lives in Explore.
-                    Box(
-                        Modifier.size(32.dp).background(Color.White.copy(alpha = 0.08f), CircleShape).clickableNoRipple(onJoin),
-                        contentAlignment = Alignment.Center
-                    ) { Text("#", color = PomboColors.Text, fontSize = 16.sp, fontWeight = FontWeight.Bold) }
+                    HeaderIconButton(34.dp, onJoin) {
+                        Text("#", color = PomboColors.Text, fontSize = 22.sp, fontWeight = FontWeight.Bold)
+                    }
                     Spacer(Modifier.width(8.dp))
                     // Wallet: what this account holds. The bell keeps the outer
                     // edge, where the web mobile header also puts it and where a
                     // badge is most visible.
                     var walletOpen by remember { mutableStateOf(false) }
-                    Box(
-                        Modifier.size(32.dp)
-                            .background(Color.White.copy(alpha = 0.08f), CircleShape)
-                            .clickableNoRipple { walletOpen = true },
-                        contentAlignment = Alignment.Center
-                    ) {
+                    HeaderIconButton(34.dp, { walletOpen = true }) {
                         Icon(
                             Icons.Outlined.AccountBalanceWallet, contentDescription = "Wallet",
-                            tint = PomboColors.Text, modifier = Modifier.size(17.dp)
+                            tint = PomboColors.Text, modifier = Modifier.size(24.dp)
                         )
                     }
                     if (walletOpen) {
@@ -172,15 +166,10 @@ internal fun ChatsTab(vm: AppViewModel, onCreate: () -> Unit, onJoin: () -> Unit
                     // dismissed invites, dimmed, with Accept still available.
                     var showAllInvites by remember { mutableStateOf(false) }
                     Box {
-                        Box(
-                            Modifier.size(32.dp)
-                                .background(Color.White.copy(alpha = 0.08f), CircleShape)
-                                .clickableNoRipple { showAllInvites = false; invitesOpen = true },
-                            contentAlignment = Alignment.Center
-                        ) {
+                        HeaderIconButton(34.dp, { showAllInvites = false; invitesOpen = true }) {
                             Icon(
                                 Icons.Outlined.Notifications, contentDescription = "Channel invites",
-                                tint = PomboColors.Text, modifier = Modifier.size(17.dp)
+                                tint = PomboColors.Text, modifier = Modifier.size(24.dp)
                             )
                         }
                         if (invites.isNotEmpty()) {
