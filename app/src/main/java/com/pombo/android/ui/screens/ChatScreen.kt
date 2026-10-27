@@ -179,7 +179,7 @@ fun ChatScreen(vm: AppViewModel) {
         androidx.compose.ui.window.Dialog(onDismissRequest = { vm.dismissRotateOffer() }) {
             Column(
                 Modifier
-                    .background(PomboColors.Background, RoundedCornerShape(16.dp))
+                    .background(PomboColors.Bg, RoundedCornerShape(16.dp))
                     .padding(horizontal = 20.dp, vertical = 18.dp)
             ) {
                 Text("No key for the current epoch", color = Color.White, fontSize = 15.sp, fontWeight = FontWeight.Medium)
@@ -383,12 +383,12 @@ fun ChatScreen(vm: AppViewModel) {
             // `#chat-header { height: 3.5rem; padding: 0 0.5rem }` — a fixed
             // 56px, not a padding-derived height.
             Modifier.fillMaxWidth().height(56.dp)
-                .background(PomboColors.Surface)
+                .background(PomboColors.Bg)
                 .padding(horizontal = 8.dp),
             verticalAlignment = Alignment.CenterVertically
         ) {
             IconButton(onClick = vm::closeChannel) {
-                Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Back", tint = PomboColors.Text)
+                Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Back", tint = PomboColors.TextPrimary)
             }
             // Channel image (admin stream) wins over the generated avatar.
             val chImage by vm.channelImage.collectAsState()
@@ -416,7 +416,7 @@ fun ChatScreen(vm: AppViewModel) {
                 // the name opens Channel Details (web opens it from the kebab, but
                 // the name is the natural mobile target).
                 Text(
-                    ch.name, color = PomboColors.Text, fontSize = 16.sp,
+                    ch.name, color = PomboColors.TextPrimary, fontSize = 16.sp,
                     fontWeight = FontWeight.SemiBold, maxLines = 1,
                     modifier = Modifier.clickableNoRipple { showInfo = true }
                 )
@@ -481,9 +481,9 @@ fun ChatScreen(vm: AppViewModel) {
                         .padding(horizontal = 16.dp, vertical = 8.dp),
                     verticalAlignment = Alignment.CenterVertically
                 ) {
-                    Icon(Icons.Filled.Add, contentDescription = null, tint = PomboColors.Text, modifier = Modifier.size(16.dp))
+                    Icon(Icons.Filled.Add, contentDescription = null, tint = PomboColors.TextPrimary, modifier = Modifier.size(16.dp))
                     Spacer(Modifier.width(6.dp))
-                    Text("Join", color = PomboColors.Text, fontSize = 14.sp, fontWeight = FontWeight.Medium)
+                    Text("Join", color = PomboColors.TextPrimary, fontSize = 14.sp, fontWeight = FontWeight.Medium)
                 }
                 Spacer(Modifier.width(4.dp))
             }
@@ -533,7 +533,7 @@ fun ChatScreen(vm: AppViewModel) {
                     expanded = chMenu,
                     onDismissRequest = { chMenu = false },
                     shape = RoundedCornerShape(12.dp),
-                    containerColor = PomboColors.Surface7,
+                    containerColor = PomboColors.SurfaceRaised,
                     border = androidx.compose.foundation.BorderStroke(1.dp, PomboColors.Overlay10),
                     modifier = Modifier.widthIn(min = 180.dp)
                 ) {
@@ -1125,7 +1125,7 @@ fun ChatScreen(vm: AppViewModel) {
                         .fillMaxWidth()
                         .background(
                             Brush.verticalGradient(
-                                listOf(Color.Transparent, PomboColors.Background)
+                                listOf(Color.Transparent, PomboColors.Bg)
                             )
                         )
                         .padding(top = 16.dp, bottom = 4.dp),
@@ -1139,7 +1139,7 @@ fun ChatScreen(vm: AppViewModel) {
         // Reply bar above the composer (web #reply-bar)
         replyTarget?.let { target ->
             Row(
-                Modifier.fillMaxWidth().background(PomboColors.Surface)
+                Modifier.fillMaxWidth().background(PomboColors.Bg)
                     .padding(start = 12.dp, end = 8.dp, top = 8.dp),
                 verticalAlignment = Alignment.CenterVertically
             ) {
@@ -1166,7 +1166,7 @@ fun ChatScreen(vm: AppViewModel) {
         // the web either, just the label; the composer itself carries the text.
         if (editTarget != null) {
             Row(
-                Modifier.fillMaxWidth().background(PomboColors.Surface)
+                Modifier.fillMaxWidth().background(PomboColors.Bg)
                     .padding(start = 12.dp, end = 8.dp, top = 8.dp),
                 verticalAlignment = Alignment.CenterVertically
             ) {
@@ -1297,7 +1297,7 @@ private fun TypingIndicator(name: String) {
         }
         Spacer(Modifier.width(8.dp))
         Text(
-            name, color = PomboColors.TextDim, fontSize = 13.sp,
+            name, color = PomboColors.TextSecondary, fontSize = 13.sp,
             maxLines = 1, overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis
         )
     }
@@ -1362,7 +1362,7 @@ private fun ChatComposer(
     // Web #message-input-container, but on the app's pure-black surface: a 1px
     // hairline on TOP (border-t border-white/[0.04]) mirroring the header's
     // bottom rule, and p-3 pb-4.
-    Column(Modifier.fillMaxWidth().background(PomboColors.Surface)) {
+    Column(Modifier.fillMaxWidth().background(PomboColors.Bg)) {
     androidx.compose.material3.HorizontalDivider(
         color = PomboColors.Overlay4, thickness = 1.dp
     )
@@ -1391,7 +1391,7 @@ private fun ChatComposer(
             DropdownMenu(
                 expanded = attachOpen,
                 onDismissRequest = { attachOpen = false; attachSubmenu = null },
-                modifier = Modifier.background(PomboColors.Surface7)
+                modifier = Modifier.background(PomboColors.SurfaceRaised)
             ) {
                 when (attachSubmenu) {
                     null -> {
@@ -1461,7 +1461,7 @@ private fun ChatComposer(
             DropdownMenu(
                 expanded = emojiOpen,
                 onDismissRequest = { emojiOpen = false },
-                modifier = Modifier.background(PomboColors.Surface7)
+                modifier = Modifier.background(PomboColors.SurfaceRaised)
             ) {
                 // A FlowRow, NOT a LazyVerticalGrid: DropdownMenu already
                 // wraps its content in a vertical scroller, so nesting a
@@ -1495,7 +1495,7 @@ private fun ChatComposer(
             interactionSource = fieldInteraction,
             lineLimits = TextFieldLineLimits.MultiLine(1, 4),
             textStyle = androidx.compose.ui.text.TextStyle(
-                color = PomboColors.Text, fontSize = 16.sp
+                color = PomboColors.TextPrimary, fontSize = 16.sp
             ),
             cursorBrush = androidx.compose.ui.graphics.SolidColor(PomboColors.Accent),
             // Rebuilt OutlinedTextField look (pomboFieldColors + 24dp shape).
@@ -1508,7 +1508,7 @@ private fun ChatComposer(
                             1.dp,
                             // Focus is a faint GREY lift, not an orange rule —
                             // the web uses focus:ring-1 ring-white/10.
-                            if (fieldFocused) Color.White.copy(alpha = 0.16f) else PomboColors.Border,
+                            if (fieldFocused) Color.White.copy(alpha = 0.16f) else PomboColors.Overlay8,
                             RoundedCornerShape(16.dp)
                         )
                         .padding(horizontal = 16.dp, vertical = 10.dp),
@@ -1517,7 +1517,7 @@ private fun ChatComposer(
                     if (input.text.isEmpty()) {
                         Text(
                             if (canPost) "Message…" else disabledPlaceholder,
-                            color = PomboColors.TextDim, fontSize = 16.sp
+                            color = PomboColors.TextSecondary, fontSize = 16.sp
                         )
                     }
                     inner()

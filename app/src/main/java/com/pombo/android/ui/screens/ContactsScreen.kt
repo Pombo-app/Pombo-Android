@@ -80,15 +80,15 @@ internal fun ContactsTab(vm: AppViewModel) {
 
         if (contacts.isEmpty()) {
             Box(Modifier.weight(1f).fillMaxWidth(), contentAlignment = Alignment.Center) {
-                Text("No contacts yet. Add one with their address.", color = PomboColors.TextDim, fontSize = 13.sp)
+                Text("No contacts yet. Add one with their address.", color = PomboColors.TextSecondary, fontSize = 13.sp)
             }
         } else {
             LazyColumn(Modifier.weight(1f).fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(8.dp)) {
                 items(contacts, key = { it.address }) { c ->
                     Row(
                         Modifier.fillMaxWidth()
-                            .background(PomboColors.Surface, RoundedCornerShape(12.dp))
-                            .border(1.dp, PomboColors.Border, RoundedCornerShape(12.dp))
+                            .background(PomboColors.Bg, RoundedCornerShape(12.dp))
+                            .border(1.dp, PomboColors.Overlay8, RoundedCornerShape(12.dp))
                             .padding(12.dp),
                         verticalAlignment = Alignment.CenterVertically
                     ) {
@@ -105,7 +105,7 @@ internal fun ContactsTab(vm: AppViewModel) {
                             // then the FULL address in mono at 10px/white-30.
                             Text(
                                 c.nickname ?: ens ?: shortAddr(c.address),
-                                color = PomboColors.Text, fontSize = 13.sp,
+                                color = PomboColors.TextPrimary, fontSize = 13.sp,
                                 fontWeight = FontWeight.Medium, maxLines = 1
                             )
                             Spacer(Modifier.height(2.dp))
@@ -210,7 +210,7 @@ private fun EditContactDialog(
         // The zero-width break is the only point the address may wrap at.
         Text(
             contact.address.take(21) + Char(0x200B) + contact.address.drop(21),
-            color = PomboColors.TextDim, fontSize = 11.sp, lineHeight = 16.sp,
+            color = PomboColors.TextSecondary, fontSize = 11.sp, lineHeight = 16.sp,
             fontFamily = androidx.compose.ui.text.font.FontFamily.Monospace
         )
         Spacer(Modifier.height(14.dp))

@@ -162,7 +162,7 @@ fun PomboApp(vm: AppViewModel) {
     Box(
         Modifier
             .fillMaxSize()
-            .background(PomboColors.Background)
+            .background(PomboColors.Bg)
             .systemBarsPadding()
     ) {
         // Web flow: the app is usable as guest; account creation happens in a modal.
@@ -347,7 +347,7 @@ internal fun GateEntryDialog(vm: AppViewModel, entry: AppViewModel.GateEntry) {
     ) {
         Column(
             Modifier.padding(24.dp).fillMaxWidth()
-                .background(PomboColors.Surface6, RoundedCornerShape(16.dp))
+                .background(PomboColors.Surface, RoundedCornerShape(16.dp))
                 .border(1.dp, PomboColors.Overlay6, RoundedCornerShape(16.dp))
                 .padding(20.dp),
             horizontalAlignment = Alignment.CenterHorizontally
@@ -485,12 +485,12 @@ private fun ErrorBanner(text: String, onDismiss: () -> Unit, modifier: Modifier 
         modifier
             .padding(12.dp)
             .fillMaxWidth()
-            .background(PomboColors.SurfaceHigh, RoundedCornerShape(10.dp))
+            .background(PomboColors.Surface8, RoundedCornerShape(10.dp))
             .border(1.dp, PomboColors.Danger, RoundedCornerShape(10.dp))
             .padding(horizontal = 12.dp, vertical = 10.dp),
         verticalAlignment = Alignment.CenterVertically
     ) {
-        Text(text, color = PomboColors.Text, fontSize = 13.sp, modifier = Modifier.weight(1f))
+        Text(text, color = PomboColors.TextPrimary, fontSize = 13.sp, modifier = Modifier.weight(1f))
         Text(
             "OK",
             color = PomboColors.Accent,
@@ -615,7 +615,7 @@ fun CreateAccountWizard(vm: AppViewModel, onDismiss: () -> Unit) {
         Column(
             Modifier
                 .width(360.dp)
-                .background(PomboColors.Surface6, RoundedCornerShape(16.dp))
+                .background(PomboColors.Surface, RoundedCornerShape(16.dp))
                 .border(1.dp, PomboColors.Overlay6, RoundedCornerShape(16.dp))
         ) {
             if (step == 0) {
@@ -940,7 +940,7 @@ fun OnboardingScreen(vm: AppViewModel, canCancel: Boolean = false) {
         Text(if (canCancel) "Add account" else "Pombo", color = PomboColors.Accent, fontSize = 40.sp, fontWeight = FontWeight.Bold)
         Text(
             "Decentralized P2P communication",
-            color = PomboColors.TextDim,
+            color = PomboColors.TextSecondary,
             fontSize = 14.sp,
             textAlign = TextAlign.Center
         )
@@ -955,14 +955,14 @@ fun OnboardingScreen(vm: AppViewModel, canCancel: Boolean = false) {
                 onClick = { showImport = true },
                 shape = RoundedCornerShape(10.dp),
                 modifier = Modifier.fillMaxWidth()
-            ) { Text("Import existing wallet", color = PomboColors.Text) }
+            ) { Text("Import existing wallet", color = PomboColors.TextPrimary) }
             if (canCancel) {
                 Spacer(Modifier.height(8.dp))
                 OutlinedButton(
                     onClick = { vm.cancelAddAccount() },
                     shape = RoundedCornerShape(10.dp),
                     modifier = Modifier.fillMaxWidth()
-                ) { Text("Cancel", color = PomboColors.TextDim) }
+                ) { Text("Cancel", color = PomboColors.TextSecondary) }
             }
         } else {
             OutlinedTextField(
@@ -979,7 +979,7 @@ fun OnboardingScreen(vm: AppViewModel, canCancel: Boolean = false) {
                 onClick = { showImport = false },
                 shape = RoundedCornerShape(10.dp),
                 modifier = Modifier.fillMaxWidth()
-            ) { Text("Back", color = PomboColors.TextDim) }
+            ) { Text("Back", color = PomboColors.TextSecondary) }
         }
     }
 }
@@ -993,11 +993,11 @@ fun MnemonicScreen(mnemonic: String, onDone: () -> Unit) {
         horizontalAlignment = Alignment.CenterHorizontally,
         verticalArrangement = Arrangement.Center
     ) {
-        Text("Save your recovery phrase", color = PomboColors.Text, fontSize = 18.sp, fontWeight = FontWeight.Bold)
+        Text("Save your recovery phrase", color = PomboColors.TextPrimary, fontSize = 18.sp, fontWeight = FontWeight.Bold)
         Spacer(Modifier.height(8.dp))
         Text(
             "It's the only way to recover your account. Write it down somewhere safe — it's never sent anywhere.",
-            color = PomboColors.TextDim,
+            color = PomboColors.TextSecondary,
             fontSize = 13.sp,
             textAlign = TextAlign.Center
         )
@@ -1011,8 +1011,8 @@ fun MnemonicScreen(mnemonic: String, onDone: () -> Unit) {
             lineHeight = 28.sp,
             modifier = Modifier
                 .fillMaxWidth()
-                .background(PomboColors.SurfaceHigh, RoundedCornerShape(12.dp))
-                .border(1.dp, PomboColors.Border, RoundedCornerShape(12.dp))
+                .background(PomboColors.Surface8, RoundedCornerShape(12.dp))
+                .border(1.dp, PomboColors.Overlay8, RoundedCornerShape(12.dp))
                 .padding(20.dp)
         )
         Spacer(Modifier.height(24.dp))
@@ -1334,7 +1334,7 @@ internal fun CreateChannelDialog(vm: AppViewModel, onDismiss: () -> Unit, onCrea
     Box(
         Modifier
             .fillMaxSize()
-            .background(PomboColors.Background)
+            .background(PomboColors.Bg)
             // Swallow taps so nothing behind the panel reacts.
             .clickableNoRipple { }
     ) {
@@ -1418,7 +1418,7 @@ internal fun CreateChannelDialog(vm: AppViewModel, onDismiss: () -> Unit, onCrea
                     value = name, onValueChange = { name = it },
                     placeholder = { Text("Channel name", color = PomboColors.Overlay20, fontSize = 14.sp) },
                     singleLine = true, shape = RoundedCornerShape(12.dp),
-                    textStyle = androidx.compose.ui.text.TextStyle(fontSize = 14.sp, color = PomboColors.Text),
+                    textStyle = androidx.compose.ui.text.TextStyle(fontSize = 14.sp, color = PomboColors.TextPrimary),
                     colors = pomboFieldColors(), modifier = Modifier.fillMaxWidth()
                 )
 
@@ -1444,7 +1444,7 @@ internal fun CreateChannelDialog(vm: AppViewModel, onDismiss: () -> Unit, onCrea
                                     .clickableNoRipple { showPassword = !showPassword }
                             )
                         },
-                        textStyle = androidx.compose.ui.text.TextStyle(fontSize = 14.sp, color = PomboColors.Text),
+                        textStyle = androidx.compose.ui.text.TextStyle(fontSize = 14.sp, color = PomboColors.TextPrimary),
                         colors = pomboFieldColors(), modifier = Modifier.fillMaxWidth()
                     )
                     Text(
@@ -1489,7 +1489,7 @@ internal fun CreateChannelDialog(vm: AppViewModel, onDismiss: () -> Unit, onCrea
                                 placeholder = { Text("0x…", color = PomboColors.Overlay20, fontSize = 13.sp) },
                                 singleLine = true, shape = RoundedCornerShape(12.dp),
                                 textStyle = androidx.compose.ui.text.TextStyle(
-                                    fontSize = 13.sp, color = PomboColors.Text,
+                                    fontSize = 13.sp, color = PomboColors.TextPrimary,
                                     fontFamily = androidx.compose.ui.text.font.FontFamily.Monospace
                                 ),
                                 colors = pomboFieldColors(), modifier = Modifier.fillMaxWidth()
@@ -1513,7 +1513,7 @@ internal fun CreateChannelDialog(vm: AppViewModel, onDismiss: () -> Unit, onCrea
                             singleLine = true, shape = RoundedCornerShape(12.dp),
                             keyboardOptions = androidx.compose.foundation.text.KeyboardOptions(
                                 keyboardType = androidx.compose.ui.text.input.KeyboardType.Decimal),
-                            textStyle = androidx.compose.ui.text.TextStyle(fontSize = 14.sp, color = PomboColors.Text),
+                            textStyle = androidx.compose.ui.text.TextStyle(fontSize = 14.sp, color = PomboColors.TextPrimary),
                             colors = pomboFieldColors(), modifier = Modifier.fillMaxWidth()
                         )
                         Text(
@@ -1528,7 +1528,7 @@ internal fun CreateChannelDialog(vm: AppViewModel, onDismiss: () -> Unit, onCrea
                             placeholder = { Text("0x…", color = PomboColors.Overlay20, fontSize = 13.sp) },
                             singleLine = true, shape = RoundedCornerShape(12.dp),
                             textStyle = androidx.compose.ui.text.TextStyle(
-                                fontSize = 13.sp, color = PomboColors.Text,
+                                fontSize = 13.sp, color = PomboColors.TextPrimary,
                                 fontFamily = androidx.compose.ui.text.font.FontFamily.Monospace
                             ),
                             colors = pomboFieldColors(), modifier = Modifier.fillMaxWidth()
@@ -1552,7 +1552,7 @@ internal fun CreateChannelDialog(vm: AppViewModel, onDismiss: () -> Unit, onCrea
                             placeholder = { Text("0x… (e.g. USDC)", color = PomboColors.Overlay20, fontSize = 13.sp) },
                             singleLine = true, shape = RoundedCornerShape(12.dp),
                             textStyle = androidx.compose.ui.text.TextStyle(
-                                fontSize = 13.sp, color = PomboColors.Text,
+                                fontSize = 13.sp, color = PomboColors.TextPrimary,
                                 fontFamily = androidx.compose.ui.text.font.FontFamily.Monospace
                             ),
                             colors = pomboFieldColors(), modifier = Modifier.fillMaxWidth()
@@ -1578,7 +1578,7 @@ internal fun CreateChannelDialog(vm: AppViewModel, onDismiss: () -> Unit, onCrea
                                 singleLine = true, shape = RoundedCornerShape(12.dp),
                                 keyboardOptions = androidx.compose.foundation.text.KeyboardOptions(
                                     keyboardType = androidx.compose.ui.text.input.KeyboardType.Decimal),
-                                textStyle = androidx.compose.ui.text.TextStyle(fontSize = 14.sp, color = PomboColors.Text),
+                                textStyle = androidx.compose.ui.text.TextStyle(fontSize = 14.sp, color = PomboColors.TextPrimary),
                                 colors = pomboFieldColors(), modifier = Modifier.fillMaxWidth()
                             )
                         }
@@ -1589,7 +1589,7 @@ internal fun CreateChannelDialog(vm: AppViewModel, onDismiss: () -> Unit, onCrea
                                 singleLine = true, shape = RoundedCornerShape(12.dp),
                                 keyboardOptions = androidx.compose.foundation.text.KeyboardOptions(
                                     keyboardType = androidx.compose.ui.text.input.KeyboardType.Number),
-                                textStyle = androidx.compose.ui.text.TextStyle(fontSize = 14.sp, color = PomboColors.Text),
+                                textStyle = androidx.compose.ui.text.TextStyle(fontSize = 14.sp, color = PomboColors.TextPrimary),
                                 colors = pomboFieldColors(), modifier = Modifier.fillMaxWidth()
                             )
                         }
@@ -1606,7 +1606,7 @@ internal fun CreateChannelDialog(vm: AppViewModel, onDismiss: () -> Unit, onCrea
                         },
                         shape = RoundedCornerShape(12.dp), maxLines = 4,
                         textStyle = androidx.compose.ui.text.TextStyle(
-                            fontSize = 13.sp, color = PomboColors.Text,
+                            fontSize = 13.sp, color = PomboColors.TextPrimary,
                             fontFamily = androidx.compose.ui.text.font.FontFamily.Monospace
                         ),
                         colors = pomboFieldColors(), modifier = Modifier.fillMaxWidth()
@@ -1698,7 +1698,7 @@ internal fun CreateChannelDialog(vm: AppViewModel, onDismiss: () -> Unit, onCrea
                             value = description, onValueChange = { if (it.length <= 200) description = it },
                             placeholder = { Text("What's this channel about?", color = PomboColors.Overlay20, fontSize = 14.sp) },
                             shape = RoundedCornerShape(12.dp), maxLines = 3,
-                            textStyle = androidx.compose.ui.text.TextStyle(fontSize = 14.sp, color = PomboColors.Text),
+                            textStyle = androidx.compose.ui.text.TextStyle(fontSize = 14.sp, color = PomboColors.TextPrimary),
                             colors = pomboFieldColors(), modifier = Modifier.fillMaxWidth()
                         )
                         Spacer(Modifier.height(16.dp))
@@ -1797,7 +1797,7 @@ internal fun CreateChannelDialog(vm: AppViewModel, onDismiss: () -> Unit, onCrea
                         value = customStorage, onValueChange = { customStorage = it },
                         singleLine = true,
                         textStyle = androidx.compose.ui.text.TextStyle(
-                            fontSize = 12.sp, color = PomboColors.Text,
+                            fontSize = 12.sp, color = PomboColors.TextPrimary,
                             fontFamily = androidx.compose.ui.text.font.FontFamily.Monospace
                         ),
                         cursorBrush = androidx.compose.ui.graphics.SolidColor(PomboColors.Accent),
@@ -2083,7 +2083,7 @@ fun CreateDmInboxDialog(
                         value = customStorage, onValueChange = { customStorage = it },
                         singleLine = true,
                         textStyle = androidx.compose.ui.text.TextStyle(
-                            fontSize = 12.sp, color = PomboColors.Text,
+                            fontSize = 12.sp, color = PomboColors.TextPrimary,
                             fontFamily = androidx.compose.ui.text.font.FontFamily.Monospace
                         ),
                         cursorBrush = androidx.compose.ui.graphics.SolidColor(PomboColors.Accent),
@@ -2223,7 +2223,7 @@ private fun DialogToast(notice: Pair<String, com.pombo.android.ui.ToastKind>?, o
         Row(
             Modifier
                 .padding(top = 29.dp)
-                .background(PomboColors.Surface7, RoundedCornerShape(12.dp))
+                .background(PomboColors.SurfaceRaised, RoundedCornerShape(12.dp))
                 .border(1.dp, PomboColors.Overlay8, RoundedCornerShape(12.dp))
                 .clickableNoRipple(onDismiss)
                 .padding(horizontal = 14.dp, vertical = 12.dp),
@@ -2297,7 +2297,7 @@ private fun ConfirmPopup(
     androidx.compose.ui.window.Dialog(onDismissRequest = onCancel) {
         Column(
             Modifier
-                .background(PomboColors.Surface7, RoundedCornerShape(16.dp))
+                .background(PomboColors.SurfaceRaised, RoundedCornerShape(16.dp))
                 .border(1.dp, PomboColors.Overlay8, RoundedCornerShape(16.dp))
                 .padding(20.dp)
         ) {
@@ -2376,7 +2376,7 @@ private fun ChipPicker(options: List<Pair<String, String>>, selected: String, on
             val active = value == selected
             Text(
                 label,
-                color = if (active) PomboColors.Background else PomboColors.Overlay60,
+                color = if (active) PomboColors.Bg else PomboColors.Overlay60,
                 fontSize = 12.sp, fontWeight = FontWeight.Medium,
                 modifier = Modifier
                     .background(if (active) Color.White else PomboColors.Overlay5, RoundedCornerShape(6.dp))
@@ -2471,7 +2471,7 @@ internal fun LocalChannelIdentityDialog(
     PomboDialogFrame("Name this channel", onDismiss) {
         Text(
             "This channel has no public name. Give it one for your devices.",
-            color = PomboColors.TextDim, fontSize = 12.sp
+            color = PomboColors.TextSecondary, fontSize = 12.sp
         )
         Spacer(Modifier.height(14.dp))
 
@@ -2495,12 +2495,12 @@ internal fun LocalChannelIdentityDialog(
 private fun TypeChip(label: String, selected: Boolean, onClick: () -> Unit) {
     Text(
         label,
-        color = if (selected) PomboColors.Background else PomboColors.Text,
+        color = if (selected) PomboColors.Bg else PomboColors.TextPrimary,
         fontSize = 13.sp,
         fontWeight = if (selected) FontWeight.SemiBold else FontWeight.Normal,
         modifier = Modifier
-            .background(if (selected) PomboColors.Accent else PomboColors.SurfaceHigh, RoundedCornerShape(50))
-            .border(1.dp, if (selected) PomboColors.Accent else PomboColors.Border, RoundedCornerShape(50))
+            .background(if (selected) PomboColors.Accent else PomboColors.Surface8, RoundedCornerShape(50))
+            .border(1.dp, if (selected) PomboColors.Accent else PomboColors.Overlay8, RoundedCornerShape(50))
             .clickable(onClick = onClick)
             .padding(horizontal = 14.dp, vertical = 6.dp)
     )
@@ -2579,8 +2579,8 @@ internal fun PrimaryButton(text: String, enabled: Boolean = true, onClick: () ->
         onClick = onClick,
         enabled = enabled,
         colors = ButtonDefaults.buttonColors(
-            containerColor = PomboColors.Accent, contentColor = PomboColors.Background,
-            disabledContainerColor = PomboColors.SurfaceHigh, disabledContentColor = PomboColors.TextDim
+            containerColor = PomboColors.Accent, contentColor = PomboColors.Bg,
+            disabledContainerColor = PomboColors.Surface8, disabledContentColor = PomboColors.TextSecondary
         ),
         shape = RoundedCornerShape(10.dp),
         modifier = Modifier.fillMaxWidth()
@@ -2687,7 +2687,7 @@ internal fun PomboDialogFrame(
                 .padding(horizontal = 16.dp)
                 .widthIn(max = 420.dp)
                 .fillMaxWidth()
-                .background(PomboColors.Surface6, RoundedCornerShape(16.dp))
+                .background(PomboColors.Surface, RoundedCornerShape(16.dp))
                 .border(1.dp, PomboColors.Overlay6, RoundedCornerShape(16.dp))
                 .padding(20.dp)
         ) {
@@ -2700,7 +2700,7 @@ internal fun PomboDialogFrame(
                     Spacer(Modifier.width(8.dp))
                 }
                 Text(
-                    title, color = PomboColors.Text, fontSize = 16.sp,
+                    title, color = PomboColors.TextPrimary, fontSize = 16.sp,
                     fontWeight = FontWeight.Medium, modifier = Modifier.weight(1f)
                 )
                 Icon(
@@ -2743,7 +2743,7 @@ internal fun PomboDialogField(
     Row(
         Modifier
             .fillMaxWidth()
-            .background(PomboColors.SurfaceHigh, RoundedCornerShape(12.dp))
+            .background(PomboColors.Surface8, RoundedCornerShape(12.dp))
             .border(
                 1.dp,
                 if (focused) PomboColors.Accent else PomboColors.Overlay10,
@@ -2764,7 +2764,7 @@ internal fun PomboDialogField(
                 onValueChange = onValueChange,
                 singleLine = true,
                 textStyle = TextStyle(
-                    color = PomboColors.Text, fontSize = 14.sp,
+                    color = PomboColors.TextPrimary, fontSize = 14.sp,
                     fontFamily = if (monospace) androidx.compose.ui.text.font.FontFamily.Monospace else null
                 ),
                 cursorBrush = SolidColor(PomboColors.Accent),
@@ -2818,15 +2818,15 @@ internal fun PomboPrimaryButton(
 
 @Composable
 internal fun pomboFieldColors() = OutlinedTextFieldDefaults.colors(
-    focusedTextColor = PomboColors.Text,
-    unfocusedTextColor = PomboColors.Text,
+    focusedTextColor = PomboColors.TextPrimary,
+    unfocusedTextColor = PomboColors.TextPrimary,
     focusedBorderColor = PomboColors.Accent,
-    unfocusedBorderColor = PomboColors.Border,
+    unfocusedBorderColor = PomboColors.Overlay8,
     focusedLabelColor = PomboColors.Accent,
-    unfocusedLabelColor = PomboColors.TextDim,
+    unfocusedLabelColor = PomboColors.TextSecondary,
     cursorColor = PomboColors.Accent,
-    focusedContainerColor = PomboColors.SurfaceHigh,
-    unfocusedContainerColor = PomboColors.SurfaceHigh
+    focusedContainerColor = PomboColors.Surface8,
+    unfocusedContainerColor = PomboColors.Surface8
 )
 
 /**

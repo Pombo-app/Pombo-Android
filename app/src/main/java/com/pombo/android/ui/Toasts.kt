@@ -132,7 +132,7 @@ private fun ToastItem(toast: Toast, onDismiss: () -> Unit) {
         Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End) {
             Row(
                 Modifier
-                    .background(PomboColors.Surface7, RoundedCornerShape(topStart = 20.dp, bottomStart = 20.dp))
+                    .background(PomboColors.SurfaceRaised, RoundedCornerShape(topStart = 20.dp, bottomStart = 20.dp))
                     .border(
                         1.dp, PomboColors.Overlay8,
                         RoundedCornerShape(topStart = 20.dp, bottomStart = 20.dp)
@@ -184,7 +184,7 @@ private fun ToastItem(toast: Toast, onDismiss: () -> Unit) {
                 // near-black background the shadow is the only thing lifting
                 // the toast off the page.
                 .shadow(12.dp, RoundedCornerShape(12.dp), clip = false)
-                .background(PomboColors.Surface7, RoundedCornerShape(12.dp))
+                .background(PomboColors.SurfaceRaised, RoundedCornerShape(12.dp))
                 .border(1.dp, PomboColors.Overlay8, RoundedCornerShape(12.dp))
                 .pointerInput(toast.id) {
                     // Raw pixels made the dismiss distance density-dependent:

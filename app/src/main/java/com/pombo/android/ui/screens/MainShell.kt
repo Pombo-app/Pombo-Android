@@ -326,7 +326,7 @@ private fun PillItem(
 internal fun PomboHeader(status: NetStatus, trailing: @Composable (() -> Unit)? = null) {
     Row(
         Modifier.fillMaxWidth()
-            .background(PomboColors.Background)
+            .background(PomboColors.Bg)
             // Less below than above: whatever sits under the header brings its
             // own top padding, and the two together read as a hole.
             .padding(start = 14.dp, end = 14.dp, top = 10.dp, bottom = 6.dp),
@@ -353,7 +353,7 @@ private fun NetworkDot(modifier: Modifier = Modifier) {
         modifier.size(11.dp).semantics { contentDescription = "Connecting" }
     ) {
         val outer = size.minDimension / 2f
-        drawCircle(PomboColors.Background, radius = outer)
+        drawCircle(PomboColors.Bg, radius = outer)
         val inner = outer - 1.5.dp.toPx()
         drawCircle(
             brush = androidx.compose.ui.graphics.Brush.radialGradient(
@@ -402,11 +402,11 @@ private fun AboutDialog(onDismiss: () -> Unit) {
                 "You assume full legal responsibility for your actions within your " +
                 "jurisdiction. We disclaim all liability and reserve the right to " +
                 "restrict access to specific channels via this interface.",
-            color = PomboColors.Text, fontSize = 14.sp, lineHeight = 22.sp,
+            color = PomboColors.TextPrimary, fontSize = 14.sp, lineHeight = 22.sp,
             textAlign = androidx.compose.ui.text.style.TextAlign.Justify
         )
         Spacer(Modifier.height(16.dp))
-        Text("pombo.cc", color = PomboColors.TextDim, fontSize = 13.sp)
+        Text("pombo.cc", color = PomboColors.TextSecondary, fontSize = 13.sp)
     }
 }
 
@@ -436,14 +436,14 @@ private fun ProfileTab(vm: AppViewModel, onAddAccount: () -> Unit) {
         // all, which now has no username at all.
         Text(
             myEns ?: username ?: addr?.let { shortAddr(it) } ?: "No name",
-            color = PomboColors.Text, fontSize = 20.sp, fontWeight = FontWeight.Bold
+            color = PomboColors.TextPrimary, fontSize = 20.sp, fontWeight = FontWeight.Bold
         )
         Spacer(Modifier.height(4.dp))
         if (myEns != null && username != null) {
-            Text(username!!, color = PomboColors.TextDim, fontSize = 13.sp)
+            Text(username!!, color = PomboColors.TextSecondary, fontSize = 13.sp)
             Spacer(Modifier.height(2.dp))
         }
-        Text(address ?: "—", color = PomboColors.TextDim, fontSize = 12.sp)
+        Text(address ?: "—", color = PomboColors.TextSecondary, fontSize = 12.sp)
         Spacer(Modifier.height(28.dp))
 
         // Accounts (multi-wallet switching). Also shown to a guest with a single
@@ -459,11 +459,11 @@ private fun ProfileTab(vm: AppViewModel, onAddAccount: () -> Unit) {
             val switchActivity = androidx.compose.ui.platform.LocalContext.current
                 as? androidx.fragment.app.FragmentActivity
             Column(
-                Modifier.fillMaxWidth().background(PomboColors.Surface, RoundedCornerShape(12.dp))
-                    .border(1.dp, PomboColors.Border, RoundedCornerShape(12.dp))
+                Modifier.fillMaxWidth().background(PomboColors.Bg, RoundedCornerShape(12.dp))
+                    .border(1.dp, PomboColors.Overlay8, RoundedCornerShape(12.dp))
             ) {
                 accounts.forEachIndexed { i, acc ->
-                    if (i > 0) androidx.compose.material3.HorizontalDivider(color = PomboColors.Border)
+                    if (i > 0) androidx.compose.material3.HorizontalDivider(color = PomboColors.Overlay8)
                     val isCurrent = acc.address.equals(address, ignoreCase = true)
                     Row(
                         Modifier.fillMaxWidth().clickableNoRipple {
@@ -491,7 +491,7 @@ private fun ProfileTab(vm: AppViewModel, onAddAccount: () -> Unit) {
                             ensNames[acc.address.lowercase()]
                                 ?: vm.usernameFor(acc.address)
                                 ?: shortAddr(acc.address),
-                            color = PomboColors.Text, fontSize = 13.sp, modifier = Modifier.weight(1f)
+                            color = PomboColors.TextPrimary, fontSize = 13.sp, modifier = Modifier.weight(1f)
                         )
                         if (isCurrent) Text("current", color = PomboColors.Success, fontSize = 11.sp)
                     }
@@ -501,11 +501,11 @@ private fun ProfileTab(vm: AppViewModel, onAddAccount: () -> Unit) {
         }
 
         Column(
-            Modifier.fillMaxWidth().background(PomboColors.Surface, RoundedCornerShape(12.dp))
-                .border(1.dp, PomboColors.Border, RoundedCornerShape(12.dp))
+            Modifier.fillMaxWidth().background(PomboColors.Bg, RoundedCornerShape(12.dp))
+                .border(1.dp, PomboColors.Overlay8, RoundedCornerShape(12.dp))
         ) {
             ProfileAction("Add account", Icons.Outlined.AddCircleOutline, onClick = onAddAccount)
-            androidx.compose.material3.HorizontalDivider(color = PomboColors.Border)
+            androidx.compose.material3.HorizontalDivider(color = PomboColors.Overlay8)
             // Leaves the account behind rather than erasing it: `disconnect()`
             // calls WalletStore.clear(), which drops the current account's key
             // for good. Destroying an account belongs in Settings → Security,
@@ -522,8 +522,8 @@ private fun ProfileTab(vm: AppViewModel, onAddAccount: () -> Unit) {
         Spacer(Modifier.height(20.dp))
         var showAbout by remember { mutableStateOf(false) }
         Column(
-            Modifier.fillMaxWidth().background(PomboColors.Surface, RoundedCornerShape(12.dp))
-                .border(1.dp, PomboColors.Border, RoundedCornerShape(12.dp))
+            Modifier.fillMaxWidth().background(PomboColors.Bg, RoundedCornerShape(12.dp))
+                .border(1.dp, PomboColors.Overlay8, RoundedCornerShape(12.dp))
         ) {
             ProfileAction("About", Icons.Outlined.Info) { showAbout = true }
         }
@@ -541,8 +541,8 @@ private fun ProfileAction(
 ) {
     val tint = when {
         danger -> PomboColors.Danger
-        !enabled -> PomboColors.TextDim
-        else -> PomboColors.Text
+        !enabled -> PomboColors.TextSecondary
+        else -> PomboColors.TextPrimary
     }
     Row(
         Modifier.fillMaxWidth().clickableNoRipple { if (enabled) onClick() }.padding(16.dp),

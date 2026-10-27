@@ -116,7 +116,7 @@ internal fun ChannelSettingsSheet(vm: AppViewModel, channel: Channel, canModerat
         Column(
             Modifier
                 .fillMaxSize()
-                .background(PomboColors.Background)
+                .background(PomboColors.Bg)
                 .safeDrawingPadding()
                 .padding(bottom = (12.dp - bottomInset).coerceAtLeast(0.dp))
         ) {
@@ -274,7 +274,7 @@ private fun ChannelDetailsMain(
                     Modifier
                         .align(Alignment.BottomEnd)
                         .size(28.dp)
-                        .background(PomboColors.Surface7, CircleShape)
+                        .background(PomboColors.SurfaceRaised, CircleShape)
                         .border(1.dp, PomboColors.Overlay20, CircleShape)
                         .clickableNoRipple {
                             picker.launch(androidx.activity.result.PickVisualMediaRequest(
@@ -322,7 +322,7 @@ private fun ChannelDetailsMain(
             value = editName, onValueChange = { editName = it },
             placeholder = { Text("Enter name", color = PomboColors.Overlay25, fontSize = 14.sp) },
             singleLine = true, shape = RoundedCornerShape(8.dp),
-            textStyle = androidx.compose.ui.text.TextStyle(fontSize = 14.sp, color = PomboColors.Text),
+            textStyle = androidx.compose.ui.text.TextStyle(fontSize = 14.sp, color = PomboColors.TextPrimary),
             colors = pomboFieldColors(), modifier = Modifier.fillMaxWidth()
         )
     }
@@ -349,7 +349,7 @@ private fun ChannelDetailsMain(
                 value = editDesc, onValueChange = { editDesc = it },
                 placeholder = { Text("Enter description", color = PomboColors.Overlay25, fontSize = 14.sp) },
                 shape = RoundedCornerShape(8.dp), maxLines = 3,
-                textStyle = androidx.compose.ui.text.TextStyle(fontSize = 14.sp, color = PomboColors.Text),
+                textStyle = androidx.compose.ui.text.TextStyle(fontSize = 14.sp, color = PomboColors.TextPrimary),
                 colors = pomboFieldColors(), modifier = Modifier.fillMaxWidth()
             )
             // Gas warning — the web shows the same caveat before an on-chain
@@ -956,7 +956,7 @@ private fun ChannelMembersPanel(vm: AppViewModel, channel: Channel, canModerate:
             androidx.compose.foundation.text.BasicTextField(
                 value = newMember, onValueChange = { newMember = it },
                 singleLine = true,
-                textStyle = androidx.compose.ui.text.TextStyle(fontSize = 14.sp, color = PomboColors.Text),
+                textStyle = androidx.compose.ui.text.TextStyle(fontSize = 14.sp, color = PomboColors.TextPrimary),
                 cursorBrush = androidx.compose.ui.graphics.SolidColor(PomboColors.Accent),
                 modifier = Modifier.weight(1f)
                     .background(PomboColors.Overlay5, RoundedCornerShape(12.dp))
@@ -996,7 +996,7 @@ private fun ChannelMembersPanel(vm: AppViewModel, channel: Channel, canModerate:
             androidx.compose.foundation.text.BasicTextField(
                 value = batchText, onValueChange = { batchText = it },
                 textStyle = androidx.compose.ui.text.TextStyle(
-                    fontSize = 13.sp, color = PomboColors.Text,
+                    fontSize = 13.sp, color = PomboColors.TextPrimary,
                     fontFamily = androidx.compose.ui.text.font.FontFamily.Monospace
                 ),
                 cursorBrush = androidx.compose.ui.graphics.SolidColor(PomboColors.Accent),
@@ -1037,7 +1037,7 @@ private fun ChannelMembersPanel(vm: AppViewModel, channel: Channel, canModerate:
         androidx.compose.ui.window.Dialog(onDismissRequest = { confirmRemove = null }) {
             Column(
                 Modifier.width(320.dp)
-                    .background(PomboColors.Surface6, RoundedCornerShape(16.dp))
+                    .background(PomboColors.Surface, RoundedCornerShape(16.dp))
                     .border(1.dp, PomboColors.Overlay6, RoundedCornerShape(16.dp))
                     .padding(20.dp)
             ) {
@@ -1290,7 +1290,7 @@ private fun MemberKebab(
         // Shape/color/border on the menu's own surface — a rounded background
         // on the content leaves the surface's square corners showing behind.
         shape = RoundedCornerShape(12.dp),
-        containerColor = PomboColors.Surface7,
+        containerColor = PomboColors.SurfaceRaised,
         border = androidx.compose.foundation.BorderStroke(1.dp, PomboColors.Overlay10),
         modifier = Modifier.width(230.dp)
     ) {
@@ -1455,7 +1455,7 @@ private fun ChannelStoragePanel(vm: AppViewModel, channel: Channel, canModerate:
                 keyboardOptions = androidx.compose.foundation.text.KeyboardOptions(
                     keyboardType = androidx.compose.ui.text.input.KeyboardType.Number
                 ),
-                textStyle = androidx.compose.ui.text.TextStyle(fontSize = 14.sp, color = PomboColors.Text),
+                textStyle = androidx.compose.ui.text.TextStyle(fontSize = 14.sp, color = PomboColors.TextPrimary),
                 cursorBrush = androidx.compose.ui.graphics.SolidColor(PomboColors.Accent),
                 modifier = Modifier.width(96.dp)
                     .background(PomboColors.Overlay5, RoundedCornerShape(8.dp))
@@ -1632,7 +1632,7 @@ private fun ChannelStoragePanel(vm: AppViewModel, channel: Channel, canModerate:
                     },
                     singleLine = true, shape = RoundedCornerShape(12.dp),
                     textStyle = androidx.compose.ui.text.TextStyle(
-                        fontSize = 13.sp, color = PomboColors.Text,
+                        fontSize = 13.sp, color = PomboColors.TextPrimary,
                         fontFamily = androidx.compose.ui.text.font.FontFamily.Monospace
                     ),
                     colors = pomboFieldColors(), modifier = Modifier.fillMaxWidth()
@@ -1684,7 +1684,7 @@ private fun ChannelStoragePanel(vm: AppViewModel, channel: Channel, canModerate:
         androidx.compose.ui.window.Dialog(onDismissRequest = { confirmRemove = null }) {
             Column(
                 Modifier.fillMaxWidth()
-                    .background(PomboColors.Surface7, RoundedCornerShape(20.dp))
+                    .background(PomboColors.SurfaceRaised, RoundedCornerShape(20.dp))
                     .border(1.dp, PomboColors.Overlay8, RoundedCornerShape(20.dp))
                     .padding(20.dp)
             ) {
@@ -2030,7 +2030,7 @@ private fun ChannelModerationPanel(vm: AppViewModel, channel: Channel, canModera
         androidx.compose.ui.window.Dialog(onDismissRequest = { confirmUnban = null }) {
             Column(
                 Modifier.width(320.dp)
-                    .background(PomboColors.Surface6, RoundedCornerShape(16.dp))
+                    .background(PomboColors.Surface, RoundedCornerShape(16.dp))
                     .border(1.dp, PomboColors.Overlay6, RoundedCornerShape(16.dp))
                     .padding(20.dp)
             ) {
@@ -2115,7 +2115,7 @@ private fun ChannelDestroyPanel(vm: AppViewModel, channel: Channel, onDismiss: (
         value = confirmText, onValueChange = { confirmText = it },
         placeholder = { Text(channel.name, color = PomboColors.Overlay20, fontSize = 14.sp) },
         singleLine = true, shape = RoundedCornerShape(12.dp),
-        textStyle = androidx.compose.ui.text.TextStyle(fontSize = 14.sp, color = PomboColors.Text),
+        textStyle = androidx.compose.ui.text.TextStyle(fontSize = 14.sp, color = PomboColors.TextPrimary),
         colors = pomboFieldColors(), modifier = Modifier.fillMaxWidth()
     )
     Spacer(Modifier.height(12.dp))

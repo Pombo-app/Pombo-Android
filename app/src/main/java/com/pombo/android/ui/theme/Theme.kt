@@ -29,37 +29,31 @@ import com.pombo.android.R
  * seamless black field.
  */
 object PomboColors {
-    // components.css:1897,1934,1974,2005,2009,2013 — all `#000000 !important`
-    val Background = Color(0xFF000000)
-    /** Chat header and composer: also true black on mobile, NOT a raised surface. */
-    val Surface = Color(0xFF000000)
-    /** Raised fills (menus, fields) that the mobile block leaves on the dark scale. */
-    val SurfaceHigh = Color(0xFF18181B)
-    // components.css:1978 — mobile overrides structural borders to white 8%.
-    val Border = Color(0xFFFFFFFF).copy(alpha = 0.08f)
+    /** Every full-screen surface is true black, as in the web's mobile viewport. */
+    val Bg = Color(0xFF000000)
+    val BgDesktop = Color(0xFF09090B)
+    val Surface = Color(0xFF111113)
+    val SurfaceRaised = Color(0xFF16161B)
     // Same value as res/values/colors.xml `pombo_accent` and the web's --pombo-accent.
     val Accent = Color(0xFFF6851B)
     val AccentHover = Color(0xFFE5780F)
     val AccentDim = Color(0xFFAC5D13)    // darker tone of the same hue
-    val Text = Color(0xFFE4E4E7)
-    /** Web uses `text-white/40` for every secondary label — zinc-400 was too bright. */
-    val TextDim = Color(0xFFFFFFFF).copy(alpha = 0.40f)
+    val TextPrimary = Color(0xFFE4E4E7)
+    val TextSecondary = Color.White.copy(alpha = 0.40f)
+    val TextTertiary = Color.White.copy(alpha = 0.30f)
     val Danger = Color(0xFFEF4444)
     val Success = Color(0xFF22C55E)
     val Warning = Color(0xFFFBBF24)
     val Info = Color(0xFF60A5FA)
-    val BgDesktop = Color(0xFF09090B)
-    val SurfaceRaised = Color(0xFF16161B)
     val Scrim = Color.Black.copy(alpha = 0.80f)
 
-    // Surface ramp, same names and values as the web's surface-N.
+    // Surface ramp, same names and values as the web's surface-N
+    // (6 and 7 are Surface and SurfaceRaised).
     val Surface1 = Color(0xFF09090B)
     val Surface2 = Color(0xFF0A0A0A)
     val Surface3 = Color(0xFF0B0B0E)
     val Surface4 = Color(0xFF0E0E10)
     val Surface5 = Color(0xFF0F0F12)
-    val Surface6 = Color(0xFF111113)
-    val Surface7 = Color(0xFF16161B)
     val Surface8 = Color(0xFF18181B)
     val Surface9 = Color(0xFF1A1A1A)
     val Surface10 = Color(0xFF1E1E1E)
@@ -141,13 +135,13 @@ private val DarkScheme = darkColorScheme(
     primary = PomboColors.Accent,
     onPrimary = Color.Black,
     secondary = PomboColors.AccentDim,
-    background = PomboColors.Background,
-    onBackground = PomboColors.Text,
-    surface = PomboColors.Surface,
-    onSurface = PomboColors.Text,
-    surfaceVariant = PomboColors.SurfaceHigh,
-    onSurfaceVariant = PomboColors.TextDim,
-    outline = PomboColors.Border,
+    background = PomboColors.Bg,
+    onBackground = PomboColors.TextPrimary,
+    surface = PomboColors.Bg,
+    onSurface = PomboColors.TextPrimary,
+    surfaceVariant = PomboColors.Surface8,
+    onSurfaceVariant = PomboColors.TextSecondary,
+    outline = PomboColors.Overlay8,
     error = PomboColors.Danger
 )
 

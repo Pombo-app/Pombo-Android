@@ -87,7 +87,7 @@ fun WalletSheet(vm: AppViewModel, onDismiss: () -> Unit) {
     ModalBottomSheet(
         onDismissRequest = onDismiss,
         sheetState = sheetState,
-        containerColor = PomboColors.SurfaceHigh,
+        containerColor = PomboColors.Surface8,
         dragHandle = { BottomSheetDefaults.DragHandle(color = PomboColors.Overlay20) }
     ) {
         Row(
@@ -96,7 +96,7 @@ fun WalletSheet(vm: AppViewModel, onDismiss: () -> Unit) {
         ) {
             Text(
                 "Wallet",
-                color = PomboColors.Text, fontSize = 15.sp, fontWeight = FontWeight.SemiBold,
+                color = PomboColors.TextPrimary, fontSize = 15.sp, fontWeight = FontWeight.SemiBold,
                 modifier = Modifier.weight(1f)
             )
             Icon(
@@ -142,7 +142,7 @@ fun WalletSheet(vm: AppViewModel, onDismiss: () -> Unit) {
                     Column(Modifier.weight(1f)) {
                         Text(
                             row.symbol.ifEmpty { "…" },
-                            color = PomboColors.Text, fontSize = 14.sp, fontWeight = FontWeight.Medium,
+                            color = PomboColors.TextPrimary, fontSize = 14.sp, fontWeight = FontWeight.Medium,
                             maxLines = 1, overflow = TextOverflow.Ellipsis
                         )
                         if (row.kind != AppViewModel.WalletRow.Kind.BASE && row.address != null) {
@@ -164,7 +164,7 @@ fun WalletSheet(vm: AppViewModel, onDismiss: () -> Unit) {
                         )
                         else -> Text(
                             row.amount,
-                            color = PomboColors.Text, fontSize = 14.sp
+                            color = PomboColors.TextPrimary, fontSize = 14.sp
                         )
                     }
                     if (row.kind == AppViewModel.WalletRow.Kind.CUSTOM && row.address != null) {
@@ -217,7 +217,7 @@ fun WalletSheet(vm: AppViewModel, onDismiss: () -> Unit) {
                         onValueChange = { tokenInput = it; vm.clearWalletAddError() },
                         singleLine = true,
                         textStyle = TextStyle(
-                            color = PomboColors.Text, fontSize = 12.sp, fontFamily = FontFamily.Monospace
+                            color = PomboColors.TextPrimary, fontSize = 12.sp, fontFamily = FontFamily.Monospace
                         ),
                         cursorBrush = SolidColor(PomboColors.Accent),
                         modifier = Modifier.fillMaxWidth()

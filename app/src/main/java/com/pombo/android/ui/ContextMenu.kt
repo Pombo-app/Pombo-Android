@@ -141,7 +141,7 @@ private fun PomboMenuSurface(content: @Composable ColumnScope.() -> Unit) {
             .width(IntrinsicSize.Max)
             .widthIn(min = 180.dp)
             .shadow(16.dp, RoundedCornerShape(12.dp))
-            .background(PomboColors.Surface7, RoundedCornerShape(12.dp))
+            .background(PomboColors.SurfaceRaised, RoundedCornerShape(12.dp))
             .border(1.dp, PomboColors.Overlay10, RoundedCornerShape(12.dp))
             .padding(vertical = 4.dp),
         content = content

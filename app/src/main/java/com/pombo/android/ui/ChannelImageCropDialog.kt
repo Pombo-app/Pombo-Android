@@ -107,7 +107,7 @@ fun ChannelImageCropDialog(
         Column(
             Modifier
                 .fillMaxWidth()
-                .background(PomboColors.Surface6, RoundedCornerShape(16.dp))
+                .background(PomboColors.Surface, RoundedCornerShape(16.dp))
                 .border(1.dp, PomboColors.Overlay6, RoundedCornerShape(16.dp))
                 .padding(20.dp)
         ) {

@@ -175,7 +175,7 @@ fun ImagePickerSheet(
     ModalBottomSheet(
         onDismissRequest = onDismiss,
         sheetState = sheetState,
-        containerColor = PomboColors.SurfaceHigh,
+        containerColor = PomboColors.Surface8,
         dragHandle = {
             BottomSheetDefaults.DragHandle(color = PomboColors.Overlay20)
         }
@@ -186,7 +186,7 @@ fun ImagePickerSheet(
         ) {
             Text(
                 "Send photo",
-                color = PomboColors.Text, fontSize = 15.sp, fontWeight = FontWeight.SemiBold,
+                color = PomboColors.TextPrimary, fontSize = 15.sp, fontWeight = FontWeight.SemiBold,
                 modifier = Modifier.weight(1f)
             )
             // Only alongside a grid. "Browse" means "look past what is shown
@@ -234,7 +234,7 @@ fun ImagePickerSheet(
             if (photos.isEmpty()) {
                 Text(
                     "No pictures here yet.",
-                    color = PomboColors.TextDim, fontSize = 13.sp,
+                    color = PomboColors.TextSecondary, fontSize = 13.sp,
                     modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp)
                 )
             }
@@ -253,7 +253,7 @@ fun ImagePickerSheet(
                             tint = PomboColors.Overlay55, modifier = Modifier.size(26.dp)
                         )
                         Spacer(Modifier.width(0.dp))
-                        Text("Gallery", color = PomboColors.TextDim, fontSize = 12.sp)
+                        Text("Gallery", color = PomboColors.TextSecondary, fontSize = 12.sp)
                     }
                 }
             }
@@ -262,7 +262,7 @@ fun ImagePickerSheet(
                 Text(
                     if (canAskAgain) "Allow photo access to pick from recent pictures here."
                     else "Photo access is off. Turn it on in Settings to see recent pictures here.",
-                    color = PomboColors.TextDim, fontSize = 13.sp,
+                    color = PomboColors.TextSecondary, fontSize = 13.sp,
                     modifier = Modifier.padding(start = 16.dp, end = 16.dp, top = 12.dp)
                 )
                 Text(
@@ -290,7 +290,7 @@ private fun CameraTile(onClick: () -> Unit, modifier: Modifier = Modifier) {
                 Icons.Outlined.PhotoCamera, contentDescription = "Take photo",
                 tint = PomboColors.Overlay75, modifier = Modifier.size(28.dp)
             )
-            Text("Camera", color = PomboColors.TextDim, fontSize = 12.sp)
+            Text("Camera", color = PomboColors.TextSecondary, fontSize = 12.sp)
         }
     }
 }
@@ -304,7 +304,7 @@ private fun TileFrame(onClick: () -> Unit, content: @Composable () -> Unit) {
             .aspectRatio(1f)
             .clip(RoundedCornerShape(4.dp))
             .background(PomboColors.Overlay6)
-            .border(1.dp, PomboColors.Border, RoundedCornerShape(4.dp))
+            .border(1.dp, PomboColors.Overlay8, RoundedCornerShape(4.dp))
             .clickableNoRipple(onClick),
         contentAlignment = Alignment.Center
     ) {

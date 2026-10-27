@@ -86,7 +86,7 @@ import com.pombo.android.ui.theme.PomboColors
 /** Web #settings-mobile-header: the title alone on the list, Back + title inside a section. */
 @Composable
 private fun SettingsHeader(title: String, onBack: (() -> Unit)? = null) {
-    Column(Modifier.fillMaxWidth().background(PomboColors.Background)) {
+    Column(Modifier.fillMaxWidth().background(PomboColors.Bg)) {
         Row(
             Modifier.fillMaxWidth().height(56.dp)
                 .padding(start = if (onBack != null) 4.dp else 16.dp, end = 16.dp),
@@ -100,7 +100,7 @@ private fun SettingsHeader(title: String, onBack: (() -> Unit)? = null) {
                     )
                 }
             }
-            Text(title, color = PomboColors.Text, fontSize = 17.sp, fontWeight = FontWeight.SemiBold)
+            Text(title, color = PomboColors.TextPrimary, fontSize = 17.sp, fontWeight = FontWeight.SemiBold)
         }
         Box(Modifier.fillMaxWidth().height(1.dp).background(PomboColors.Overlay6))
     }
@@ -617,7 +617,7 @@ private fun NotificationsSection(vm: AppViewModel) {
     SettingsSection {
         Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
             Column(Modifier.weight(1f)) {
-                Text("Push Notifications", color = PomboColors.Text, fontSize = 14.sp, fontWeight = FontWeight.Medium)
+                Text("Push Notifications", color = PomboColors.TextPrimary, fontSize = 14.sp, fontWeight = FontWeight.Medium)
                 Spacer(Modifier.height(2.dp))
                 Text(
                     "Get notified about new messages. Turn on per channel afterwards.",
@@ -880,7 +880,7 @@ private fun DmInboxPanel(vm: AppViewModel) {
                     value = retentionDraft,
                     onValueChange = { v -> retentionDraft = v.filter { it.isDigit() }.take(4) },
                     singleLine = true,
-                    textStyle = androidx.compose.ui.text.TextStyle(fontSize = 14.sp, color = PomboColors.Text),
+                    textStyle = androidx.compose.ui.text.TextStyle(fontSize = 14.sp, color = PomboColors.TextPrimary),
                     cursorBrush = androidx.compose.ui.graphics.SolidColor(PomboColors.Accent),
                     keyboardOptions = androidx.compose.foundation.text.KeyboardOptions(
                         keyboardType = androidx.compose.ui.text.input.KeyboardType.Number
@@ -993,7 +993,7 @@ private fun DmInboxPanel(vm: AppViewModel) {
                             value = customAddr, onValueChange = { customAddr = it },
                             singleLine = true,
                             textStyle = androidx.compose.ui.text.TextStyle(
-                                fontSize = 12.sp, color = PomboColors.Text,
+                                fontSize = 12.sp, color = PomboColors.TextPrimary,
                                 fontFamily = androidx.compose.ui.text.font.FontFamily.Monospace
                             ),
                             cursorBrush = androidx.compose.ui.graphics.SolidColor(PomboColors.Accent),
@@ -1017,7 +1017,7 @@ private fun DmInboxPanel(vm: AppViewModel) {
                             value = daysDraft,
                             onValueChange = { v -> daysDraft = v.filter { it.isDigit() }.take(4) },
                             singleLine = true,
-                            textStyle = androidx.compose.ui.text.TextStyle(fontSize = 14.sp, color = PomboColors.Text),
+                            textStyle = androidx.compose.ui.text.TextStyle(fontSize = 14.sp, color = PomboColors.TextPrimary),
                             cursorBrush = androidx.compose.ui.graphics.SolidColor(PomboColors.Accent),
                             keyboardOptions = androidx.compose.foundation.text.KeyboardOptions(
                                 keyboardType = androidx.compose.ui.text.input.KeyboardType.Number
@@ -1075,7 +1075,7 @@ private fun ContentToggleRow(
 ) {
     Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
         Column(Modifier.weight(1f)) {
-            Text(title, color = PomboColors.Text, fontSize = 14.sp, fontWeight = FontWeight.Medium)
+            Text(title, color = PomboColors.TextPrimary, fontSize = 14.sp, fontWeight = FontWeight.Medium)
             Spacer(Modifier.height(2.dp))
             Text(
                 hint,
@@ -1115,7 +1115,7 @@ private fun CompactSettingsField(
         value = value,
         onValueChange = onValueChange,
         singleLine = true,
-        textStyle = androidx.compose.ui.text.TextStyle(fontSize = 14.sp, color = PomboColors.Text),
+        textStyle = androidx.compose.ui.text.TextStyle(fontSize = 14.sp, color = PomboColors.TextPrimary),
         cursorBrush = androidx.compose.ui.graphics.SolidColor(PomboColors.Accent),
         keyboardOptions = androidx.compose.foundation.text.KeyboardOptions(
             imeAction = androidx.compose.ui.text.input.ImeAction.Done
@@ -1434,7 +1434,7 @@ private fun RpcEndpointRow(
             Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
                 Text(
                     name,
-                    color = if (checked) PomboColors.Text else PomboColors.Overlay50,
+                    color = if (checked) PomboColors.TextPrimary else PomboColors.Overlay50,
                     fontSize = 13.sp
                 )
                 Spacer(Modifier.width(6.dp))
@@ -1685,7 +1685,7 @@ private fun PrivacyPanel(vm: AppViewModel) {
                     Avatar(addr, size = 34.dp, cornerRadiusFraction = 0.5)
                     Spacer(Modifier.width(10.dp))
                     Text(
-                        shortAddress(addr), color = PomboColors.Text, fontSize = 13.sp,
+                        shortAddress(addr), color = PomboColors.TextPrimary, fontSize = 13.sp,
                         fontFamily = androidx.compose.ui.text.font.FontFamily.Monospace,
                         modifier = Modifier.weight(1f)
                     )
@@ -1794,14 +1794,14 @@ private fun SettingsSection(title: String? = null, content: @Composable () -> Un
     Column(
         Modifier
             .fillMaxWidth()
-            .background(PomboColors.Surface, RoundedCornerShape(12.dp))
-            .border(1.dp, PomboColors.Border, RoundedCornerShape(12.dp))
+            .background(PomboColors.Bg, RoundedCornerShape(12.dp))
+            .border(1.dp, PomboColors.Overlay8, RoundedCornerShape(12.dp))
             .padding(16.dp)
     ) {
         // The panel's name already sits in the header, so most cards pass no
         // title — repeating the word directly under it reads as an echo.
         if (title != null) {
-            Text(title, color = PomboColors.Text, fontSize = 14.sp, fontWeight = FontWeight.SemiBold)
+            Text(title, color = PomboColors.TextPrimary, fontSize = 14.sp, fontWeight = FontWeight.SemiBold)
             Spacer(Modifier.height(12.dp))
         }
         content()

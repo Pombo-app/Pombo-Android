@@ -138,13 +138,13 @@ private fun ImageBubbleContent(msg: UiMessage, onOpen: (() -> Unit)? = null) {
         Box(
             Modifier
                 .size(200.dp, 140.dp)
-                .background(PomboColors.Background, RoundedCornerShape(8.dp)),
+                .background(PomboColors.Bg, RoundedCornerShape(8.dp)),
             contentAlignment = Alignment.Center
         ) {
             Column(horizontalAlignment = Alignment.CenterHorizontally) {
                 CircularProgressIndicator(color = PomboColors.Accent, strokeWidth = 2.dp, modifier = Modifier.size(22.dp))
                 Spacer(Modifier.height(6.dp))
-                Text("Receiving image…", color = PomboColors.TextDim, fontSize = 11.sp)
+                Text("Receiving image…", color = PomboColors.TextSecondary, fontSize = 11.sp)
             }
         }
     }
@@ -963,7 +963,7 @@ private fun MessageBubble(
                                 (if (msg.edited) " · edited" else "") +
                                 (if (msg.pending) " · sending…" else "") +
                                 (if (msg.failed) (if (msg.undelivered) " · Not delivered" else " · Not sent") else ""),
-                            color = if (msg.failed) PomboColors.Danger else PomboColors.TextDim,
+                            color = if (msg.failed) PomboColors.Danger else PomboColors.TextSecondary,
                             // Web `.message-time` is `text-xs` = 12px.
                             fontSize = 12.sp,
                             modifier = Modifier.align(Alignment.CenterVertically)
@@ -1105,7 +1105,7 @@ private fun MessageBubble(
                     expanded = picker,
                     onDismissRequest = { picker = false },
                     modifier = Modifier
-                        .background(PomboColors.Surface7)
+                        .background(PomboColors.SurfaceRaised)
                         .width(240.dp)
                 ) {
                     androidx.compose.foundation.layout.FlowRow(
@@ -1148,7 +1148,7 @@ private fun MessageBubble(
         androidx.compose.ui.window.Dialog(onDismissRequest = { confirmDelete = false }) {
             Column(
                 Modifier.fillMaxWidth()
-                    .background(PomboColors.Surface7, RoundedCornerShape(20.dp))
+                    .background(PomboColors.SurfaceRaised, RoundedCornerShape(20.dp))
                     .border(1.dp, PomboColors.Overlay8, RoundedCornerShape(20.dp))
                     .padding(20.dp)
             ) {
@@ -1191,7 +1191,7 @@ private fun MessageBubble(
         androidx.compose.ui.window.Dialog(onDismissRequest = { confirmErase = false }) {
             Column(
                 Modifier.fillMaxWidth()
-                    .background(PomboColors.Surface7, RoundedCornerShape(20.dp))
+                    .background(PomboColors.SurfaceRaised, RoundedCornerShape(20.dp))
                     .border(1.dp, PomboColors.Overlay8, RoundedCornerShape(20.dp))
                     .padding(20.dp)
             ) {
@@ -1231,7 +1231,7 @@ private fun MessageBubble(
         androidx.compose.ui.window.Dialog(onDismissRequest = { confirmBlock = false }) {
             Column(
                 Modifier.fillMaxWidth()
-                    .background(PomboColors.Surface7, RoundedCornerShape(20.dp))
+                    .background(PomboColors.SurfaceRaised, RoundedCornerShape(20.dp))
                     .border(1.dp, PomboColors.Overlay8, RoundedCornerShape(20.dp))
                     .padding(20.dp)
             ) {

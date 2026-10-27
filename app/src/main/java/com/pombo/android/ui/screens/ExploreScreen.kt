@@ -607,7 +607,7 @@ private fun ExploreChips(
         val active = cat == category && !privateOnly
         Text(
             cat,
-            color = if (active) PomboColors.Background else PomboColors.Overlay60,
+            color = if (active) PomboColors.Bg else PomboColors.Overlay60,
             fontSize = 12.sp,
             fontWeight = FontWeight.Medium,
             modifier = Modifier
@@ -630,13 +630,13 @@ private fun ExploreChips(
     ) {
         Icon(
             Icons.Filled.Lock, contentDescription = null,
-            tint = if (privateOnly) PomboColors.Background else PomboColors.Overlay60,
+            tint = if (privateOnly) PomboColors.Bg else PomboColors.Overlay60,
             modifier = Modifier.size(11.dp)
         )
         Spacer(Modifier.width(4.dp))
         Text(
             "Private",
-            color = if (privateOnly) PomboColors.Background else PomboColors.Overlay60,
+            color = if (privateOnly) PomboColors.Bg else PomboColors.Overlay60,
             fontSize = 12.sp, fontWeight = FontWeight.Medium
         )
     }

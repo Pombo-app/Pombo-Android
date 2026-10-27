@@ -37,7 +37,7 @@ import com.pombo.android.ui.theme.PomboColors
  * the invite toast (`.toast.invite`).
  */
 
-private val CardBg = PomboColors.Surface6
+private val CardBg = PomboColors.Surface
 private val ReadonlyBg = PomboColors.Surface1
 private val InviteCyan = Color(0xFF22D3EE)
 private val AmberBg = Color(0x1AF59E0B)      // amber-500/10
@@ -361,7 +361,7 @@ fun InviteToastCard(
 
     Box(
         Modifier.fillMaxWidth()
-            .background(PomboColors.Surface7, RoundedCornerShape(12.dp))
+            .background(PomboColors.SurfaceRaised, RoundedCornerShape(12.dp))
             .border(1.dp, Color(0x4D06B6D4), RoundedCornerShape(12.dp))  // cyan-500/30
     ) {
         Row(Modifier.padding(horizontal = 16.dp, vertical = 14.dp)) {
