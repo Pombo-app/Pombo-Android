@@ -5,6 +5,7 @@ import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.requiredSize
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
@@ -42,6 +43,8 @@ import androidx.compose.material.icons.outlined.Person
 import androidx.compose.material.icons.outlined.MailOutline
 import androidx.compose.material.icons.outlined.Close
 import androidx.compose.material.icons.outlined.Notifications
+import androidx.compose.material.icons.outlined.People
+import androidx.compose.material.icons.outlined.SwapVert
 import androidx.compose.material.icons.outlined.Storage
 import androidx.compose.ui.draw.clip
 import androidx.compose.material3.Icon
@@ -97,7 +100,7 @@ private fun mergeOrder(global: List<String>, slice: List<String>): List<String> 
 }
 
 @Composable
-internal fun ChatsTab(vm: AppViewModel, onCreate: () -> Unit, onJoin: () -> Unit, onConnect: () -> Unit = {}) {
+internal fun ChatsTab(vm: AppViewModel, onContacts: () -> Unit, onConnect: () -> Unit = {}) {
     val status by vm.status.collectAsState()
     val channels by vm.channels.collectAsState()
     val busy by vm.busy.collectAsState()
@@ -136,9 +139,29 @@ internal fun ChatsTab(vm: AppViewModel, onCreate: () -> Unit, onJoin: () -> Unit
                 CreateAccountButton(onConnect)
             } else {
                 Row(verticalAlignment = Alignment.CenterVertically) {
-                    // Join by stream ID. Creating a channel lives in Explore.
-                    HeaderIconButton(34.dp, onJoin) {
-                        Text("#", color = PomboColors.Text, fontSize = 22.sp, fontWeight = FontWeight.Bold)
+                    HeaderIconButton(34.dp, onContacts) {
+                        Icon(
+                            Icons.Outlined.People, contentDescription = "Contacts",
+                            tint = PomboColors.Text, modifier = Modifier.size(24.dp)
+                        )
+                    }
+                    Spacer(Modifier.width(8.dp))
+                    var transfersOpen by remember { mutableStateOf(false) }
+                    Box {
+                        TransfersButton(vm) { transfersOpen = true }
+                        androidx.compose.material3.DropdownMenu(
+                            expanded = transfersOpen,
+                            onDismissRequest = { transfersOpen = false },
+                            offset = androidx.compose.ui.unit.DpOffset(TRANSFERS_MENU_OFFSET, 0.dp),
+                            shape = RoundedCornerShape(12.dp),
+                            containerColor = Color(0xFF16161B),
+                            border = androidx.compose.foundation.BorderStroke(1.dp, Color.White.copy(alpha = 0.10f)),
+                            // FIXED width: transfer stats redraw every second and a
+                            // wrap-content menu visibly breathes with each repaint.
+                            modifier = Modifier.width(320.dp)
+                        ) {
+                            ActiveTransfersSection(vm, channels)
+                        }
                     }
                     Spacer(Modifier.width(8.dp))
                     // Bell: recent channel invites. Android addition — on the
@@ -157,43 +180,16 @@ internal fun ChatsTab(vm: AppViewModel, onCreate: () -> Unit, onJoin: () -> Unit
                                 tint = PomboColors.Text, modifier = Modifier.size(24.dp)
                             )
                         }
-                        if (invites.isNotEmpty()) {
-                            Box(
-                                Modifier.align(Alignment.TopEnd)
-                                    .size(16.dp)
-                                    .background(PomboColors.Accent, CircleShape),
-                                contentAlignment = Alignment.Center
-                            ) {
-                                Text(
-                                    if (invites.size > 9) "9+" else invites.size.toString(),
-                                    color = Color.White, fontSize = 8.sp, fontWeight = FontWeight.Bold,
-                                    lineHeight = 8.sp,
-                                    textAlign = androidx.compose.ui.text.style.TextAlign.Center,
-                                    // Default line-height metrics push single-digit
-                                    // text a couple px low in a circle this tight —
-                                    // the classic Compose includeFontPadding offset.
-                                    style = androidx.compose.ui.text.TextStyle(
-                                        platformStyle = androidx.compose.ui.text.PlatformTextStyle(includeFontPadding = false)
-                                    )
-                                )
-                            }
-                        }
+                        if (invites.isNotEmpty()) HeaderBadge(invites.size, Modifier.align(Alignment.TopEnd))
                         androidx.compose.material3.DropdownMenu(
                             expanded = invitesOpen,
                             onDismissRequest = { invitesOpen = false },
-                            // End-aligned to the bell, the right edge stops 40dp
-                            // short of the screen's (8dp spacer + 32dp join
-                            // button) — at this width that reads as floating
-                            // mid-screen. The offset walks it to the margin.
-                            offset = androidx.compose.ui.unit.DpOffset(40.dp, 0.dp),
                             // Shape/color/border belong on the menu's own surface:
                             // a rounded background on the content leaves the
                             // surface's square corners showing behind it.
                             shape = RoundedCornerShape(12.dp),
                             containerColor = Color(0xFF16161B),
                             border = androidx.compose.foundation.BorderStroke(1.dp, Color.White.copy(alpha = 0.10f)),
-                            // FIXED width: transfer stats redraw every second and a
-                            // wrap-content menu visibly breathes with each repaint.
                             modifier = Modifier.width(320.dp)
                         ) {
                             ChannelInvitesSection(
@@ -204,7 +200,6 @@ internal fun ChatsTab(vm: AppViewModel, onCreate: () -> Unit, onJoin: () -> Unit
                                 onShowAll = { showAllInvites = it },
                                 onAccepted = { invitesOpen = false }
                             )
-                            ActiveTransfersSection(vm, channels)
                         }
                     }
                 }
@@ -410,6 +405,82 @@ internal fun ChatsTab(vm: AppViewModel, onCreate: () -> Unit, onJoin: () -> Unit
     }
 }
 
+/** End-aligns the transfers menu with the bell's, at the header margin: the bell plus its spacer. */
+private val TRANSFERS_MENU_OFFSET = 42.dp
+
+/**
+ * Header entry to the transfers: the count is downloads plus seeds, and a ring
+ * fills with the combined progress while anything downloads (web
+ * NotificationBellUI._transfersActivity).
+ */
+@Composable
+private fun TransfersButton(vm: AppViewModel, onClick: () -> Unit) {
+    val transferProgress by vm.fileProgress.collectAsState()
+    val activeSeeds by vm.activeSeeds.collectAsState()
+    val storageDownloads by vm.storageDownloads.collectAsState()
+    val mesh = transferProgress.values.filter { !it.done && it.failure == null }
+    val storage = storageDownloads.values.filter { it.status == "downloading" || it.status == "paused" }
+    val downloads = mesh.size + storage.size
+    val count = downloads + activeSeeds.size
+    var totalBytes = 0.0
+    var receivedBytes = 0.0
+    mesh.forEach { totalBytes += it.total; receivedBytes += it.received }
+    storage.forEach {
+        totalBytes += it.fileSize
+        if (it.total > 0) receivedBytes += it.received.toDouble() / it.total * it.fileSize
+    }
+    val fraction = if (totalBytes > 0) (receivedBytes / totalBytes).toFloat().coerceIn(0f, 1f) else 0f
+
+    Box {
+        HeaderIconButton(34.dp, onClick) {
+            if (downloads > 0) {
+                androidx.compose.foundation.Canvas(Modifier.requiredSize(36.dp)) {
+                    val stroke = 2.dp.toPx()
+                    val inset = stroke / 2
+                    val arcSize = androidx.compose.ui.geometry.Size(size.width - stroke, size.height - stroke)
+                    val topLeft = androidx.compose.ui.geometry.Offset(inset, inset)
+                    drawArc(
+                        Color.White.copy(alpha = 0.10f), 0f, 360f, false, topLeft, arcSize,
+                        style = androidx.compose.ui.graphics.drawscope.Stroke(stroke)
+                    )
+                    drawArc(
+                        PomboColors.Accent, -90f, 360f * fraction, false, topLeft, arcSize,
+                        style = androidx.compose.ui.graphics.drawscope.Stroke(
+                            stroke, cap = androidx.compose.ui.graphics.StrokeCap.Round
+                        )
+                    )
+                }
+            }
+            Icon(
+                Icons.Outlined.SwapVert, contentDescription = "Transfers",
+                tint = PomboColors.Text, modifier = Modifier.size(24.dp)
+            )
+        }
+        if (count > 0) HeaderBadge(count, Modifier.align(Alignment.TopEnd))
+    }
+}
+
+/** Orange count on a header icon, as on the bell. */
+@Composable
+private fun HeaderBadge(count: Int, modifier: Modifier = Modifier) {
+    Box(
+        modifier.size(16.dp).background(PomboColors.Accent, CircleShape),
+        contentAlignment = Alignment.Center
+    ) {
+        Text(
+            if (count > 9) "9+" else count.toString(),
+            color = Color.White, fontSize = 8.sp, fontWeight = FontWeight.Bold,
+            lineHeight = 8.sp,
+            textAlign = androidx.compose.ui.text.style.TextAlign.Center,
+            // Default line-height metrics push single-digit text a couple px
+            // low in a circle this tight: the classic includeFontPadding offset.
+            style = androidx.compose.ui.text.TextStyle(
+                platformStyle = androidx.compose.ui.text.PlatformTextStyle(includeFontPadding = false)
+            )
+        )
+    }
+}
+
 /**
  * Every download in flight and every file this device is serving, with a way
  * out. Sits under the invites in the same dropdown; the two share nothing but
@@ -427,10 +498,6 @@ private fun ActiveTransfersSection(vm: AppViewModel, channels: List<Channel>) {
         .filter { !it.done && it.failure == null }
     val activeStorageUp = storageUploads.values.filter { it.stage != "done" && it.error == null }
     val activeStorageDown = storageDownloads.values.filter { it.status == "downloading" || it.status == "paused" }
-    androidx.compose.material3.HorizontalDivider(
-        color = Color.White.copy(alpha = 0.08f),
-        modifier = Modifier.padding(vertical = 4.dp)
-    )
     // Inactive = complete on disk but not served (user-stopped,
     // or the channel was not opened this session). Recomputed
     // off activeSeeds plus a manual bump: deleting an INACTIVE
@@ -463,7 +530,7 @@ private fun ActiveTransfersSection(vm: AppViewModel, channels: List<Channel>) {
         inactiveSeeds.isEmpty()
     ) {
         Text(
-            "No active transfers",
+            if (showInactiveSeeds) "No transfers" else "No active transfers",
             color = Color.White.copy(alpha = 0.40f), fontSize = 13.sp,
             modifier = Modifier.padding(horizontal = 14.dp)
                 .padding(bottom = 12.dp)
