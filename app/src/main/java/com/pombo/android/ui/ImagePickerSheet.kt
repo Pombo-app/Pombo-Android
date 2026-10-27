@@ -177,7 +177,7 @@ fun ImagePickerSheet(
         sheetState = sheetState,
         containerColor = PomboColors.SurfaceHigh,
         dragHandle = {
-            BottomSheetDefaults.DragHandle(color = Color.White.copy(alpha = 0.20f))
+            BottomSheetDefaults.DragHandle(color = PomboColors.Overlay20)
         }
     ) {
         Row(
@@ -250,7 +250,7 @@ fun ImagePickerSheet(
                     TileFrame(onClick = ::browse) {
                         Icon(
                             Icons.Outlined.PhotoLibrary, contentDescription = null,
-                            tint = Color.White.copy(alpha = 0.55f), modifier = Modifier.size(26.dp)
+                            tint = PomboColors.Overlay55, modifier = Modifier.size(26.dp)
                         )
                         Spacer(Modifier.width(0.dp))
                         Text("Gallery", color = PomboColors.TextDim, fontSize = 12.sp)
@@ -288,7 +288,7 @@ private fun CameraTile(onClick: () -> Unit, modifier: Modifier = Modifier) {
         TileFrame(onClick = onClick) {
             Icon(
                 Icons.Outlined.PhotoCamera, contentDescription = "Take photo",
-                tint = Color.White.copy(alpha = 0.75f), modifier = Modifier.size(28.dp)
+                tint = PomboColors.Overlay75, modifier = Modifier.size(28.dp)
             )
             Text("Camera", color = PomboColors.TextDim, fontSize = 12.sp)
         }
@@ -303,7 +303,7 @@ private fun TileFrame(onClick: () -> Unit, content: @Composable () -> Unit) {
             .fillMaxWidth()
             .aspectRatio(1f)
             .clip(RoundedCornerShape(4.dp))
-            .background(Color.White.copy(alpha = 0.06f))
+            .background(PomboColors.Overlay6)
             .border(1.dp, PomboColors.Border, RoundedCornerShape(4.dp))
             .clickableNoRipple(onClick),
         contentAlignment = Alignment.Center
@@ -328,7 +328,7 @@ private fun PhotoTile(uri: Uri, onClick: () -> Unit) {
             .fillMaxWidth()
             .aspectRatio(1f)
             .clip(RoundedCornerShape(4.dp))
-            .background(Color.White.copy(alpha = 0.04f))
+            .background(PomboColors.Overlay4)
             .clickableNoRipple(onClick)
     )
 }

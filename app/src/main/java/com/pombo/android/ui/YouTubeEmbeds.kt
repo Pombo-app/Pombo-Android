@@ -29,6 +29,7 @@ import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.viewinterop.AndroidView
 import coil.compose.AsyncImage
+import com.pombo.android.ui.theme.PomboColors
 
 /**
  * Inline players for YouTube links in messages, mirroring the web's
@@ -76,7 +77,7 @@ fun YouTubeEmbed(videoId: String) {
                 Modifier
                     .fillMaxSize()
                     .clip(RoundedCornerShape(12.dp))
-                    .background(Color(0xFF09090B))
+                    .background(PomboColors.Surface1)
             ) {
             AsyncImage(
                 model = "https://i.ytimg.com/vi/$videoId/hqdefault.jpg",

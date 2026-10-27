@@ -253,9 +253,9 @@ private fun PillNav(
     val pillShape = RoundedCornerShape(32.dp)
     Row(
         modifier
-            .background(Color(0xFF0E0E10).copy(alpha = 0.88f), pillShape)
-            .background(Color.White.copy(alpha = 0.06f), pillShape)
-            .border(1.dp, Color.White.copy(alpha = 0.08f), pillShape)
+            .background(PomboColors.Surface4.copy(alpha = 0.88f), pillShape)
+            .background(PomboColors.Overlay6, pillShape)
+            .border(1.dp, PomboColors.Overlay8, pillShape)
             .padding(horizontal = 8.dp, vertical = 6.dp),
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.spacedBy(4.dp)
@@ -271,7 +271,7 @@ private fun PillNav(
                         .padding(4.dp)
                         .size(38.dp)
                         .background(Color.White.copy(alpha = if (active) 0.14f else 0.08f), CircleShape)
-                        .border(1.5.dp, if (active) PomboColors.Accent else Color.White.copy(alpha = 0.12f), CircleShape)
+                        .border(1.5.dp, if (active) PomboColors.Accent else PomboColors.Overlay12, CircleShape)
                         .clickableNoRipple { onSelect(t) },
                     contentAlignment = Alignment.Center
                 ) {
@@ -280,7 +280,7 @@ private fun PillNav(
                         address, size = 34.dp, cornerRadiusFraction = 0.5,
                         ensAvatarUrl = ensAvatarUrl
                     )
-                    else Icon(t.icon, contentDescription = t.label, tint = Color.White.copy(alpha = 0.5f), modifier = Modifier.size(20.dp))
+                    else Icon(t.icon, contentDescription = t.label, tint = PomboColors.Overlay50, modifier = Modifier.size(20.dp))
                 }
             } else {
                 PillItem(t.label, t.icon, active = current == t) { onSelect(t) }
@@ -310,12 +310,12 @@ private fun PillItem(
         // rather than recoloured.
         Icon(
             icon, contentDescription = label,
-            tint = Color.White.copy(alpha = 0.8f),
+            tint = PomboColors.Overlay80,
             modifier = Modifier.size(24.dp)
         )
         Text(
             label,
-            color = Color.White.copy(alpha = 0.8f),
+            color = PomboColors.Overlay80,
             fontSize = 10.sp,
             fontWeight = FontWeight.Medium
         )
@@ -449,7 +449,7 @@ private fun ProfileTab(vm: AppViewModel, onAddAccount: () -> Unit) {
         // Accounts (multi-wallet switching). Also shown to a guest with a single
         // stored account — otherwise "Browse as guest" would be a one-way door.
         if (accounts.size > 1 || (isGuest && accounts.isNotEmpty())) {
-            Text("ACCOUNTS", color = Color.White.copy(alpha = 0.30f), fontSize = 11.sp, fontWeight = FontWeight.SemiBold,
+            Text("ACCOUNTS", color = PomboColors.Overlay30, fontSize = 11.sp, fontWeight = FontWeight.SemiBold,
                 letterSpacing = 0.15.em, modifier = Modifier.fillMaxWidth().padding(bottom = 6.dp))
             // Switching identity re-authenticates (M-I2 — the web asks for the
             // keystore password on every unlock/switch; the device credential
@@ -598,7 +598,7 @@ internal fun HeaderIconButton(
     val pressed by interaction.collectIsPressedAsState()
     Box(
         Modifier.size(size)
-            .drawBehind { if (pressed) drawCircle(Color.White.copy(alpha = 0.12f), radius = 24.dp.toPx()) }
+            .drawBehind { if (pressed) drawCircle(PomboColors.Overlay12, radius = 24.dp.toPx()) }
             .clickable(interactionSource = interaction, indication = null, onClick = onClick),
         contentAlignment = Alignment.Center,
         content = content

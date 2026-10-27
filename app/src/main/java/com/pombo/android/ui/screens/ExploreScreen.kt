@@ -109,8 +109,8 @@ internal fun ExploreTab(vm: AppViewModel, onCreate: () -> Unit, onJoin: () -> Un
                 Box(
                     Modifier
                         .height(28.dp)
-                        .background(Color.White.copy(alpha = 0.05f), RoundedCornerShape(12.dp))
-                        .border(1.dp, Color.White.copy(alpha = 0.08f), RoundedCornerShape(12.dp))
+                        .background(PomboColors.Overlay5, RoundedCornerShape(12.dp))
+                        .border(1.dp, PomboColors.Overlay8, RoundedCornerShape(12.dp))
                         .clickableNoRipple(onJoin)
                         .padding(horizontal = 16.dp),
                     contentAlignment = Alignment.Center
@@ -188,13 +188,13 @@ internal fun ExploreTab(vm: AppViewModel, onCreate: () -> Unit, onJoin: () -> Un
             Row(verticalAlignment = Alignment.CenterVertically) {
                 listOf("open" to "Open", "gated" to "Gated", "paid" to "Paid").forEachIndexed { i, (value, label) ->
                     if (i > 0) Text(
-                        "|", color = Color.White.copy(alpha = 0.15f), fontSize = 14.sp,
+                        "|", color = PomboColors.Overlay15, fontSize = 14.sp,
                         modifier = Modifier.padding(horizontal = 4.dp)
                     )
                     val active = accessFilter == value
                     Text(
                         label,
-                        color = if (active) Color.Black else Color.White.copy(alpha = 0.50f),
+                        color = if (active) Color.Black else PomboColors.Overlay50,
                         fontSize = 14.sp,
                         fontWeight = if (active) FontWeight.Medium else FontWeight.Normal,
                         modifier = Modifier
@@ -223,7 +223,7 @@ internal fun ExploreTab(vm: AppViewModel, onCreate: () -> Unit, onJoin: () -> Un
                 if (searchExpanded) {
                     Row(
                         Modifier.fillMaxWidth()
-                            .background(Color.White.copy(alpha = 0.06f), RoundedCornerShape(11.dp))
+                            .background(PomboColors.Overlay6, RoundedCornerShape(11.dp))
                             .border(1.dp, PomboColors.Accent.copy(alpha = 0.4f), RoundedCornerShape(11.dp))
                             .padding(horizontal = 12.dp),
                         verticalAlignment = Alignment.CenterVertically
@@ -244,14 +244,14 @@ internal fun ExploreTab(vm: AppViewModel, onCreate: () -> Unit, onJoin: () -> Un
                             decorationBox = { inner ->
                                 if (query.isEmpty()) Text(
                                     "Search",
-                                    color = Color.White.copy(alpha = 0.30f), fontSize = 14.sp
+                                    color = PomboColors.Overlay30, fontSize = 14.sp
                                 )
                                 inner()
                             }
                         )
                         Icon(
                             Icons.Filled.Close, contentDescription = "Close search",
-                            tint = Color.White.copy(alpha = 0.40f),
+                            tint = PomboColors.Overlay40,
                             modifier = Modifier.size(16.dp).clickableNoRipple { searchExpanded = false; query = "" }
                         )
                     }
@@ -259,7 +259,7 @@ internal fun ExploreTab(vm: AppViewModel, onCreate: () -> Unit, onJoin: () -> Un
                     HeaderIconButton(38.dp, { searchExpanded = true }) {
                         Icon(
                             Icons.Outlined.Search, contentDescription = "Search channels",
-                            tint = Color.White.copy(alpha = 0.5f), modifier = Modifier.size(24.dp)
+                            tint = PomboColors.Overlay50, modifier = Modifier.size(24.dp)
                         )
                     }
                 }
@@ -292,7 +292,7 @@ internal fun ExploreTab(vm: AppViewModel, onCreate: () -> Unit, onJoin: () -> Un
             Icon(
                 Icons.Filled.KeyboardArrowDown,
                 contentDescription = if (categoriesExpanded) "Collapse filters" else "Show all filters",
-                tint = Color.White.copy(alpha = 0.40f),
+                tint = PomboColors.Overlay40,
                 modifier = Modifier
                     .size(18.dp)
                     .rotate(if (categoriesExpanded) 180f else 0f)
@@ -310,16 +310,16 @@ internal fun ExploreTab(vm: AppViewModel, onCreate: () -> Unit, onJoin: () -> Un
                     horizontalAlignment = Alignment.CenterHorizontally
                 ) {
                     androidx.compose.material3.CircularProgressIndicator(
-                        color = Color.White.copy(alpha = 0.40f), strokeWidth = 2.dp,
+                        color = PomboColors.Overlay40, strokeWidth = 2.dp,
                         modifier = Modifier.size(28.dp)
                     )
                     Spacer(Modifier.height(12.dp))
-                    Text("Loading channels...", color = Color.White.copy(alpha = 0.40f), fontSize = 14.sp)
+                    Text("Loading channels...", color = PomboColors.Overlay40, fontSize = 14.sp)
                 }
             }
             shownExplore.isEmpty() -> item {
                 Box(Modifier.fillMaxWidth().padding(vertical = 48.dp), contentAlignment = Alignment.Center) {
-                    Text("No channels found", color = Color.White.copy(alpha = 0.40f), fontSize = 14.sp)
+                    Text("No channels found", color = PomboColors.Overlay40, fontSize = 14.sp)
                 }
             }
             else -> items(shownExplore, key = { it.messageStreamId }) { ch ->
@@ -389,21 +389,21 @@ private fun ExploreLanguageFilter(selected: String, onPick: (String) -> Unit) {
         HeaderIconButton(38.dp, { open = true }) {
             Icon(
                 Icons.Outlined.Public, contentDescription = "Language filter",
-                tint = if (active) PomboColors.Accent else Color.White.copy(alpha = 0.5f),
+                tint = if (active) PomboColors.Accent else PomboColors.Overlay50,
                 modifier = Modifier.size(24.dp)
             )
         }
         androidx.compose.material3.DropdownMenu(
             expanded = open,
             onDismissRequest = { open = false },
-            modifier = Modifier.background(Color(0xFF1E1E1E))
+            modifier = Modifier.background(PomboColors.Surface10)
         ) {
             options.forEach { (value, label) ->
                 androidx.compose.material3.DropdownMenuItem(
                     text = {
                         Text(
                             label,
-                            color = if (value == selected) Color.White else Color.White.copy(alpha = 0.70f),
+                            color = if (value == selected) Color.White else PomboColors.Overlay70,
                             fontSize = 14.sp
                         )
                     },
@@ -436,7 +436,7 @@ private fun ExploreCard(
     // background (user call, 2026-08-18).
     Column(
         Modifier.fillMaxWidth()
-            .background(Color.White.copy(alpha = 0.05f), RoundedCornerShape(16.dp))
+            .background(PomboColors.Overlay5, RoundedCornerShape(16.dp))
             .border(1.dp, Color.White.copy(alpha = 0.07f), RoundedCornerShape(16.dp))
             .clickableNoRipple(onOpen)
             .padding(16.dp)
@@ -457,11 +457,11 @@ private fun ExploreCard(
                     modifier = Modifier.size(56.dp).clip(CircleShape)
                 )
                 imagePending -> Box(
-                    Modifier.size(56.dp).clip(CircleShape).background(Color.White.copy(alpha = 0.04f)),
+                    Modifier.size(56.dp).clip(CircleShape).background(PomboColors.Overlay4),
                     contentAlignment = Alignment.Center
                 ) {
                     androidx.compose.material3.CircularProgressIndicator(
-                        color = Color.White.copy(alpha = 0.40f), strokeWidth = 2.dp,
+                        color = PomboColors.Overlay40, strokeWidth = 2.dp,
                         modifier = Modifier.size(20.dp)
                     )
                 }
@@ -476,13 +476,13 @@ private fun ExploreCard(
                     if (ch.readOnly) {
                         Icon(
                             Icons.Outlined.Campaign, contentDescription = "Read-only",
-                            tint = Color.White.copy(alpha = 0.60f),
+                            tint = PomboColors.Overlay60,
                             modifier = Modifier.size(18.dp)
                         )
                         Spacer(Modifier.width(8.dp))
                     }
                     Text(
-                        ch.name, color = Color.White.copy(alpha = 0.90f), fontSize = 16.exp,
+                        ch.name, color = PomboColors.Overlay90, fontSize = 16.exp,
                         fontWeight = FontWeight.SemiBold, maxLines = 1
                     )
                 }
@@ -490,7 +490,7 @@ private fun ExploreCard(
                     // `text-base text-white/40 mt-1 line-clamp-2`
                     Spacer(Modifier.height(4.dp))
                     Text(
-                        collapseWhitespace(ch.description), color = Color.White.copy(alpha = 0.40f),
+                        collapseWhitespace(ch.description), color = PomboColors.Overlay40,
                         fontSize = 16.exp, lineHeight = 21.exp, maxLines = 2,
                         overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis
                     )
@@ -503,7 +503,7 @@ private fun ExploreCard(
                         ?.let { ensNames[it.lowercase()] }
                     Text(
                         "${ensLabel ?: ch.lastSender}: ${collapseWhitespace(ch.lastText)}",
-                        color = Color.White.copy(alpha = 0.50f), fontSize = 14.exp,
+                        color = PomboColors.Overlay50, fontSize = 14.exp,
                         lineHeight = 18.exp, maxLines = 3,
                         overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis,
                         modifier = Modifier.padding(start = 12.dp)
@@ -534,19 +534,19 @@ private fun ExploreCard(
                         Text(
                             verb.uppercase(),
                             color = if (ch.gateMode == 3) PomboColors.Accent.copy(alpha = 0.70f)
-                                else Color.White.copy(alpha = 0.40f),
+                                else PomboColors.Overlay40,
                             fontSize = 10.exp, fontWeight = FontWeight.Medium, letterSpacing = 1.sp
                         )
                         Spacer(Modifier.height(2.dp))
                         Text(
                             ch.gateValue ?: "",
-                            color = Color.White.copy(alpha = 0.90f),
+                            color = PomboColors.Overlay90,
                             fontSize = 15.exp, fontWeight = FontWeight.SemiBold
                         )
                         Spacer(Modifier.height(2.dp))
                         Text(
                             ch.gateQualifier ?: "",
-                            color = Color.White.copy(alpha = 0.40f), fontSize = 11.exp
+                            color = PomboColors.Overlay40, fontSize = 11.exp
                         )
                     }
                 }
@@ -562,10 +562,10 @@ private fun ExploreCard(
                         val tagText: @Composable (String) -> Unit = { t ->
                             Text(
                                 t,
-                                color = Color.White.copy(alpha = 0.50f), fontSize = 11.exp,
+                                color = PomboColors.Overlay50, fontSize = 11.exp,
                                 fontWeight = FontWeight.Medium,
                                 modifier = Modifier
-                                    .background(Color.White.copy(alpha = 0.05f), RoundedCornerShape(4.dp))
+                                    .background(PomboColors.Overlay5, RoundedCornerShape(4.dp))
                                     .padding(horizontal = 6.dp, vertical = 4.dp)
                             )
                         }
@@ -576,7 +576,7 @@ private fun ExploreCard(
                                     if (mode == "sealed") Icons.Outlined.People else Icons.Outlined.Public,
                                     contentDescription = if (mode == "sealed")
                                         "Sealed — authors readable by members only" else "Visible — every message signed by its author",
-                                    tint = Color.White.copy(alpha = 0.50f),
+                                    tint = PomboColors.Overlay50,
                                     modifier = Modifier.size(16.dp)
                                 )
                                 if (tags.isNotEmpty()) Spacer(Modifier.height(4.dp))
@@ -607,11 +607,11 @@ private fun ExploreChips(
         val active = cat == category && !privateOnly
         Text(
             cat,
-            color = if (active) PomboColors.Background else Color.White.copy(alpha = 0.60f),
+            color = if (active) PomboColors.Background else PomboColors.Overlay60,
             fontSize = 12.sp,
             fontWeight = FontWeight.Medium,
             modifier = Modifier
-                .background(if (active) Color.White else Color.White.copy(alpha = 0.05f), RoundedCornerShape(6.dp))
+                .background(if (active) Color.White else PomboColors.Overlay5, RoundedCornerShape(6.dp))
                 .clickableNoRipple { onCategory(cat) }
                 .padding(horizontal = 10.dp, vertical = 5.dp)
         )
@@ -621,7 +621,7 @@ private fun ExploreChips(
     Row(
         Modifier
             .background(
-                if (privateOnly) Color.White else Color.White.copy(alpha = 0.05f),
+                if (privateOnly) Color.White else PomboColors.Overlay5,
                 RoundedCornerShape(6.dp)
             )
             .clickableNoRipple(onTogglePrivate)
@@ -630,13 +630,13 @@ private fun ExploreChips(
     ) {
         Icon(
             Icons.Filled.Lock, contentDescription = null,
-            tint = if (privateOnly) PomboColors.Background else Color.White.copy(alpha = 0.60f),
+            tint = if (privateOnly) PomboColors.Background else PomboColors.Overlay60,
             modifier = Modifier.size(11.dp)
         )
         Spacer(Modifier.width(4.dp))
         Text(
             "Private",
-            color = if (privateOnly) PomboColors.Background else Color.White.copy(alpha = 0.60f),
+            color = if (privateOnly) PomboColors.Background else PomboColors.Overlay60,
             fontSize = 12.sp, fontWeight = FontWeight.Medium
         )
     }

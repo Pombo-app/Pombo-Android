@@ -88,7 +88,7 @@ fun WalletSheet(vm: AppViewModel, onDismiss: () -> Unit) {
         onDismissRequest = onDismiss,
         sheetState = sheetState,
         containerColor = PomboColors.SurfaceHigh,
-        dragHandle = { BottomSheetDefaults.DragHandle(color = Color.White.copy(alpha = 0.20f)) }
+        dragHandle = { BottomSheetDefaults.DragHandle(color = PomboColors.Overlay20) }
     ) {
         Row(
             Modifier.fillMaxWidth().padding(start = 16.dp, end = 12.dp, bottom = 6.dp),
@@ -101,7 +101,7 @@ fun WalletSheet(vm: AppViewModel, onDismiss: () -> Unit) {
             )
             Icon(
                 Icons.Outlined.Refresh, contentDescription = "Refresh balances",
-                tint = Color.White.copy(alpha = 0.40f),
+                tint = PomboColors.Overlay40,
                 modifier = Modifier.size(18.dp).clickableNoRipple { vm.refreshWallet() }
             )
         }
@@ -115,7 +115,7 @@ fun WalletSheet(vm: AppViewModel, onDismiss: () -> Unit) {
             ) {
                 Text(
                     addr,
-                    color = Color.White.copy(alpha = 0.60f),
+                    color = PomboColors.Overlay60,
                     fontSize = 13.sp, fontFamily = FontFamily.Monospace,
                     maxLines = 1, overflow = TextOverflow.Ellipsis,
                     modifier = Modifier.weight(1f)
@@ -148,7 +148,7 @@ fun WalletSheet(vm: AppViewModel, onDismiss: () -> Unit) {
                         if (row.kind != AppViewModel.WalletRow.Kind.BASE && row.address != null) {
                             Text(
                                 shortToken(row.address),
-                                color = Color.White.copy(alpha = 0.30f),
+                                color = PomboColors.Overlay30,
                                 fontSize = 11.sp, fontFamily = FontFamily.Monospace
                             )
                         }
@@ -156,11 +156,11 @@ fun WalletSheet(vm: AppViewModel, onDismiss: () -> Unit) {
                     when {
                         row.failed -> Text(
                             "Unavailable",
-                            color = Color.White.copy(alpha = 0.35f), fontSize = 12.sp
+                            color = PomboColors.Overlay35, fontSize = 12.sp
                         )
                         row.amount == null -> Text(
                             "···",
-                            color = Color.White.copy(alpha = 0.25f), fontSize = 14.sp
+                            color = PomboColors.Overlay25, fontSize = 14.sp
                         )
                         else -> Text(
                             row.amount,
@@ -171,7 +171,7 @@ fun WalletSheet(vm: AppViewModel, onDismiss: () -> Unit) {
                         Spacer(Modifier.width(10.dp))
                         Icon(
                             Icons.Outlined.Close, contentDescription = "Remove token",
-                            tint = Color.White.copy(alpha = 0.30f),
+                            tint = PomboColors.Overlay30,
                             modifier = Modifier.size(16.dp)
                                 .clickableNoRipple { vm.removeWalletToken(row.address) }
                         )
@@ -189,10 +189,10 @@ fun WalletSheet(vm: AppViewModel, onDismiss: () -> Unit) {
             ) {
                 Icon(
                     Icons.Outlined.Add, contentDescription = null,
-                    tint = Color.White.copy(alpha = 0.40f), modifier = Modifier.size(16.dp)
+                    tint = PomboColors.Overlay40, modifier = Modifier.size(16.dp)
                 )
                 Spacer(Modifier.width(8.dp))
-                Text("Add token", color = Color.White.copy(alpha = 0.40f), fontSize = 13.sp)
+                Text("Add token", color = PomboColors.Overlay40, fontSize = 13.sp)
             }
         } else {
             Row(
@@ -201,14 +201,14 @@ fun WalletSheet(vm: AppViewModel, onDismiss: () -> Unit) {
             ) {
                 Box(
                     Modifier.weight(1f)
-                        .background(Color.White.copy(alpha = 0.05f), RoundedCornerShape(10.dp))
-                        .border(1.dp, Color.White.copy(alpha = 0.10f), RoundedCornerShape(10.dp))
+                        .background(PomboColors.Overlay5, RoundedCornerShape(10.dp))
+                        .border(1.dp, PomboColors.Overlay10, RoundedCornerShape(10.dp))
                         .padding(horizontal = 12.dp, vertical = 10.dp)
                 ) {
                     if (tokenInput.isEmpty()) {
                         Text(
                             "Token address (0x…)",
-                            color = Color.White.copy(alpha = 0.25f),
+                            color = PomboColors.Overlay25,
                             fontSize = 12.sp, fontFamily = FontFamily.Monospace
                         )
                     }
@@ -235,7 +235,7 @@ fun WalletSheet(vm: AppViewModel, onDismiss: () -> Unit) {
                 Spacer(Modifier.width(6.dp))
                 Icon(
                     Icons.Outlined.Close, contentDescription = "Cancel",
-                    tint = Color.White.copy(alpha = 0.30f),
+                    tint = PomboColors.Overlay30,
                     modifier = Modifier.size(18.dp).clickableNoRipple {
                         adding = false; tokenInput = ""; vm.clearWalletAddError()
                     }
@@ -308,13 +308,13 @@ private fun AddressButton(icon: ImageVector, label: String, active: Boolean, onC
     val lit = active || pressed
     Box(
         Modifier.size(36.dp)
-            .background(if (lit) Color.White.copy(alpha = 0.12f) else Color.Transparent, CircleShape)
+            .background(if (lit) PomboColors.Overlay12 else Color.Transparent, CircleShape)
             .clickable(interactionSource = interaction, indication = null, onClick = onClick),
         contentAlignment = Alignment.Center
     ) {
         Icon(
             icon, contentDescription = label,
-            tint = if (lit) PomboColors.Accent else Color.White.copy(alpha = 0.50f),
+            tint = if (lit) PomboColors.Accent else PomboColors.Overlay50,
             modifier = Modifier.size(18.dp)
         )
     }

@@ -111,7 +111,7 @@ internal fun ContactsTab(vm: AppViewModel) {
                             Spacer(Modifier.height(2.dp))
                             Text(
                                 c.address,
-                                color = Color.White.copy(alpha = 0.30f), fontSize = 10.sp,
+                                color = PomboColors.Overlay30, fontSize = 10.sp,
                                 fontFamily = androidx.compose.ui.text.font.FontFamily.Monospace,
                                 maxLines = 1,
                                 overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis
@@ -124,7 +124,7 @@ internal fun ContactsTab(vm: AppViewModel) {
                         Box {
                             Icon(
                                 Icons.Filled.MoreVert, contentDescription = "Contact options",
-                                tint = Color.White.copy(alpha = 0.25f),
+                                tint = PomboColors.Overlay25,
                                 modifier = Modifier.size(20.dp).clickableNoRipple { menuOpen = true }
                             )
                             if (menuOpen) {
@@ -142,7 +142,7 @@ internal fun ContactsTab(vm: AppViewModel) {
                                     }
                                     Box(
                                         Modifier.fillMaxWidth().padding(vertical = 4.dp).height(1.dp)
-                                            .background(Color.White.copy(alpha = 0.08f))
+                                            .background(PomboColors.Overlay8)
                                     )
                                     ContactMenuItem("Remove Contact", Icons.Outlined.Close, danger = true) {
                                         menuOpen = false; vm.removeContact(c.address)
@@ -187,13 +187,13 @@ private fun ContactMenuItem(
     ) {
         Icon(
             icon, contentDescription = null,
-            tint = if (danger) PomboColors.Danger.copy(alpha = 0.85f) else Color.White.copy(alpha = 0.60f),
+            tint = if (danger) PomboColors.Danger.copy(alpha = 0.85f) else PomboColors.Overlay60,
             modifier = Modifier.size(15.dp)
         )
         Spacer(Modifier.width(10.dp))
         Text(
             label,
-            color = if (danger) PomboColors.Danger.copy(alpha = 0.90f) else Color.White.copy(alpha = 0.80f),
+            color = if (danger) PomboColors.Danger.copy(alpha = 0.90f) else PomboColors.Overlay80,
             fontSize = 13.sp
         )
     }

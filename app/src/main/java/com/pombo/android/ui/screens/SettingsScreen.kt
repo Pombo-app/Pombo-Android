@@ -96,13 +96,13 @@ private fun SettingsHeader(title: String, onBack: (() -> Unit)? = null) {
                 HeaderIconButton(48.dp, onBack) {
                     Icon(
                         Icons.Outlined.ChevronLeft, contentDescription = "Back",
-                        tint = Color.White.copy(alpha = 0.70f), modifier = Modifier.size(24.dp)
+                        tint = PomboColors.Overlay70, modifier = Modifier.size(24.dp)
                     )
                 }
             }
             Text(title, color = PomboColors.Text, fontSize = 17.sp, fontWeight = FontWeight.SemiBold)
         }
-        Box(Modifier.fillMaxWidth().height(1.dp).background(Color.White.copy(alpha = 0.06f)))
+        Box(Modifier.fillMaxWidth().height(1.dp).background(PomboColors.Overlay6))
     }
 }
 
@@ -217,17 +217,17 @@ private fun SettingsIndexRow(
                 strokeWidth = 2.5.dp
             )
         } else {
-            Icon(icon, contentDescription = null, tint = Color.White.copy(alpha = 0.50f), modifier = Modifier.size(20.dp))
+            Icon(icon, contentDescription = null, tint = PomboColors.Overlay50, modifier = Modifier.size(20.dp))
         }
         Spacer(Modifier.width(14.dp))
         Text(
-            label, color = Color.White.copy(alpha = 0.85f), fontSize = 15.sp,
+            label, color = PomboColors.Overlay85, fontSize = 15.sp,
             fontWeight = FontWeight.Medium, modifier = Modifier.weight(1f)
         )
         if (chevron) {
             Icon(
                 Icons.Outlined.ChevronRight, contentDescription = null,
-                tint = Color.White.copy(alpha = 0.30f), modifier = Modifier.size(20.dp)
+                tint = PomboColors.Overlay30, modifier = Modifier.size(20.dp)
             )
         }
     }
@@ -237,7 +237,7 @@ private fun SettingsIndexRow(
 private fun SettingsIndexDivider() {
     Box(
         Modifier.fillMaxWidth().padding(horizontal = 6.dp, vertical = 6.dp).height(1.dp)
-            .background(Color.White.copy(alpha = 0.06f))
+            .background(PomboColors.Overlay6)
     )
 }
 
@@ -325,7 +325,7 @@ private fun AccountPanel(vm: AppViewModel) {
                     // Web: with ENS active the field CARRIES the ENS name.
                     value = ensName ?: editing,
                     onValueChange = { if (it.length <= 18) editing = it },
-                    placeholder = { Text("Enter your name", color = Color.White.copy(alpha = 0.20f), fontSize = 14.sp) },
+                    placeholder = { Text("Enter your name", color = PomboColors.Overlay20, fontSize = 14.sp) },
                     colors = pomboFieldColors(),
                     singleLine = true,
                     // Web: with a primary ENS name the field is `disabled` and
@@ -361,7 +361,7 @@ private fun AccountPanel(vm: AppViewModel) {
                         Text("ENS Verified", color = Color(0xFF60A5FA), fontSize = 12.sp)
                     }
                 } else {
-                    Text("Visible to other users", color = Color.White.copy(alpha = 0.30f), fontSize = 12.sp)
+                    Text("Visible to other users", color = PomboColors.Overlay30, fontSize = 12.sp)
                 }
             }
             // Centred in the gap between the name field and the card's edge,
@@ -379,8 +379,8 @@ private fun AccountPanel(vm: AppViewModel) {
         // Tapping the address itself copies it — no separate button.
         Box(
             Modifier.fillMaxWidth()
-                .background(Color.White.copy(alpha = 0.05f), RoundedCornerShape(12.dp))
-                .border(1.dp, Color.White.copy(alpha = 0.10f), RoundedCornerShape(12.dp))
+                .background(PomboColors.Overlay5, RoundedCornerShape(12.dp))
+                .border(1.dp, PomboColors.Overlay10, RoundedCornerShape(12.dp))
                 .clickableNoRipple {
                     address?.let {
                         clipboard.setText(androidx.compose.ui.text.AnnotatedString(it))
@@ -391,7 +391,7 @@ private fun AccountPanel(vm: AppViewModel) {
         ) {
             Text(
                 address ?: "—",
-                color = Color.White.copy(alpha = 0.60f), fontSize = 12.sp,
+                color = PomboColors.Overlay60, fontSize = 12.sp,
                 fontFamily = androidx.compose.ui.text.font.FontFamily.Monospace,
                 maxLines = 1
             )
@@ -403,7 +403,7 @@ private fun AccountPanel(vm: AppViewModel) {
         val hasDmInbox by vm.hasDmInbox.collectAsState()
         if (hasDmInbox == true) {
             Spacer(Modifier.height(20.dp))
-            Box(Modifier.fillMaxWidth().height(1.dp).background(Color.White.copy(alpha = 0.05f)))
+            Box(Modifier.fillMaxWidth().height(1.dp).background(PomboColors.Overlay5))
             Spacer(Modifier.height(20.dp))
 
             // Moves this account's state between the user's own devices —
@@ -411,22 +411,22 @@ private fun AccountPanel(vm: AppViewModel) {
             Row(verticalAlignment = Alignment.CenterVertically) {
                 Icon(
                     Icons.Outlined.Sync, contentDescription = null,
-                    tint = Color.White.copy(alpha = 0.80f), modifier = Modifier.size(16.dp)
+                    tint = PomboColors.Overlay80, modifier = Modifier.size(16.dp)
                 )
                 Spacer(Modifier.width(8.dp))
-                Text("Device Sync", color = Color.White.copy(alpha = 0.80f), fontSize = 14.sp, fontWeight = FontWeight.Medium)
+                Text("Device Sync", color = PomboColors.Overlay80, fontSize = 14.sp, fontWeight = FontWeight.Medium)
             }
             Spacer(Modifier.height(4.dp))
             Text(
                 "Sync your app state, including sent DMs from other devices",
-                color = Color.White.copy(alpha = 0.40f), fontSize = 12.sp
+                color = PomboColors.Overlay40, fontSize = 12.sp
             )
             Spacer(Modifier.height(14.dp))
             val syncMode by vm.syncMode.collectAsState()
             Column(
                 Modifier.fillMaxWidth()
-                    .background(Color.White.copy(alpha = 0.03f), RoundedCornerShape(12.dp))
-                    .border(1.dp, Color.White.copy(alpha = 0.05f), RoundedCornerShape(12.dp))
+                    .background(PomboColors.Overlay3, RoundedCornerShape(12.dp))
+                    .border(1.dp, PomboColors.Overlay5, RoundedCornerShape(12.dp))
                     .padding(vertical = 4.dp)
             ) {
                 com.pombo.android.data.SyncMode.entries.forEach { mode ->
@@ -441,12 +441,12 @@ private fun AccountPanel(vm: AppViewModel) {
                             onClick = { vm.setSyncMode(mode) },
                             colors = androidx.compose.material3.RadioButtonDefaults.colors(
                                 selectedColor = PomboColors.Accent,
-                                unselectedColor = Color.White.copy(alpha = 0.30f)
+                                unselectedColor = PomboColors.Overlay30
                             )
                         )
                         Text(
                             mode.label,
-                            color = Color.White.copy(alpha = 0.85f),
+                            color = PomboColors.Overlay85,
                             fontSize = 13.sp, fontWeight = FontWeight.Medium
                         )
                     }
@@ -455,19 +455,19 @@ private fun AccountPanel(vm: AppViewModel) {
         }
 
         Spacer(Modifier.height(20.dp))
-        Box(Modifier.fillMaxWidth().height(1.dp).background(Color.White.copy(alpha = 0.05f)))
+        Box(Modifier.fillMaxWidth().height(1.dp).background(PomboColors.Overlay5))
         Spacer(Modifier.height(20.dp))
 
         Row(verticalAlignment = Alignment.CenterVertically) {
             Icon(
                 Icons.Outlined.Storage, contentDescription = null,
-                tint = Color.White.copy(alpha = 0.80f), modifier = Modifier.size(16.dp)
+                tint = PomboColors.Overlay80, modifier = Modifier.size(16.dp)
             )
             Spacer(Modifier.width(8.dp))
-            Text("Backup & Restore", color = Color.White.copy(alpha = 0.80f), fontSize = 14.sp, fontWeight = FontWeight.Medium)
+            Text("Backup & Restore", color = PomboColors.Overlay80, fontSize = 14.sp, fontWeight = FontWeight.Medium)
         }
         Spacer(Modifier.height(4.dp))
-        Text("Export data to restore on another device", color = Color.White.copy(alpha = 0.40f), fontSize = 12.sp)
+        Text("Export data to restore on another device", color = PomboColors.Overlay40, fontSize = 12.sp)
         Spacer(Modifier.height(14.dp))
         Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
             BackupButton(
@@ -491,7 +491,7 @@ private fun AccountPanel(vm: AppViewModel) {
 private fun SettingsFieldLabel(text: String) {
     Text(
         text.uppercase(),
-        color = Color.White.copy(alpha = 0.80f), fontSize = 11.sp,
+        color = PomboColors.Overlay80, fontSize = 11.sp,
         fontWeight = FontWeight.Medium, letterSpacing = 0.08.em
     )
     Spacer(Modifier.height(8.dp))
@@ -508,9 +508,9 @@ private fun BackupButton(
     onClick: () -> Unit
 ) {
     val fg = when {
-        !enabled -> Color.White.copy(alpha = 0.25f)
+        !enabled -> PomboColors.Overlay25
         emphasized -> Color.White
-        else -> Color.White.copy(alpha = 0.60f)
+        else -> PomboColors.Overlay60
     }
     Row(
         modifier
@@ -552,7 +552,7 @@ internal fun BackupPasswordDialog(
     val valid = password.length >= minLength && (!confirmPassword || confirm == password)
 
     PomboDialogFrame(title, onDismiss, icon = Icons.Filled.Lock) {
-        Text(hint, color = Color.White.copy(alpha = 0.50f), fontSize = 13.sp, lineHeight = 19.sp)
+        Text(hint, color = PomboColors.Overlay50, fontSize = 13.sp, lineHeight = 19.sp)
         Spacer(Modifier.height(14.dp))
 
         PomboFieldLabel("PASSWORD")
@@ -578,12 +578,12 @@ internal fun BackupPasswordDialog(
                     Modifier
                         .size(18.dp)
                         .background(
-                            if (toggled) PomboColors.Accent else Color.White.copy(alpha = 0.08f),
+                            if (toggled) PomboColors.Accent else PomboColors.Overlay8,
                             RoundedCornerShape(5.dp)
                         )
                         .border(
                             1.dp,
-                            if (toggled) PomboColors.Accent else Color.White.copy(alpha = 0.15f),
+                            if (toggled) PomboColors.Accent else PomboColors.Overlay15,
                             RoundedCornerShape(5.dp)
                         ),
                     contentAlignment = Alignment.Center
@@ -594,7 +594,7 @@ internal fun BackupPasswordDialog(
                     )
                 }
                 Spacer(Modifier.width(8.dp))
-                Text(label, color = Color.White.copy(alpha = 0.60f), fontSize = 13.sp)
+                Text(label, color = PomboColors.Overlay60, fontSize = 13.sp)
             }
         }
 
@@ -621,7 +621,7 @@ private fun NotificationsSection(vm: AppViewModel) {
                 Spacer(Modifier.height(2.dp))
                 Text(
                     "Get notified about new messages. Turn on per channel afterwards.",
-                    color = Color.White.copy(alpha = 0.40f), fontSize = 12.sp, lineHeight = 17.sp
+                    color = PomboColors.Overlay40, fontSize = 12.sp, lineHeight = 17.sp
                 )
             }
             Spacer(Modifier.width(12.dp))
@@ -631,8 +631,8 @@ private fun NotificationsSection(vm: AppViewModel) {
                 colors = androidx.compose.material3.SwitchDefaults.colors(
                     checkedTrackColor = Color(0xFFF6851B),
                     checkedThumbColor = Color.White,
-                    uncheckedTrackColor = Color.White.copy(alpha = 0.10f),
-                    uncheckedThumbColor = Color.White.copy(alpha = 0.60f)
+                    uncheckedTrackColor = PomboColors.Overlay10,
+                    uncheckedThumbColor = PomboColors.Overlay60
                 )
             )
         }
@@ -643,19 +643,19 @@ private fun NotificationsSection(vm: AppViewModel) {
             Row(Modifier.fillMaxWidth().padding(start = 6.dp)) {
                 Box(
                     Modifier.width(1.dp).heightIn(min = 40.dp)
-                        .background(Color.White.copy(alpha = 0.10f))
+                        .background(PomboColors.Overlay10)
                 )
                 Spacer(Modifier.width(12.dp))
                 Row(Modifier.weight(1f), verticalAlignment = Alignment.CenterVertically) {
                     Column(Modifier.weight(1f)) {
                         Text(
                             "Direct Messages",
-                            color = Color.White.copy(alpha = 0.70f), fontSize = 13.sp, fontWeight = FontWeight.Medium
+                            color = PomboColors.Overlay70, fontSize = 13.sp, fontWeight = FontWeight.Medium
                         )
                         Spacer(Modifier.height(2.dp))
                         Text(
                             "Get notified for new DMs",
-                            color = Color.White.copy(alpha = 0.30f), fontSize = 12.sp, lineHeight = 16.sp
+                            color = PomboColors.Overlay30, fontSize = 12.sp, lineHeight = 16.sp
                         )
                     }
                     Spacer(Modifier.width(12.dp))
@@ -665,8 +665,8 @@ private fun NotificationsSection(vm: AppViewModel) {
                         colors = androidx.compose.material3.SwitchDefaults.colors(
                             checkedTrackColor = Color(0xFFF6851B),
                             checkedThumbColor = Color.White,
-                            uncheckedTrackColor = Color.White.copy(alpha = 0.10f),
-                            uncheckedThumbColor = Color.White.copy(alpha = 0.60f)
+                            uncheckedTrackColor = PomboColors.Overlay10,
+                            uncheckedThumbColor = PomboColors.Overlay60
                         )
                     )
                 }
@@ -676,7 +676,7 @@ private fun NotificationsSection(vm: AppViewModel) {
         // Muting unsubscribes the inbox P3 partition, so invites stop arriving
         // at all — same behaviour as the web's always-open tab.
         Spacer(Modifier.height(16.dp))
-        Box(Modifier.fillMaxWidth().height(1.dp).background(Color.White.copy(alpha = 0.05f)))
+        Box(Modifier.fillMaxWidth().height(1.dp).background(PomboColors.Overlay5))
         Spacer(Modifier.height(16.dp))
         ContentToggleRow(
             title = "Channel Invites",
@@ -687,7 +687,7 @@ private fun NotificationsSection(vm: AppViewModel) {
         // Web #notifications-status: "Muted" under the toggle while off.
         if (!invites) {
             Spacer(Modifier.height(8.dp))
-            Text("Muted", color = Color.White.copy(alpha = 0.40f), fontSize = 12.sp)
+            Text("Muted", color = PomboColors.Overlay40, fontSize = 12.sp)
         }
     }
 }
@@ -748,16 +748,16 @@ private fun DmInboxPanel(vm: AppViewModel) {
     )
 
     SettingsSection {
-        Text("Check and repair your DM inbox", color = Color.White.copy(alpha = 0.40f), fontSize = 12.sp)
+        Text("Check and repair your DM inbox", color = PomboColors.Overlay40, fontSize = 12.sp)
         Spacer(Modifier.height(14.dp))
 
         // ---- Unified status card (web #repair-status-card) ----
         if (health !is AppViewModel.InboxHealth.NoInbox) {
             val (accent, title, detail) = when (val h = health) {
                 is AppViewModel.InboxHealth.Idle ->
-                    Triple(Color.White.copy(alpha = 0.20f), "Not checked", "Run a diagnosis to check inbox health")
+                    Triple(PomboColors.Overlay20, "Not checked", "Run a diagnosis to check inbox health")
                 is AppViewModel.InboxHealth.Loading ->
-                    Triple(Color.White.copy(alpha = 0.40f), "Diagnosing...", "Checking streams, permissions and storage")
+                    Triple(PomboColors.Overlay40, "Diagnosing...", "Checking streams, permissions and storage")
                 is AppViewModel.InboxHealth.Healthy ->
                     Triple(PomboColors.Success, "Inbox healthy", h.detail)
                 is AppViewModel.InboxHealth.Issues ->
@@ -768,11 +768,11 @@ private fun DmInboxPanel(vm: AppViewModel) {
                     Triple(PomboColors.Accent, "Repairing...", h.step)
                 is AppViewModel.InboxHealth.Repaired ->
                     Triple(PomboColors.Success, "Repaired", h.detail)
-                else -> Triple(Color.White.copy(alpha = 0.20f), "Not checked", "")
+                else -> Triple(PomboColors.Overlay20, "Not checked", "")
             }
             Row(
                 Modifier.fillMaxWidth()
-                    .background(Color.White.copy(alpha = 0.03f), RoundedCornerShape(12.dp))
+                    .background(PomboColors.Overlay3, RoundedCornerShape(12.dp))
                     .border(1.dp, accent.copy(alpha = 0.15f), RoundedCornerShape(12.dp))
                     .padding(14.dp),
                 verticalAlignment = Alignment.CenterVertically
@@ -798,9 +798,9 @@ private fun DmInboxPanel(vm: AppViewModel) {
                 }
                 Spacer(Modifier.width(12.dp))
                 Column {
-                    Text(title, color = Color.White.copy(alpha = 0.70f), fontSize = 14.sp)
+                    Text(title, color = PomboColors.Overlay70, fontSize = 14.sp)
                     Spacer(Modifier.height(2.dp))
-                    Text(detail, color = Color.White.copy(alpha = 0.30f), fontSize = 12.sp, lineHeight = 16.sp)
+                    Text(detail, color = PomboColors.Overlay30, fontSize = 12.sp, lineHeight = 16.sp)
                 }
             }
             Spacer(Modifier.height(14.dp))
@@ -826,16 +826,16 @@ private fun DmInboxPanel(vm: AppViewModel) {
             } else {
                 Row(
                     Modifier.weight(1f)
-                        .background(Color.White.copy(alpha = 0.05f), RoundedCornerShape(8.dp))
-                        .border(1.dp, Color.White.copy(alpha = 0.10f), RoundedCornerShape(8.dp))
+                        .background(PomboColors.Overlay5, RoundedCornerShape(8.dp))
+                        .border(1.dp, PomboColors.Overlay10, RoundedCornerShape(8.dp))
                         .clickableNoRipple { if (!busyNow) vm.diagnoseInbox() }
                         .padding(vertical = 8.dp),
                     horizontalArrangement = Arrangement.Center,
                     verticalAlignment = Alignment.CenterVertically
                 ) {
-                    Icon(Icons.Outlined.Search, contentDescription = null, tint = Color.White.copy(alpha = 0.70f), modifier = Modifier.size(13.dp))
+                    Icon(Icons.Outlined.Search, contentDescription = null, tint = PomboColors.Overlay70, modifier = Modifier.size(13.dp))
                     Spacer(Modifier.width(6.dp))
-                    Text("Diagnose", color = Color.White.copy(alpha = 0.70f), fontSize = 12.sp)
+                    Text("Diagnose", color = PomboColors.Overlay70, fontSize = 12.sp)
                 }
                 if (health is AppViewModel.InboxHealth.Issues) {
                     Row(
@@ -857,18 +857,18 @@ private fun DmInboxPanel(vm: AppViewModel) {
         val info = storage
         if (info != null && health !is AppViewModel.InboxHealth.NoInbox) {
             Spacer(Modifier.height(16.dp))
-            Box(Modifier.fillMaxWidth().height(1.dp).background(Color.White.copy(alpha = 0.05f)))
+            Box(Modifier.fillMaxWidth().height(1.dp).background(PomboColors.Overlay5))
             Spacer(Modifier.height(16.dp))
-            Text("Inbox Storage", color = Color.White.copy(alpha = 0.90f), fontSize = 14.sp, fontWeight = FontWeight.Medium)
+            Text("Inbox Storage", color = PomboColors.Overlay90, fontSize = 14.sp, fontWeight = FontWeight.Medium)
             Spacer(Modifier.height(2.dp))
             Text(
                 "Change the storage provider that persists your DM inbox.",
-                color = Color.White.copy(alpha = 0.40f), fontSize = 12.sp
+                color = PomboColors.Overlay40, fontSize = 12.sp
             )
 
             Spacer(Modifier.height(14.dp))
             Text(
-                "RETENTION PERIOD", color = Color.White.copy(alpha = 0.30f),
+                "RETENTION PERIOD", color = PomboColors.Overlay30,
                 fontSize = 10.sp, letterSpacing = 0.8.sp
             )
             Spacer(Modifier.height(6.dp))
@@ -886,19 +886,19 @@ private fun DmInboxPanel(vm: AppViewModel) {
                         keyboardType = androidx.compose.ui.text.input.KeyboardType.Number
                     ),
                     modifier = Modifier.width(90.dp)
-                        .background(Color.White.copy(alpha = 0.05f), RoundedCornerShape(8.dp))
-                        .border(1.dp, Color.White.copy(alpha = 0.10f), RoundedCornerShape(8.dp))
+                        .background(PomboColors.Overlay5, RoundedCornerShape(8.dp))
+                        .border(1.dp, PomboColors.Overlay10, RoundedCornerShape(8.dp))
                         .padding(horizontal = 12.dp, vertical = 8.dp)
                 )
                 Spacer(Modifier.width(8.dp))
-                Text("days", color = Color.White.copy(alpha = 0.50f), fontSize = 14.sp)
+                Text("days", color = PomboColors.Overlay50, fontSize = 14.sp)
                 Spacer(Modifier.width(8.dp))
                 val days = retentionDraft.toIntOrNull()
                 val valid = days != null && days in 1..3650 && days != info.storageDays
                 Box(
                     Modifier
                         .background(Color.White.copy(alpha = if (valid) 0.10f else 0.05f), RoundedCornerShape(8.dp))
-                        .border(1.dp, Color.White.copy(alpha = 0.10f), RoundedCornerShape(8.dp))
+                        .border(1.dp, PomboColors.Overlay10, RoundedCornerShape(8.dp))
                         .clickableNoRipple { if (valid) vm.setInboxRetention(days!!) }
                         .padding(horizontal = 12.dp, vertical = 8.dp)
                 ) {
@@ -911,18 +911,18 @@ private fun DmInboxPanel(vm: AppViewModel) {
 
             Spacer(Modifier.height(14.dp))
             Text(
-                "STORAGE PROVIDER", color = Color.White.copy(alpha = 0.30f),
+                "STORAGE PROVIDER", color = PomboColors.Overlay30,
                 fontSize = 10.sp, letterSpacing = 0.8.sp
             )
             Spacer(Modifier.height(6.dp))
             if (info.nodes.isEmpty()) {
-                Text("No storage provider", color = Color.White.copy(alpha = 0.30f), fontSize = 12.sp)
+                Text("No storage provider", color = PomboColors.Overlay30, fontSize = 12.sp)
             } else {
                 info.nodes.forEach { node ->
                     Row(
                         Modifier.fillMaxWidth().padding(bottom = 6.dp)
-                            .background(Color.White.copy(alpha = 0.03f), RoundedCornerShape(8.dp))
-                            .border(1.dp, Color.White.copy(alpha = 0.05f), RoundedCornerShape(8.dp))
+                            .background(PomboColors.Overlay3, RoundedCornerShape(8.dp))
+                            .border(1.dp, PomboColors.Overlay5, RoundedCornerShape(8.dp))
                             .padding(horizontal = 10.dp, vertical = 8.dp),
                         verticalAlignment = Alignment.CenterVertically
                     ) {
@@ -931,17 +931,17 @@ private fun DmInboxPanel(vm: AppViewModel) {
                             // uses: "Pombo" vs "Custom" against pomboStorageNode.
                             Text(
                                 if (node.equals(vm.pomboStorageNode, ignoreCase = true)) "Pombo" else "Custom",
-                                color = Color.White.copy(alpha = 0.50f), fontSize = 12.sp
+                                color = PomboColors.Overlay50, fontSize = 12.sp
                             )
                             Text(
-                                node, color = Color.White.copy(alpha = 0.70f), fontSize = 11.sp,
+                                node, color = PomboColors.Overlay70, fontSize = 11.sp,
                                 fontFamily = androidx.compose.ui.text.font.FontFamily.Monospace, maxLines = 1
                             )
                         }
                         Spacer(Modifier.width(8.dp))
                         Icon(
                             Icons.Outlined.Delete, contentDescription = "Remove storage provider",
-                            tint = Color.White.copy(alpha = 0.40f),
+                            tint = PomboColors.Overlay40,
                             modifier = Modifier.size(18.dp).clickableNoRipple { vm.removeInboxStorageNode(node) }
                         )
                     }
@@ -956,9 +956,9 @@ private fun DmInboxPanel(vm: AppViewModel) {
                     Modifier.clickableNoRipple { addingNode = true }.padding(vertical = 4.dp),
                     verticalAlignment = Alignment.CenterVertically
                 ) {
-                    Icon(Icons.Filled.Add, contentDescription = null, tint = Color.White.copy(alpha = 0.60f), modifier = Modifier.size(13.dp))
+                    Icon(Icons.Filled.Add, contentDescription = null, tint = PomboColors.Overlay60, modifier = Modifier.size(13.dp))
                     Spacer(Modifier.width(6.dp))
-                    Text("Add Storage Provider", color = Color.White.copy(alpha = 0.60f), fontSize = 12.sp)
+                    Text("Add Storage Provider", color = PomboColors.Overlay60, fontSize = 12.sp)
                 }
             } else {
                 var provider by remember { mutableStateOf("streamr") }
@@ -966,8 +966,8 @@ private fun DmInboxPanel(vm: AppViewModel) {
                 var daysDraft by remember { mutableStateOf("180") }
                 Column(
                     Modifier.fillMaxWidth()
-                        .background(Color.White.copy(alpha = 0.03f), RoundedCornerShape(12.dp))
-                        .border(1.dp, Color.White.copy(alpha = 0.05f), RoundedCornerShape(12.dp))
+                        .background(PomboColors.Overlay3, RoundedCornerShape(12.dp))
+                        .border(1.dp, PomboColors.Overlay5, RoundedCornerShape(12.dp))
                         .padding(12.dp)
                 ) {
                     Row(horizontalArrangement = Arrangement.spacedBy(16.dp)) {
@@ -983,7 +983,7 @@ private fun DmInboxPanel(vm: AppViewModel) {
                                         selectedColor = PomboColors.Accent
                                     )
                                 )
-                                Text(label, color = Color.White.copy(alpha = 0.80f), fontSize = 13.sp)
+                                Text(label, color = PomboColors.Overlay80, fontSize = 13.sp)
                             }
                         }
                     }
@@ -998,13 +998,13 @@ private fun DmInboxPanel(vm: AppViewModel) {
                             ),
                             cursorBrush = androidx.compose.ui.graphics.SolidColor(PomboColors.Accent),
                             modifier = Modifier.fillMaxWidth()
-                                .background(Color.White.copy(alpha = 0.05f), RoundedCornerShape(8.dp))
-                                .border(1.dp, Color.White.copy(alpha = 0.10f), RoundedCornerShape(8.dp))
+                                .background(PomboColors.Overlay5, RoundedCornerShape(8.dp))
+                                .border(1.dp, PomboColors.Overlay10, RoundedCornerShape(8.dp))
                                 .padding(horizontal = 12.dp, vertical = 8.dp),
                             decorationBox = { inner ->
                                 if (customAddr.isEmpty()) Text(
                                     "0x… custom storage provider address",
-                                    color = Color.White.copy(alpha = 0.20f), fontSize = 12.sp,
+                                    color = PomboColors.Overlay20, fontSize = 12.sp,
                                     fontFamily = androidx.compose.ui.text.font.FontFamily.Monospace
                                 )
                                 inner()
@@ -1023,17 +1023,17 @@ private fun DmInboxPanel(vm: AppViewModel) {
                                 keyboardType = androidx.compose.ui.text.input.KeyboardType.Number
                             ),
                             modifier = Modifier.width(90.dp)
-                                .background(Color.White.copy(alpha = 0.05f), RoundedCornerShape(8.dp))
-                                .border(1.dp, Color.White.copy(alpha = 0.10f), RoundedCornerShape(8.dp))
+                                .background(PomboColors.Overlay5, RoundedCornerShape(8.dp))
+                                .border(1.dp, PomboColors.Overlay10, RoundedCornerShape(8.dp))
                                 .padding(horizontal = 12.dp, vertical = 8.dp)
                         )
                         Spacer(Modifier.width(8.dp))
-                        Text("retention", color = Color.White.copy(alpha = 0.50f), fontSize = 14.sp)
+                        Text("retention", color = PomboColors.Overlay50, fontSize = 14.sp)
                     }
                     Spacer(Modifier.height(10.dp))
                     Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End) {
                         Text(
-                            "Cancel", color = Color.White.copy(alpha = 0.60f), fontSize = 12.sp,
+                            "Cancel", color = PomboColors.Overlay60, fontSize = 12.sp,
                             modifier = Modifier.clickableNoRipple { addingNode = false }.padding(8.dp)
                         )
                         Spacer(Modifier.width(4.dp))
@@ -1079,7 +1079,7 @@ private fun ContentToggleRow(
             Spacer(Modifier.height(2.dp))
             Text(
                 hint,
-                color = Color.White.copy(alpha = 0.40f), fontSize = 12.sp, lineHeight = 17.sp
+                color = PomboColors.Overlay40, fontSize = 12.sp, lineHeight = 17.sp
             )
         }
         Spacer(Modifier.width(12.dp))
@@ -1089,8 +1089,8 @@ private fun ContentToggleRow(
             colors = androidx.compose.material3.SwitchDefaults.colors(
                 checkedTrackColor = trackColor,
                 checkedThumbColor = Color.White,
-                uncheckedTrackColor = Color.White.copy(alpha = 0.10f),
-                uncheckedThumbColor = Color.White.copy(alpha = 0.60f)
+                uncheckedTrackColor = PomboColors.Overlay10,
+                uncheckedThumbColor = PomboColors.Overlay60
             )
         )
     }
@@ -1130,12 +1130,12 @@ private fun CompactSettingsField(
                 if (state.isFocused) hadFocus = true
                 else if (hadFocus) { hadFocus = false; onCommit() }
             }
-            .background(Color.White.copy(alpha = 0.05f), RoundedCornerShape(12.dp))
-            .border(1.dp, Color.White.copy(alpha = 0.10f), RoundedCornerShape(12.dp))
+            .background(PomboColors.Overlay5, RoundedCornerShape(12.dp))
+            .border(1.dp, PomboColors.Overlay10, RoundedCornerShape(12.dp))
             .padding(horizontal = 14.dp, vertical = 12.dp),
         decorationBox = { inner ->
             if (value.isEmpty()) {
-                Text(placeholder, color = Color.White.copy(alpha = 0.20f), fontSize = 14.sp)
+                Text(placeholder, color = PomboColors.Overlay20, fontSize = 14.sp)
             }
             inner()
         }
@@ -1169,13 +1169,13 @@ private fun GraphApiCard(vm: AppViewModel) {
         ) {
             Column(Modifier.weight(1f)) {
                 Text(
-                    "THE GRAPH API", color = Color.White.copy(alpha = 0.80f),
+                    "THE GRAPH API", color = PomboColors.Overlay80,
                     fontSize = 11.sp, fontWeight = FontWeight.Medium, letterSpacing = 0.08.em
                 )
                 Spacer(Modifier.height(6.dp))
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     val (dot, label, labelColor) = when (health) {
-                        null -> Triple(Color.White.copy(alpha = 0.20f), "Not checked", Color.White.copy(alpha = 0.40f))
+                        null -> Triple(PomboColors.Overlay20, "Not checked", PomboColors.Overlay40)
                         true -> Triple(Color(0xFF22C55E), "OK", PomboColors.Success)
                         else -> Triple(Color(0xFFEF4444), "Not responding", PomboColors.Danger)
                     }
@@ -1185,20 +1185,20 @@ private fun GraphApiCard(vm: AppViewModel) {
                     Spacer(Modifier.width(8.dp))
                     Text(
                         if (graphKey.isEmpty()) "Using default key (rate limited)" else "Using your own key",
-                        color = Color.White.copy(alpha = 0.30f), fontSize = 12.sp
+                        color = PomboColors.Overlay30, fontSize = 12.sp
                     )
                 }
             }
             Icon(
                 if (open) Icons.Filled.KeyboardArrowUp else Icons.Filled.KeyboardArrowDown,
                 contentDescription = null,
-                tint = Color.White.copy(alpha = 0.30f), modifier = Modifier.size(18.dp)
+                tint = PomboColors.Overlay30, modifier = Modifier.size(18.dp)
             )
         }
 
         if (open) {
             Spacer(Modifier.height(12.dp))
-            Text("Your API key", color = Color.White.copy(alpha = 0.30f), fontSize = 11.sp)
+            Text("Your API key", color = PomboColors.Overlay30, fontSize = 11.sp)
             Spacer(Modifier.height(6.dp))
             // Commits when the field loses focus (tap away / IME done), like the
             // web's `change` event — setGraphApiKey shows the toast.
@@ -1212,7 +1212,7 @@ private fun GraphApiCard(vm: AppViewModel) {
             Spacer(Modifier.height(6.dp))
             Text(
                 "Get yours at thegraph.com/studio",
-                color = Color.White.copy(alpha = 0.30f), fontSize = 12.sp
+                color = PomboColors.Overlay30, fontSize = 12.sp
             )
         }
     }
@@ -1246,7 +1246,7 @@ private fun PolygonRpcCard(vm: AppViewModel) {
         Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
             Column(Modifier.weight(1f).clickableNoRipple { open = !open }) {
                 Text(
-                    "POLYGON RPC", color = Color.White.copy(alpha = 0.80f),
+                    "POLYGON RPC", color = PomboColors.Overlay80,
                     fontSize = 11.sp, fontWeight = FontWeight.Medium, letterSpacing = 0.08.em
                 )
                 Spacer(Modifier.height(6.dp))
@@ -1255,7 +1255,7 @@ private fun PolygonRpcCard(vm: AppViewModel) {
                         notice != null -> Triple(Color(0xFFEF4444), notice!!, PomboColors.Danger)
                         testing -> Triple(Color(0xFFFACC15), "Testing...", Color(0xFFFACC15))
                         tested.isEmpty() ->
-                            Triple(Color.White.copy(alpha = 0.20f), "Not tested", Color.White.copy(alpha = 0.40f))
+                            Triple(PomboColors.Overlay20, "Not tested", PomboColors.Overlay40)
                         working.isEmpty() -> Triple(Color(0xFFEF4444), "Not connected", PomboColors.Danger)
                         else -> Triple(Color(0xFF22C55E), "Connected", PomboColors.Success)
                     }
@@ -1266,7 +1266,7 @@ private fun PolygonRpcCard(vm: AppViewModel) {
                         Spacer(Modifier.width(8.dp))
                         Text(
                             "${working.size}/${selected.size}",
-                            color = Color.White.copy(alpha = 0.30f), fontSize = 12.sp
+                            color = PomboColors.Overlay30, fontSize = 12.sp
                         )
                     }
                 }
@@ -1279,7 +1279,7 @@ private fun PolygonRpcCard(vm: AppViewModel) {
                     if (first.key == com.pombo.android.core.RpcEndpoints.CUSTOM_KEY)
                         selection.customUrl.removePrefix("https://")
                     else selection.labelFor(first.key),
-                    color = Color.White.copy(alpha = 0.50f), fontSize = 12.sp,
+                    color = PomboColors.Overlay50, fontSize = 12.sp,
                     maxLines = 1, overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis
                 )
             }
@@ -1287,7 +1287,7 @@ private fun PolygonRpcCard(vm: AppViewModel) {
             Icon(
                 if (open) Icons.Filled.KeyboardArrowUp else Icons.Filled.KeyboardArrowDown,
                 contentDescription = null,
-                tint = Color.White.copy(alpha = 0.30f),
+                tint = PomboColors.Overlay30,
                 modifier = Modifier.size(18.dp).clickableNoRipple { open = !open }
             )
         }
@@ -1297,7 +1297,7 @@ private fun PolygonRpcCard(vm: AppViewModel) {
         Spacer(Modifier.height(12.dp))
         Text(
             "Checked endpoints are the ones used, in this order.",
-            color = Color.White.copy(alpha = 0.25f), fontSize = 12.sp
+            color = PomboColors.Overlay25, fontSize = 12.sp
         )
         Spacer(Modifier.height(10.dp))
         val fallback = health?.fallback == true
@@ -1340,18 +1340,18 @@ private fun PolygonRpcCard(vm: AppViewModel) {
             ) {
                 Icon(
                     Icons.Filled.Add, contentDescription = null,
-                    tint = Color.White.copy(alpha = 0.60f), modifier = Modifier.size(13.dp)
+                    tint = PomboColors.Overlay60, modifier = Modifier.size(13.dp)
                 )
                 Spacer(Modifier.width(6.dp))
-                Text("Add custom endpoint", color = Color.White.copy(alpha = 0.60f), fontSize = 12.sp)
+                Text("Add custom endpoint", color = PomboColors.Overlay60, fontSize = 12.sp)
             }
         } else {
             var urlDraft by remember { mutableStateOf("") }
             var error by remember { mutableStateOf<String?>(null) }
             Column(
                 Modifier.fillMaxWidth()
-                    .background(Color.White.copy(alpha = 0.03f), RoundedCornerShape(12.dp))
-                    .border(1.dp, Color.White.copy(alpha = 0.05f), RoundedCornerShape(12.dp))
+                    .background(PomboColors.Overlay3, RoundedCornerShape(12.dp))
+                    .border(1.dp, PomboColors.Overlay5, RoundedCornerShape(12.dp))
                     .padding(12.dp)
             ) {
                 CompactSettingsField(
@@ -1374,7 +1374,7 @@ private fun PolygonRpcCard(vm: AppViewModel) {
                 Spacer(Modifier.height(8.dp))
                 Text(
                     "Any Polygon JSON-RPC endpoint.",
-                    color = Color.White.copy(alpha = 0.25f), fontSize = 11.sp
+                    color = PomboColors.Overlay25, fontSize = 11.sp
                 )
             }
         }
@@ -1383,11 +1383,11 @@ private fun PolygonRpcCard(vm: AppViewModel) {
         Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End) {
             Box(
                 Modifier
-                    .background(Color.White.copy(alpha = 0.05f), RoundedCornerShape(8.dp))
+                    .background(PomboColors.Overlay5, RoundedCornerShape(8.dp))
                     .clickableNoRipple { if (!testing) vm.testRpc(all = true) }
                     .padding(horizontal = 12.dp, vertical = 6.dp)
             ) {
-                Text("Test all", color = Color.White.copy(alpha = 0.60f), fontSize = 12.sp)
+                Text("Test all", color = PomboColors.Overlay60, fontSize = 12.sp)
             }
         }
     }
@@ -1410,7 +1410,7 @@ private fun RpcEndpointRow(
     Row(
         Modifier.fillMaxWidth()
             .padding(bottom = 6.dp)
-            .background(Color.White.copy(alpha = 0.03f), RoundedCornerShape(8.dp))
+            .background(PomboColors.Overlay3, RoundedCornerShape(8.dp))
             .border(
                 1.dp,
                 Color.White.copy(alpha = if (checked) 0.15f else 0.05f),
@@ -1424,7 +1424,7 @@ private fun RpcEndpointRow(
             onCheckedChange = onCheck,
             colors = androidx.compose.material3.CheckboxDefaults.colors(
                 checkedColor = PomboColors.Accent,
-                uncheckedColor = Color.White.copy(alpha = 0.30f),
+                uncheckedColor = PomboColors.Overlay30,
                 checkmarkColor = Color.Black
             ),
             modifier = Modifier.size(26.dp)
@@ -1434,12 +1434,12 @@ private fun RpcEndpointRow(
             Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
                 Text(
                     name,
-                    color = if (checked) PomboColors.Text else Color.White.copy(alpha = 0.50f),
+                    color = if (checked) PomboColors.Text else PomboColors.Overlay50,
                     fontSize = 13.sp
                 )
                 Spacer(Modifier.width(6.dp))
                 Text(
-                    host, color = Color.White.copy(alpha = 0.25f), fontSize = 10.sp,
+                    host, color = PomboColors.Overlay25, fontSize = 10.sp,
                     maxLines = 1, overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis,
                     modifier = Modifier.weight(1f)
                 )
@@ -1460,7 +1460,7 @@ private fun RpcEndpointRow(
             Spacer(Modifier.width(4.dp))
             Icon(
                 Icons.Outlined.Delete, contentDescription = "Remove endpoint",
-                tint = Color.White.copy(alpha = 0.35f),
+                tint = PomboColors.Overlay35,
                 modifier = Modifier.size(15.dp).clickableNoRipple(onRemove)
             )
         }
@@ -1480,7 +1480,7 @@ private fun RpcEndpointRow(
 private fun RpcProbeLabel(probe: AppViewModel.RpcProbe?, testing: Boolean) {
     val (text, color) = when {
         probe == null && testing -> "testing" to Color(0xFFFACC15)
-        probe == null -> "not tested" to Color.White.copy(alpha = 0.25f)
+        probe == null -> "not tested" to PomboColors.Overlay25
         probe.reach == com.pombo.android.core.GasEstimator.Reach.DEAD ->
             "no answer" to PomboColors.Danger
         probe.reach == com.pombo.android.core.GasEstimator.Reach.LIMITED ->
@@ -1563,7 +1563,7 @@ private fun SecurityPanel(vm: AppViewModel) {
             } else {
                 Text(
                     if (keyVisible) key else "•".repeat(key.length.coerceAtMost(48)),
-                    color = Color.White.copy(alpha = 0.70f), fontSize = 12.sp,
+                    color = PomboColors.Overlay70, fontSize = 12.sp,
                     fontFamily = androidx.compose.ui.text.font.FontFamily.Monospace,
                     lineHeight = 18.sp,
                     modifier = Modifier
@@ -1576,26 +1576,26 @@ private fun SecurityPanel(vm: AppViewModel) {
                 Row {
                     Box(
                         Modifier.weight(1f)
-                            .background(Color.White.copy(alpha = 0.05f), RoundedCornerShape(12.dp))
-                            .border(1.dp, Color.White.copy(alpha = 0.10f), RoundedCornerShape(12.dp))
+                            .background(PomboColors.Overlay5, RoundedCornerShape(12.dp))
+                            .border(1.dp, PomboColors.Overlay10, RoundedCornerShape(12.dp))
                             .clickableNoRipple { keyVisible = !keyVisible }
                             .padding(vertical = 10.dp),
                         contentAlignment = Alignment.Center
                     ) {
                         Text(
                             if (keyVisible) "Hide" else "Show",
-                            color = Color.White.copy(alpha = 0.70f), fontSize = 14.sp
+                            color = PomboColors.Overlay70, fontSize = 14.sp
                         )
                     }
                     Spacer(Modifier.width(10.dp))
                     Box(
                         Modifier.weight(1f)
-                            .background(Color.White.copy(alpha = 0.05f), RoundedCornerShape(12.dp))
-                            .border(1.dp, Color.White.copy(alpha = 0.10f), RoundedCornerShape(12.dp))
+                            .background(PomboColors.Overlay5, RoundedCornerShape(12.dp))
+                            .border(1.dp, PomboColors.Overlay10, RoundedCornerShape(12.dp))
                             .clickableNoRipple { revealedKey = null; keyVisible = false }
                             .padding(vertical = 10.dp),
                         contentAlignment = Alignment.Center
-                    ) { Text("Lock", color = Color.White.copy(alpha = 0.70f), fontSize = 14.sp) }
+                    ) { Text("Lock", color = PomboColors.Overlay70, fontSize = 14.sp) }
                 }
                 Spacer(Modifier.height(10.dp))
                 HoldToConfirmButton("Hold to Copy (2s)") {
@@ -1643,12 +1643,12 @@ private fun SecurityPanel(vm: AppViewModel) {
                 Spacer(Modifier.height(10.dp))
                 Box(
                     Modifier.fillMaxWidth()
-                        .background(Color.White.copy(alpha = 0.05f), RoundedCornerShape(12.dp))
-                        .border(1.dp, Color.White.copy(alpha = 0.10f), RoundedCornerShape(12.dp))
+                        .background(PomboColors.Overlay5, RoundedCornerShape(12.dp))
+                        .border(1.dp, PomboColors.Overlay10, RoundedCornerShape(12.dp))
                         .clickableNoRipple { deleteVerified = false }
                         .padding(vertical = 10.dp),
                     contentAlignment = Alignment.Center
-                ) { Text("Cancel", color = Color.White.copy(alpha = 0.70f), fontSize = 14.sp) }
+                ) { Text("Cancel", color = PomboColors.Overlay70, fontSize = 14.sp) }
             }
         }
         Spacer(Modifier.height(24.dp))
@@ -1665,17 +1665,17 @@ private fun PrivacyPanel(vm: AppViewModel) {
     // No scroller of its own — the settings pager scrolls every panel.
     Column(Modifier.fillMaxSize()) {
         Text(
-            "BLOCKED USERS", color = Color.White.copy(alpha = 0.70f),
+            "BLOCKED USERS", color = PomboColors.Overlay70,
             fontSize = 12.sp, fontWeight = FontWeight.Medium, letterSpacing = 0.8.sp
         )
         Spacer(Modifier.height(4.dp))
         Text(
             "Messages from these accounts are ignored before they are decrypted.",
-            color = Color.White.copy(alpha = 0.30f), fontSize = 12.sp
+            color = PomboColors.Overlay30, fontSize = 12.sp
         )
         Spacer(Modifier.height(14.dp))
         if (blocked.isEmpty()) {
-            Text("No blocked users.", color = Color.White.copy(alpha = 0.30f), fontSize = 14.sp)
+            Text("No blocked users.", color = PomboColors.Overlay30, fontSize = 14.sp)
         } else {
             blocked.forEach { addr ->
                 Row(
@@ -1691,11 +1691,11 @@ private fun PrivacyPanel(vm: AppViewModel) {
                     )
                     Box(
                         Modifier
-                            .background(Color.White.copy(alpha = 0.05f), RoundedCornerShape(10.dp))
-                            .border(1.dp, Color.White.copy(alpha = 0.10f), RoundedCornerShape(10.dp))
+                            .background(PomboColors.Overlay5, RoundedCornerShape(10.dp))
+                            .border(1.dp, PomboColors.Overlay10, RoundedCornerShape(10.dp))
                             .clickableNoRipple { vm.unblockPeer(addr); version++ }
                             .padding(horizontal = 14.dp, vertical = 7.dp)
-                    ) { Text("Unblock", color = Color.White.copy(alpha = 0.70f), fontSize = 13.sp) }
+                    ) { Text("Unblock", color = PomboColors.Overlay70, fontSize = 13.sp) }
                 }
             }
         }
@@ -1712,9 +1712,9 @@ private fun DangerCard(title: String, hint: String, content: @Composable ColumnS
             .border(1.dp, PomboColors.Danger.copy(alpha = 0.10f), RoundedCornerShape(12.dp))
             .padding(16.dp)
     ) {
-        Text(title, color = Color.White.copy(alpha = 0.90f), fontSize = 14.sp, fontWeight = FontWeight.Medium)
+        Text(title, color = PomboColors.Overlay90, fontSize = 14.sp, fontWeight = FontWeight.Medium)
         Spacer(Modifier.height(4.dp))
-        Text(hint, color = Color.White.copy(alpha = 0.40f), fontSize = 12.sp)
+        Text(hint, color = PomboColors.Overlay40, fontSize = 12.sp)
         Spacer(Modifier.height(14.dp))
         content()
     }

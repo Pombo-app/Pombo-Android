@@ -53,6 +53,7 @@ import kotlinx.coroutines.withContext
 import kotlin.math.ln
 import kotlin.math.pow
 import kotlin.math.roundToInt
+import com.pombo.android.ui.theme.PomboColors
 
 /**
  * Channel-image crop dialog, ported from the web's
@@ -106,8 +107,8 @@ fun ChannelImageCropDialog(
         Column(
             Modifier
                 .fillMaxWidth()
-                .background(Color(0xFF111113), RoundedCornerShape(16.dp))
-                .border(1.dp, Color.White.copy(alpha = 0.06f), RoundedCornerShape(16.dp))
+                .background(PomboColors.Surface6, RoundedCornerShape(16.dp))
+                .border(1.dp, PomboColors.Overlay6, RoundedCornerShape(16.dp))
                 .padding(20.dp)
         ) {
             Text("Update channel image", color = Color.White, fontSize = 16.sp, fontWeight = FontWeight.Medium)
@@ -116,8 +117,8 @@ fun ChannelImageCropDialog(
             Column(
                 Modifier
                     .fillMaxWidth()
-                    .background(Color.White.copy(alpha = 0.05f), RoundedCornerShape(12.dp))
-                    .border(1.dp, Color.White.copy(alpha = 0.08f), RoundedCornerShape(12.dp))
+                    .background(PomboColors.Overlay5, RoundedCornerShape(12.dp))
+                    .border(1.dp, PomboColors.Overlay8, RoundedCornerShape(12.dp))
                     .padding(16.dp)
             ) {
                 // Crop stage: circular like the web's rounded-full viewport.
@@ -128,8 +129,8 @@ fun ChannelImageCropDialog(
                         .aspectRatio(1f)
                         .align(Alignment.CenterHorizontally)
                         .clip(CircleShape)
-                        .background(Color.White.copy(alpha = 0.06f))
-                        .border(1.dp, Color.White.copy(alpha = 0.06f), CircleShape)
+                        .background(PomboColors.Overlay6)
+                        .border(1.dp, PomboColors.Overlay6, CircleShape)
                         .onSizeChanged { stagePx = it.width.toFloat() }
                         .pointerInput(bitmap) {
                             detectTransformGestures { _, pan, gestureZoom, _ ->
@@ -167,7 +168,7 @@ fun ChannelImageCropDialog(
                     } else {
                         Text(
                             if (loadFailed) "Failed to load image" else "Loading…",
-                            color = Color.White.copy(alpha = 0.40f), fontSize = 12.sp
+                            color = PomboColors.Overlay40, fontSize = 12.sp
                         )
                     }
                 }
@@ -177,14 +178,14 @@ fun ChannelImageCropDialog(
                     Text(
                         "Drag to choose the framing and use zoom to control how tightly " +
                             "the image is cropped. Upload stays square at 512×512.",
-                        color = Color.White.copy(alpha = 0.50f), fontSize = 11.sp,
+                        color = PomboColors.Overlay50, fontSize = 11.sp,
                         lineHeight = 15.sp, modifier = Modifier.weight(1f)
                     )
                     Spacer(Modifier.width(12.dp))
                     Box(
                         Modifier
-                            .background(Color.White.copy(alpha = 0.05f), RoundedCornerShape(8.dp))
-                            .border(1.dp, Color.White.copy(alpha = 0.08f), RoundedCornerShape(8.dp))
+                            .background(PomboColors.Overlay5, RoundedCornerShape(8.dp))
+                            .border(1.dp, PomboColors.Overlay8, RoundedCornerShape(8.dp))
                             .clickable(enabled = bitmap != null) {
                                 val bmp = bitmap ?: return@clickable
                                 zoom = 1f
@@ -193,13 +194,13 @@ fun ChannelImageCropDialog(
                             }
                             .padding(horizontal = 10.dp, vertical = 6.dp)
                     ) {
-                        Text("Reset", color = Color.White.copy(alpha = 0.50f), fontSize = 11.sp, fontWeight = FontWeight.Medium)
+                        Text("Reset", color = PomboColors.Overlay50, fontSize = 11.sp, fontWeight = FontWeight.Medium)
                     }
                 }
                 Spacer(Modifier.height(12.dp))
 
                 Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-                    Text("Zoom", color = Color.White.copy(alpha = 0.40f), fontSize = 11.sp)
+                    Text("Zoom", color = PomboColors.Overlay40, fontSize = 11.sp)
                     Slider(
                         value = sliderPercent.toFloat(),
                         onValueChange = { percent ->
@@ -217,14 +218,14 @@ fun ChannelImageCropDialog(
                         enabled = bitmap != null,
                         colors = SliderDefaults.colors(
                             thumbColor = Color.White,
-                            activeTrackColor = Color.White.copy(alpha = 0.40f),
-                            inactiveTrackColor = Color.White.copy(alpha = 0.10f)
+                            activeTrackColor = PomboColors.Overlay40,
+                            inactiveTrackColor = PomboColors.Overlay10
                         ),
                         modifier = Modifier.weight(1f)
                     )
                     Text(
                         "${sliderPercent.roundToInt()}%",
-                        color = Color.White.copy(alpha = 0.50f), fontSize = 11.sp,
+                        color = PomboColors.Overlay50, fontSize = 11.sp,
                         textAlign = TextAlign.End, modifier = Modifier.width(40.dp)
                     )
                 }
@@ -235,19 +236,19 @@ fun ChannelImageCropDialog(
                 Box(
                     Modifier
                         .weight(1f)
-                        .background(Color.White.copy(alpha = 0.05f), RoundedCornerShape(12.dp))
-                        .border(1.dp, Color.White.copy(alpha = 0.08f), RoundedCornerShape(12.dp))
+                        .background(PomboColors.Overlay5, RoundedCornerShape(12.dp))
+                        .border(1.dp, PomboColors.Overlay8, RoundedCornerShape(12.dp))
                         .clickable(enabled = !saving) { onCancel() }
                         .padding(vertical = 10.dp),
                     contentAlignment = Alignment.Center
                 ) {
-                    Text("Cancel", color = Color.White.copy(alpha = 0.50f), fontSize = 14.sp, fontWeight = FontWeight.Medium)
+                    Text("Cancel", color = PomboColors.Overlay50, fontSize = 14.sp, fontWeight = FontWeight.Medium)
                 }
                 Box(
                     Modifier
                         .weight(1f)
                         .background(
-                            if (bitmap != null && !saving) Color.White else Color.White.copy(alpha = 0.30f),
+                            if (bitmap != null && !saving) Color.White else PomboColors.Overlay30,
                             RoundedCornerShape(12.dp)
                         )
                         .clickable(enabled = bitmap != null && !saving) {

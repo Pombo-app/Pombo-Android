@@ -69,7 +69,7 @@ val LocalStorageTransfers = staticCompositionLocalOf<StorageTransfers?> { null }
 // ---- shared design constants (mirror the web's unified file-card) ----
 private val CARD_WIDTH = 300.dp                 // FIXED — never varies with stats content
 private val CARD_SHAPE = RoundedCornerShape(12.dp)
-private val CARD_BG = Color.White.copy(alpha = 0.05f)
+private val CARD_BG = PomboColors.Overlay5
 private val GREEN = PomboColors.Success
 private val BLUE = Color(0xFF3B82F6)
 
@@ -118,13 +118,13 @@ private fun FileCardAction(icon: ImageVector, tint: Color, bgAlpha: Float, onCli
 fun TransportBadge(label: String) {
     Text(
         label.uppercase(),
-        color = Color.White.copy(alpha = 0.4f),
+        color = PomboColors.Overlay40,
         fontSize = 9.sp,
         maxLines = 1,
         modifier = Modifier
             .padding(end = 6.dp)
             .clip(RoundedCornerShape(4.dp))
-            .background(Color.White.copy(alpha = 0.08f))
+            .background(PomboColors.Overlay8)
             .padding(horizontal = 5.dp, vertical = 1.dp)
     )
 }
@@ -136,7 +136,7 @@ private fun ProgressBar(pct: Float, color: Color) {
         Modifier
             .fillMaxWidth()
             .height(4.dp)
-            .background(Color.White.copy(alpha = 0.06f))
+            .background(PomboColors.Overlay6)
     ) {
         Box(
             Modifier
@@ -193,8 +193,8 @@ fun FileBubbleContent(
         // Saved is a pure status indicator — nothing to tap, nothing left to do.
         saved -> ({ FileCardAction(Icons.Filled.Check, GREEN.copy(alpha = 0.7f), 0.06f, null) })
         localFile -> ({ FileCardAction(Icons.Filled.Save, GREEN.copy(alpha = 0.7f), 0.06f) { transfers?.onSave(file.fileId, file.fileName) } })
-        downloading -> ({ FileCardAction(Icons.Filled.ArrowDownward, Color.White.copy(alpha = 0.25f), 0.04f, null) })
-        canDownload -> ({ FileCardAction(Icons.Filled.ArrowDownward, Color.White.copy(alpha = 0.6f), 0.06f) { transfers?.onDownload(messageId) } })
+        downloading -> ({ FileCardAction(Icons.Filled.ArrowDownward, PomboColors.Overlay25, 0.04f, null) })
+        canDownload -> ({ FileCardAction(Icons.Filled.ArrowDownward, PomboColors.Overlay60, 0.06f) { transfers?.onDownload(messageId) } })
         else -> null
     }
 
@@ -219,14 +219,14 @@ fun FileBubbleContent(
                 ) {
                     TransportBadge("mesh")
                     Text(
-                        detail, color = Color.White.copy(alpha = 0.35f), fontSize = 10.sp,
+                        detail, color = PomboColors.Overlay35, fontSize = 10.sp,
                         maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f, fill = false)
                     )
                     if (localFile && upload != null) {
-                        Icon(Icons.Filled.ArrowUpward, null, tint = Color.White.copy(alpha = 0.35f), modifier = Modifier.size(10.dp))
-                        Text(formatSpeed(upload.bytesPerSecond).ifEmpty { "0 B/s" }, color = Color.White.copy(alpha = 0.35f), fontSize = 10.sp, maxLines = 1)
-                        Icon(Icons.Filled.Person, null, tint = Color.White.copy(alpha = 0.35f), modifier = Modifier.size(10.dp))
-                        Text("${upload.leechers}", color = Color.White.copy(alpha = 0.35f), fontSize = 10.sp, maxLines = 1)
+                        Icon(Icons.Filled.ArrowUpward, null, tint = PomboColors.Overlay35, modifier = Modifier.size(10.dp))
+                        Text(formatSpeed(upload.bytesPerSecond).ifEmpty { "0 B/s" }, color = PomboColors.Overlay35, fontSize = 10.sp, maxLines = 1)
+                        Icon(Icons.Filled.Person, null, tint = PomboColors.Overlay35, modifier = Modifier.size(10.dp))
+                        Text("${upload.leechers}", color = PomboColors.Overlay35, fontSize = 10.sp, maxLines = 1)
                     }
                 }
                 if (localFile) Text("seeding...", color = GREEN.copy(alpha = 0.6f), fontSize = 10.sp, modifier = Modifier.padding(top = 2.dp))
@@ -299,9 +299,9 @@ fun StorageFileBubbleContent(
         // Saved is a pure status indicator — nothing to tap, nothing left to do.
         saved -> ({ FileCardAction(Icons.Filled.Check, GREEN.copy(alpha = 0.7f), 0.06f, null) })
         ready -> ({ FileCardAction(Icons.Filled.Save, GREEN.copy(alpha = 0.7f), 0.06f) { transfers?.onSave(file.transferId, file.fileName) } })
-        uploading -> ({ FileCardAction(Icons.Filled.ArrowUpward, Color.White.copy(alpha = 0.25f), 0.04f, null) })
-        downloading || pausedDl -> ({ FileCardAction(Icons.Filled.ArrowDownward, Color.White.copy(alpha = 0.25f), 0.04f, null) })
-        !mine -> ({ FileCardAction(Icons.Filled.ArrowDownward, Color.White.copy(alpha = 0.6f), 0.06f) { transfers?.onDownload(messageId) } })
+        uploading -> ({ FileCardAction(Icons.Filled.ArrowUpward, PomboColors.Overlay25, 0.04f, null) })
+        downloading || pausedDl -> ({ FileCardAction(Icons.Filled.ArrowDownward, PomboColors.Overlay25, 0.04f, null) })
+        !mine -> ({ FileCardAction(Icons.Filled.ArrowDownward, PomboColors.Overlay60, 0.06f) { transfers?.onDownload(messageId) } })
         else -> null
     }
 

@@ -221,7 +221,7 @@ private fun MediaLightbox(bytes: ByteArray, onDismiss: () -> Unit) {
             ) {
                 Box(
                     Modifier
-                        .background(Color.White.copy(alpha = 0.10f), CircleShape)
+                        .background(PomboColors.Overlay10, CircleShape)
                         .clickableNoRipple {
                             if (!saving) {
                                 saving = true
@@ -249,7 +249,7 @@ private fun MediaLightbox(bytes: ByteArray, onDismiss: () -> Unit) {
                 Spacer(Modifier.width(10.dp))
                 Box(
                     Modifier
-                        .background(Color.White.copy(alpha = 0.10f), CircleShape)
+                        .background(PomboColors.Overlay10, CircleShape)
                         .clickableNoRipple(onDismiss)
                         .padding(10.dp),
                     contentAlignment = Alignment.Center
@@ -789,7 +789,7 @@ private fun MessageBubble(
                             Spacer(Modifier.width(6.dp))
                             CircularProgressIndicator(
                                 modifier = Modifier.size(10.dp),
-                                color = Color.White.copy(alpha = 0.55f),
+                                color = PomboColors.Overlay55,
                                 strokeWidth = 1.5.dp
                             )
                         }
@@ -836,7 +836,7 @@ private fun MessageBubble(
                             Modifier
                                 .padding(bottom = 6.dp)
                                 .widthIn(max = 280.dp)
-                                .background(Color.White.copy(alpha = 0.05f), RoundedCornerShape(6.dp))
+                                .background(PomboColors.Overlay5, RoundedCornerShape(6.dp))
                                 // Tapping a quote jumps to what it quotes, as on
                                 // the web; the quote block was previously inert.
                                 .then(
@@ -845,12 +845,12 @@ private fun MessageBubble(
                                 )
                                 .padding(horizontal = 8.dp, vertical = 4.dp)
                         ) {
-                            Box(Modifier.width(2.dp).height(26.dp).background(Color.White.copy(alpha = 0.15f)))
+                            Box(Modifier.width(2.dp).height(26.dp).background(PomboColors.Overlay15))
                             Spacer(Modifier.width(6.dp))
                             Column {
                                 Text(
                                     r.senderName ?: shortAddress(r.sender),
-                                    color = Color.White.copy(alpha = 0.60f),
+                                    color = PomboColors.Overlay60,
                                     fontSize = 12.sp, fontWeight = FontWeight.Medium
                                 )
                                 Text(
@@ -859,7 +859,7 @@ private fun MessageBubble(
                                     // media, never a legitimate empty message.
                                     if (r.text.isBlank()) "[Media]"
                                     else r.text.take(50) + if (r.text.length > 50) "..." else "",
-                                    color = Color.White.copy(alpha = 0.50f),
+                                    color = PomboColors.Overlay50,
                                     fontSize = 13.sp, maxLines = 1
                                 )
                             }
@@ -926,7 +926,7 @@ private fun MessageBubble(
                                     .height(28.dp)
                                     .background(
                                         if (reactedByMe) PomboColors.Accent.copy(alpha = 0.15f)
-                                        else Color.White.copy(alpha = 0.08f),
+                                        else PomboColors.Overlay8,
                                         RoundedCornerShape(12.dp)
                                     )
                                     .clickable { onReact(emoji, !reactedByMe) }
@@ -953,7 +953,7 @@ private fun MessageBubble(
                                 Spacer(Modifier.width(4.dp))
                                 Text(
                                     "${users.size}",
-                                    color = Color.White.copy(alpha = 0.80f),
+                                    color = PomboColors.Overlay80,
                                     fontSize = 12.sp, lineHeight = 18.sp
                                 )
                             }
@@ -1105,7 +1105,7 @@ private fun MessageBubble(
                     expanded = picker,
                     onDismissRequest = { picker = false },
                     modifier = Modifier
-                        .background(Color(0xFF16161B))
+                        .background(PomboColors.Surface7)
                         .width(240.dp)
                 ) {
                     androidx.compose.foundation.layout.FlowRow(
@@ -1148,8 +1148,8 @@ private fun MessageBubble(
         androidx.compose.ui.window.Dialog(onDismissRequest = { confirmDelete = false }) {
             Column(
                 Modifier.fillMaxWidth()
-                    .background(Color(0xFF16161B), RoundedCornerShape(20.dp))
-                    .border(1.dp, Color.White.copy(alpha = 0.08f), RoundedCornerShape(20.dp))
+                    .background(PomboColors.Surface7, RoundedCornerShape(20.dp))
+                    .border(1.dp, PomboColors.Overlay8, RoundedCornerShape(20.dp))
                     .padding(20.dp)
             ) {
                 Text("Delete message", color = Color.White, fontSize = 17.sp, fontWeight = FontWeight.SemiBold)
@@ -1162,17 +1162,17 @@ private fun MessageBubble(
                         purgeProviders > 0 -> "Removed for everyone. Its copy on storage cannot be erased from this session."
                         else -> "Removed for everyone."
                     },
-                    color = Color.White.copy(alpha = 0.60f), fontSize = 14.sp, lineHeight = 20.sp
+                    color = PomboColors.Overlay60, fontSize = 14.sp, lineHeight = 20.sp
                 )
                 Spacer(Modifier.height(18.dp))
                 Row {
                     Box(
                         Modifier.weight(1f)
-                            .background(Color.White.copy(alpha = 0.05f), RoundedCornerShape(12.dp))
+                            .background(PomboColors.Overlay5, RoundedCornerShape(12.dp))
                             .clickableNoRipple { confirmDelete = false }
                             .padding(vertical = 10.dp),
                         contentAlignment = Alignment.Center
-                    ) { Text("Cancel", color = Color.White.copy(alpha = 0.60f), fontSize = 14.sp) }
+                    ) { Text("Cancel", color = PomboColors.Overlay60, fontSize = 14.sp) }
                     Spacer(Modifier.width(10.dp))
                     Box(
                         Modifier.weight(1f)
@@ -1191,8 +1191,8 @@ private fun MessageBubble(
         androidx.compose.ui.window.Dialog(onDismissRequest = { confirmErase = false }) {
             Column(
                 Modifier.fillMaxWidth()
-                    .background(Color(0xFF16161B), RoundedCornerShape(20.dp))
-                    .border(1.dp, Color.White.copy(alpha = 0.08f), RoundedCornerShape(20.dp))
+                    .background(PomboColors.Surface7, RoundedCornerShape(20.dp))
+                    .border(1.dp, PomboColors.Overlay8, RoundedCornerShape(20.dp))
                     .padding(20.dp)
             ) {
                 Text("Erase from storage", color = Color.White, fontSize = 17.sp, fontWeight = FontWeight.SemiBold)
@@ -1202,17 +1202,17 @@ private fun MessageBubble(
                         "It disappears from this device and cannot be recovered."
                     else "Remove this message from every storage provider that can erase it. " +
                         "It stays hidden for everyone and cannot be recovered.",
-                    color = Color.White.copy(alpha = 0.60f), fontSize = 14.sp, lineHeight = 20.sp
+                    color = PomboColors.Overlay60, fontSize = 14.sp, lineHeight = 20.sp
                 )
                 Spacer(Modifier.height(18.dp))
                 Row {
                     Box(
                         Modifier.weight(1f)
-                            .background(Color.White.copy(alpha = 0.05f), RoundedCornerShape(12.dp))
+                            .background(PomboColors.Overlay5, RoundedCornerShape(12.dp))
                             .clickableNoRipple { confirmErase = false }
                             .padding(vertical = 10.dp),
                         contentAlignment = Alignment.Center
-                    ) { Text("Cancel", color = Color.White.copy(alpha = 0.60f), fontSize = 14.sp) }
+                    ) { Text("Cancel", color = PomboColors.Overlay60, fontSize = 14.sp) }
                     Spacer(Modifier.width(10.dp))
                     Box(
                         Modifier.weight(1f)
@@ -1231,8 +1231,8 @@ private fun MessageBubble(
         androidx.compose.ui.window.Dialog(onDismissRequest = { confirmBlock = false }) {
             Column(
                 Modifier.fillMaxWidth()
-                    .background(Color(0xFF16161B), RoundedCornerShape(20.dp))
-                    .border(1.dp, Color.White.copy(alpha = 0.08f), RoundedCornerShape(20.dp))
+                    .background(PomboColors.Surface7, RoundedCornerShape(20.dp))
+                    .border(1.dp, PomboColors.Overlay8, RoundedCornerShape(20.dp))
                     .padding(20.dp)
             ) {
                 Text("Block user", color = Color.White, fontSize = 17.sp, fontWeight = FontWeight.SemiBold)
@@ -1241,17 +1241,17 @@ private fun MessageBubble(
                     "Block ${msg.sender.take(6)}…${msg.sender.takeLast(4)}? All messages from " +
                         "this user will be permanently ignored, and this conversation " +
                         "will be removed from this device.",
-                    color = Color.White.copy(alpha = 0.60f), fontSize = 14.sp, lineHeight = 20.sp
+                    color = PomboColors.Overlay60, fontSize = 14.sp, lineHeight = 20.sp
                 )
                 Spacer(Modifier.height(18.dp))
                 Row {
                     Box(
                         Modifier.weight(1f)
-                            .background(Color.White.copy(alpha = 0.05f), RoundedCornerShape(12.dp))
+                            .background(PomboColors.Overlay5, RoundedCornerShape(12.dp))
                             .clickableNoRipple { confirmBlock = false }
                             .padding(vertical = 10.dp),
                         contentAlignment = Alignment.Center
-                    ) { Text("Cancel", color = Color.White.copy(alpha = 0.60f), fontSize = 14.sp) }
+                    ) { Text("Cancel", color = PomboColors.Overlay60, fontSize = 14.sp) }
                     Spacer(Modifier.width(10.dp))
                     Box(
                         Modifier.weight(1f)
@@ -1360,12 +1360,12 @@ private fun MessageActionTriggers(
     ) {
         if (onReply != null) Icon(
             Icons.AutoMirrored.Filled.Reply, contentDescription = "Reply",
-            tint = Color.White.copy(alpha = 0.60f),
+            tint = PomboColors.Overlay60,
             modifier = Modifier.size(18.dp).clickableNoRipple(onReply)
         )
         Icon(
             Icons.Outlined.SentimentSatisfied, contentDescription = "React",
-            tint = Color.White.copy(alpha = 0.60f),
+            tint = PomboColors.Overlay60,
             modifier = Modifier.size(18.dp).clickableNoRipple(onReact)
         )
     }

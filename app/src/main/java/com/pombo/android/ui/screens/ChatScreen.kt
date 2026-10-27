@@ -186,12 +186,12 @@ fun ChatScreen(vm: AppViewModel) {
                 androidx.compose.foundation.layout.Spacer(Modifier.height(6.dp))
                 Text(
                     "Rotate to write again. Older messages stay as they are.",
-                    color = Color.White.copy(alpha = 0.6f), fontSize = 13.sp
+                    color = PomboColors.Overlay60, fontSize = 13.sp
                 )
                 androidx.compose.foundation.layout.Spacer(Modifier.height(14.dp))
                 Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End) {
                     androidx.compose.material3.TextButton(onClick = { vm.dismissRotateOffer() }) {
-                        Text("Not now", color = Color.White.copy(alpha = 0.6f))
+                        Text("Not now", color = PomboColors.Overlay60)
                     }
                     androidx.compose.material3.TextButton(onClick = { vm.rotateForMissingKey() }) {
                         Text("Rotate", color = Color.White)
@@ -423,7 +423,7 @@ fun ChatScreen(vm: AppViewModel) {
                 // Web subtitle: an icon-only channel-type glyph, then "· N Online"
                 // (the type label text lives in Channel Details, not here).
                 Row(verticalAlignment = Alignment.CenterVertically) {
-                    val dim = Color.White.copy(alpha = 0.30f)
+                    val dim = PomboColors.Overlay30
                     ChannelTypeIcon(ch.type, ch.readOnly, dim, size = 13.dp)
                     // This row must never be empty, or the header grows once
                     // presence lands and everything above it jumps. The web
@@ -496,7 +496,7 @@ fun ChatScreen(vm: AppViewModel) {
                     Icon(
                         Icons.Outlined.PersonAddAlt,
                         contentDescription = "Invite users",
-                        tint = Color.White.copy(alpha = 0.30f)
+                        tint = PomboColors.Overlay30
                     )
                 }
             }
@@ -522,7 +522,7 @@ fun ChatScreen(vm: AppViewModel) {
             var chMenu by remember { mutableStateOf(false) }
             Box {
                 IconButton(onClick = { chMenu = true }) {
-                    Icon(Icons.Filled.MoreVert, contentDescription = "Channel options", tint = Color.White.copy(alpha = 0.30f))
+                    Icon(Icons.Filled.MoreVert, contentDescription = "Channel options", tint = PomboColors.Overlay30)
                 }
                 // Same visual language as the message context menu: #16161b,
                 // white-10% border, radius 12, compact rows with icons. The
@@ -533,8 +533,8 @@ fun ChatScreen(vm: AppViewModel) {
                     expanded = chMenu,
                     onDismissRequest = { chMenu = false },
                     shape = RoundedCornerShape(12.dp),
-                    containerColor = Color(0xFF16161B),
-                    border = androidx.compose.foundation.BorderStroke(1.dp, Color.White.copy(alpha = 0.10f)),
+                    containerColor = PomboColors.Surface7,
+                    border = androidx.compose.foundation.BorderStroke(1.dp, PomboColors.Overlay10),
                     modifier = Modifier.widthIn(min = 180.dp)
                 ) {
                     val headerClipboard = androidx.compose.ui.platform.LocalClipboardManager.current
@@ -576,7 +576,7 @@ fun ChatScreen(vm: AppViewModel) {
         }
         // Web `#chat-header { border-b border-white/[0.04] }` — a faint 1px rule
         // between the header and the message body.
-        Box(Modifier.fillMaxWidth().height(1.dp).background(Color.White.copy(alpha = 0.04f)))
+        Box(Modifier.fillMaxWidth().height(1.dp).background(PomboColors.Overlay4))
 
         // Paid-subscription strip (web .subscription-banner): static above the
         // messages — it states the channel's access state, so it must not
@@ -671,7 +671,7 @@ fun ChatScreen(vm: AppViewModel) {
                             Spacer(Modifier.width(8.dp))
                             Icon(
                                 Icons.Filled.Close, contentDescription = "Dismiss subscription warning",
-                                tint = Color.White.copy(alpha = 0.35f),
+                                tint = PomboColors.Overlay35,
                                 modifier = Modifier.size(16.dp).clickableNoRipple { subWarnDismissed = true }
                             )
                         }
@@ -686,7 +686,7 @@ fun ChatScreen(vm: AppViewModel) {
         historyError?.takeIf { visible.isNotEmpty() && !accessLost }?.let { refusal ->
             Text(
                 historyErrorText(refusal, isPreview, accessActive).first,
-                color = Color.White.copy(alpha = 0.40f), fontSize = 13.sp,
+                color = PomboColors.Overlay40, fontSize = 13.sp,
                 textAlign = androidx.compose.ui.text.style.TextAlign.Center,
                 modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 8.dp)
             )
@@ -698,7 +698,7 @@ fun ChatScreen(vm: AppViewModel) {
                 } else {
                     "Loading edits and deletions…"
                 },
-                color = Color.White.copy(alpha = 0.40f), fontSize = 13.sp,
+                color = PomboColors.Overlay40, fontSize = 13.sp,
                 textAlign = androidx.compose.ui.text.style.TextAlign.Center,
                 modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 8.dp)
             )
@@ -729,28 +729,28 @@ fun ChatScreen(vm: AppViewModel) {
                     if (terminalEmpty && subState == ChannelManager.SubscriptionState.BANNED) {
                         Icon(
                             Icons.Filled.Gavel, contentDescription = null,
-                            tint = Color.White.copy(alpha = 0.25f),
+                            tint = PomboColors.Overlay25,
                             modifier = Modifier.size(24.dp)
                         )
                         Spacer(Modifier.height(12.dp))
                         Text(
                             "You no longer have access to this channel",
-                            color = Color.White.copy(alpha = 0.40f), fontSize = 14.sp
+                            color = PomboColors.Overlay40, fontSize = 14.sp
                         )
                         Spacer(Modifier.height(4.dp))
                         Text(
                             "A moderator removed you",
-                            color = Color.White.copy(alpha = 0.25f), fontSize = 12.sp,
+                            color = PomboColors.Overlay25, fontSize = 12.sp,
                             textAlign = androidx.compose.ui.text.style.TextAlign.Center,
                             modifier = Modifier.padding(horizontal = 32.dp)
                         )
                     } else if (terminalEmpty && refusal != null) {
                         val (title, detail) = historyErrorText(refusal, isPreview, accessActive)
-                        Text(title, color = Color.White.copy(alpha = 0.40f), fontSize = 14.sp)
+                        Text(title, color = PomboColors.Overlay40, fontSize = 14.sp)
                         Spacer(Modifier.height(4.dp))
                         Text(
                             detail,
-                            color = Color.White.copy(alpha = 0.25f), fontSize = 12.sp,
+                            color = PomboColors.Overlay25, fontSize = 12.sp,
                             textAlign = androidx.compose.ui.text.style.TextAlign.Center,
                             modifier = Modifier.padding(horizontal = 32.dp)
                         )
@@ -758,13 +758,13 @@ fun ChatScreen(vm: AppViewModel) {
                         val expired = subState == ChannelManager.SubscriptionState.EXPIRED
                         Text(
                             if (expired) "Your subscription has expired" else "No active subscription",
-                            color = Color.White.copy(alpha = 0.40f), fontSize = 14.sp
+                            color = PomboColors.Overlay40, fontSize = 14.sp
                         )
                         Spacer(Modifier.height(4.dp))
                         Text(
                             if (expired) "Messages stay locked until you renew"
                             else "Messages stay locked until you subscribe",
-                            color = Color.White.copy(alpha = 0.25f), fontSize = 12.sp,
+                            color = PomboColors.Overlay25, fontSize = 12.sp,
                             textAlign = androidx.compose.ui.text.style.TextAlign.Center,
                             modifier = Modifier.padding(horizontal = 32.dp)
                         )
@@ -783,44 +783,44 @@ fun ChatScreen(vm: AppViewModel) {
                         }
                     } else if (terminalEmpty && waitingForKeys) {
                         CircularProgressIndicator(
-                            color = Color.White.copy(alpha = 0.30f),
+                            color = PomboColors.Overlay30,
                             strokeWidth = 2.dp, modifier = Modifier.size(24.dp)
                         )
                         Spacer(Modifier.height(12.dp))
                         Text(
                             "Waiting for channel keys…",
-                            color = Color.White.copy(alpha = 0.40f), fontSize = 14.sp
+                            color = PomboColors.Overlay40, fontSize = 14.sp
                         )
                         Spacer(Modifier.height(4.dp))
                         Text(
                             "Requested from the channel, this can take a moment",
-                            color = Color.White.copy(alpha = 0.25f), fontSize = 12.sp
+                            color = PomboColors.Overlay25, fontSize = 12.sp
                         )
                     } else if (terminalEmpty && historyRead == ChannelManager.HistoryRead.FAILED) {
                         Text(
                             "Channel history could not be loaded",
-                            color = Color.White.copy(alpha = 0.40f), fontSize = 14.sp
+                            color = PomboColors.Overlay40, fontSize = 14.sp
                         )
                         Spacer(Modifier.height(4.dp))
                         Text(
                             "Check your connection and reopen the channel",
-                            color = Color.White.copy(alpha = 0.25f), fontSize = 12.sp,
+                            color = PomboColors.Overlay25, fontSize = 12.sp,
                             textAlign = androidx.compose.ui.text.style.TextAlign.Center,
                             modifier = Modifier.padding(horizontal = 32.dp)
                         )
                     } else if (terminalEmpty) {
                         Text(
                             "No messages yet. Start the conversation!",
-                            color = Color.White.copy(alpha = 0.40f), fontSize = 14.sp
+                            color = PomboColors.Overlay40, fontSize = 14.sp
                         )
                     } else {
                         CircularProgressIndicator(
                             modifier = Modifier.size(24.dp),
-                            color = Color.White.copy(alpha = 0.40f),
+                            color = PomboColors.Overlay40,
                             strokeWidth = 2.dp
                         )
                         Spacer(Modifier.height(12.dp))
-                        Text("Loading messages...", color = Color.White.copy(alpha = 0.40f), fontSize = 14.sp)
+                        Text("Loading messages...", color = PomboColors.Overlay40, fontSize = 14.sp)
                     }
                 }
             }
@@ -945,11 +945,11 @@ fun ChatScreen(vm: AppViewModel) {
                             Box(Modifier.fillMaxWidth(), contentAlignment = Alignment.Center) {
                                 Text(
                                     dayLabel(group.items.first().timestamp),
-                                    color = Color.White.copy(alpha = 0.40f),
+                                    color = PomboColors.Overlay40,
                                     fontSize = 11.sp,
                                     modifier = Modifier
                                         .padding(vertical = 6.dp)
-                                        .background(Color.White.copy(alpha = 0.06f), RoundedCornerShape(50))
+                                        .background(PomboColors.Overlay6, RoundedCornerShape(50))
                                         .padding(horizontal = 12.dp, vertical = 4.dp)
                                 )
                             }
@@ -983,13 +983,13 @@ fun ChatScreen(vm: AppViewModel) {
                         ) {
                             Icon(
                                 Icons.Outlined.Search, contentDescription = null,
-                                tint = Color.White.copy(alpha = 0.30f),
+                                tint = PomboColors.Overlay30,
                                 modifier = Modifier.size(16.dp)
                             )
                             Spacer(Modifier.width(8.dp))
                             Text(
                                 "No messages found in this time range — Search older",
-                                color = Color.White.copy(alpha = 0.30f), fontSize = 14.sp
+                                color = PomboColors.Overlay30, fontSize = 14.sp
                             )
                         }
                         loadingHistory -> Row(
@@ -999,13 +999,13 @@ fun ChatScreen(vm: AppViewModel) {
                         ) {
                             CircularProgressIndicator(
                                 modifier = Modifier.size(16.dp),
-                                color = Color.White.copy(alpha = 0.30f),
+                                color = PomboColors.Overlay30,
                                 strokeWidth = 2.dp
                             )
                             Spacer(Modifier.width(8.dp))
                             Text(
                                 "Loading older messages...",
-                                color = Color.White.copy(alpha = 0.30f),
+                                color = PomboColors.Overlay30,
                                 fontSize = 14.sp
                             )
                         }
@@ -1018,7 +1018,7 @@ fun ChatScreen(vm: AppViewModel) {
                         ) {
                             Text(
                                 "— beginning of conversation —",
-                                color = Color.White.copy(alpha = 0.12f),
+                                color = PomboColors.Overlay12,
                                 fontSize = 12.sp
                             )
                         }
@@ -1045,9 +1045,9 @@ fun ChatScreen(vm: AppViewModel) {
                         // Compose has no backdrop blur, so a near-opaque dark base
                         // carries the same "floating glass" read without letting
                         // the scrolled text behind show through as noise.
-                        .background(Color(0xFF0E0E10).copy(alpha = 0.88f), RoundedCornerShape(16.dp))
-                        .background(Color.White.copy(alpha = 0.06f), RoundedCornerShape(16.dp))
-                        .border(1.dp, Color.White.copy(alpha = 0.08f), RoundedCornerShape(16.dp))
+                        .background(PomboColors.Surface4.copy(alpha = 0.88f), RoundedCornerShape(16.dp))
+                        .background(PomboColors.Overlay6, RoundedCornerShape(16.dp))
+                        .border(1.dp, PomboColors.Overlay8, RoundedCornerShape(16.dp))
                         .padding(start = 14.dp, end = 12.dp, top = 8.dp, bottom = 8.dp),
                     verticalAlignment = Alignment.CenterVertically
                 ) {
@@ -1081,7 +1081,7 @@ fun ChatScreen(vm: AppViewModel) {
                         }
                         Text(
                             first.text.ifEmpty { "Pinned message" },
-                            color = Color.White.copy(alpha = 0.75f),
+                            color = PomboColors.Overlay75,
                             fontSize = 13.sp, lineHeight = 16.sp,
                             maxLines = 1,
                             overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis
@@ -1090,7 +1090,7 @@ fun ChatScreen(vm: AppViewModel) {
                     if (shownPins.size > 1) {
                         Text(
                             "+${shownPins.size - 1}",
-                            color = Color.White.copy(alpha = 0.40f), fontSize = 12.sp
+                            color = PomboColors.Overlay40, fontSize = 12.sp
                         )
                     }
                     Spacer(Modifier.width(6.dp))
@@ -1100,7 +1100,7 @@ fun ChatScreen(vm: AppViewModel) {
                     // me this one".
                     Icon(
                         Icons.Filled.Close, contentDescription = "Dismiss pinned message",
-                        tint = Color.White.copy(alpha = 0.40f),
+                        tint = PomboColors.Overlay40,
                         modifier = Modifier
                             .size(16.dp)
                             .clickableNoRipple { dismissedPins = dismissedPins + first.targetId }
@@ -1143,21 +1143,21 @@ fun ChatScreen(vm: AppViewModel) {
                     .padding(start = 12.dp, end = 8.dp, top = 8.dp),
                 verticalAlignment = Alignment.CenterVertically
             ) {
-                Box(Modifier.width(2.dp).height(30.dp).background(Color.White.copy(alpha = 0.15f)))
+                Box(Modifier.width(2.dp).height(30.dp).background(PomboColors.Overlay15))
                 Spacer(Modifier.width(8.dp))
                 Column(Modifier.weight(1f)) {
                     Text(
                         target.ensName ?: target.senderName ?: shortAddress(target.sender),
-                        color = Color.White.copy(alpha = 0.60f), fontSize = 12.sp, fontWeight = FontWeight.Medium
+                        color = PomboColors.Overlay60, fontSize = 12.sp, fontWeight = FontWeight.Medium
                     )
                     Text(
                         if (target.isImage || target.file != null || target.storageFile != null) "[Media]"
                         else target.text.take(100),
-                        color = Color.White.copy(alpha = 0.50f), fontSize = 13.sp, maxLines = 1
+                        color = PomboColors.Overlay50, fontSize = 13.sp, maxLines = 1
                     )
                 }
                 IconButton(onClick = { replyTarget = null }, modifier = Modifier.size(32.dp)) {
-                    Icon(Icons.Filled.Close, contentDescription = "Cancel reply", tint = Color.White.copy(alpha = 0.40f), modifier = Modifier.size(16.dp))
+                    Icon(Icons.Filled.Close, contentDescription = "Cancel reply", tint = PomboColors.Overlay40, modifier = Modifier.size(16.dp))
                 }
             }
         }
@@ -1174,14 +1174,14 @@ fun ChatScreen(vm: AppViewModel) {
                 Spacer(Modifier.width(8.dp))
                 Text(
                     "Editing message",
-                    color = Color.White.copy(alpha = 0.60f), fontSize = 12.sp, fontWeight = FontWeight.Medium,
+                    color = PomboColors.Overlay60, fontSize = 12.sp, fontWeight = FontWeight.Medium,
                     modifier = Modifier.weight(1f)
                 )
                 IconButton(
                     onClick = { editTarget = null; composerInput.clearText() },
                     modifier = Modifier.size(32.dp)
                 ) {
-                    Icon(Icons.Filled.Close, contentDescription = "Cancel edit", tint = Color.White.copy(alpha = 0.40f), modifier = Modifier.size(16.dp))
+                    Icon(Icons.Filled.Close, contentDescription = "Cancel edit", tint = PomboColors.Overlay40, modifier = Modifier.size(16.dp))
                 }
             }
         }
@@ -1364,7 +1364,7 @@ private fun ChatComposer(
     // bottom rule, and p-3 pb-4.
     Column(Modifier.fillMaxWidth().background(PomboColors.Surface)) {
     androidx.compose.material3.HorizontalDivider(
-        color = Color.White.copy(alpha = 0.04f), thickness = 1.dp
+        color = PomboColors.Overlay4, thickness = 1.dp
     )
     Row(
         Modifier.fillMaxWidth().padding(start = 12.dp, end = 12.dp, top = 8.dp, bottom = 10.dp),
@@ -1386,12 +1386,12 @@ private fun ChatComposer(
                 enabled = canPost,
                 modifier = Modifier.size(38.dp)
             ) {
-                Icon(Icons.Filled.AttachFile, contentDescription = "Attach", tint = Color.White.copy(alpha = 0.45f), modifier = Modifier.size(20.dp))
+                Icon(Icons.Filled.AttachFile, contentDescription = "Attach", tint = PomboColors.Overlay45, modifier = Modifier.size(20.dp))
             }
             DropdownMenu(
                 expanded = attachOpen,
                 onDismissRequest = { attachOpen = false; attachSubmenu = null },
-                modifier = Modifier.background(Color(0xFF16161B))
+                modifier = Modifier.background(PomboColors.Surface7)
             ) {
                 when (attachSubmenu) {
                     null -> {
@@ -1410,7 +1410,7 @@ private fun ChatComposer(
                     }
                     "file" -> {
                         DropdownMenuItem(
-                            text = { Text("‹  File", color = Color.White.copy(alpha = 0.55f)) },
+                            text = { Text("‹  File", color = PomboColors.Overlay55) },
                             onClick = { attachSubmenu = null }
                         )
                         DropdownMenuItem(
@@ -1430,7 +1430,7 @@ private fun ChatComposer(
                     }
                     "video" -> {
                         DropdownMenuItem(
-                            text = { Text("‹  Video", color = Color.White.copy(alpha = 0.55f)) },
+                            text = { Text("‹  Video", color = PomboColors.Overlay55) },
                             onClick = { attachSubmenu = null }
                         )
                         DropdownMenuItem(
@@ -1456,12 +1456,12 @@ private fun ChatComposer(
         var emojiOpen by remember { mutableStateOf(false) }
         Box {
             IconButton(onClick = { emojiOpen = true }, modifier = Modifier.size(38.dp)) {
-                Icon(Icons.Outlined.SentimentSatisfied, contentDescription = "Emoji", tint = Color.White.copy(alpha = 0.45f), modifier = Modifier.size(20.dp))
+                Icon(Icons.Outlined.SentimentSatisfied, contentDescription = "Emoji", tint = PomboColors.Overlay45, modifier = Modifier.size(20.dp))
             }
             DropdownMenu(
                 expanded = emojiOpen,
                 onDismissRequest = { emojiOpen = false },
-                modifier = Modifier.background(Color(0xFF16161B))
+                modifier = Modifier.background(PomboColors.Surface7)
             ) {
                 // A FlowRow, NOT a LazyVerticalGrid: DropdownMenu already
                 // wraps its content in a vertical scroller, so nesting a
@@ -1503,7 +1503,7 @@ private fun ChatComposer(
                 // Web #message-input: bg-white/[0.05], rounded-2xl, border-white/[0.08].
                 Box(
                     Modifier
-                        .background(Color.White.copy(alpha = 0.05f), RoundedCornerShape(16.dp))
+                        .background(PomboColors.Overlay5, RoundedCornerShape(16.dp))
                         .border(
                             1.dp,
                             // Focus is a faint GREY lift, not an orange rule —

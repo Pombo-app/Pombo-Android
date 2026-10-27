@@ -132,9 +132,9 @@ private fun ToastItem(toast: Toast, onDismiss: () -> Unit) {
         Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End) {
             Row(
                 Modifier
-                    .background(Color(0xFF16161B), RoundedCornerShape(topStart = 20.dp, bottomStart = 20.dp))
+                    .background(PomboColors.Surface7, RoundedCornerShape(topStart = 20.dp, bottomStart = 20.dp))
                     .border(
-                        1.dp, Color.White.copy(alpha = 0.08f),
+                        1.dp, PomboColors.Overlay8,
                         RoundedCornerShape(topStart = 20.dp, bottomStart = 20.dp)
                     )
                     .clickable { docked = false; offsetX = 0f }
@@ -184,8 +184,8 @@ private fun ToastItem(toast: Toast, onDismiss: () -> Unit) {
                 // near-black background the shadow is the only thing lifting
                 // the toast off the page.
                 .shadow(12.dp, RoundedCornerShape(12.dp), clip = false)
-                .background(Color(0xFF16161B), RoundedCornerShape(12.dp))
-                .border(1.dp, Color.White.copy(alpha = 0.08f), RoundedCornerShape(12.dp))
+                .background(PomboColors.Surface7, RoundedCornerShape(12.dp))
+                .border(1.dp, PomboColors.Overlay8, RoundedCornerShape(12.dp))
                 .pointerInput(toast.id) {
                     // Raw pixels made the dismiss distance density-dependent:
                     // the same flick that dismissed on a low-density screen
@@ -230,11 +230,11 @@ private fun ToastItem(toast: Toast, onDismiss: () -> Unit) {
                 Column(Modifier.weight(1f)) {
                     Text(
                         toast.message,
-                        color = Color.White.copy(alpha = 0.90f),
+                        color = PomboColors.Overlay90,
                         fontSize = 13.sp, lineHeight = 18.sp
                     )
                     toast.subtitle?.let {
-                        Text(it, color = Color.White.copy(alpha = 0.40f), fontSize = 11.sp)
+                        Text(it, color = PomboColors.Overlay40, fontSize = 11.sp)
                     }
                 }
 
@@ -276,7 +276,7 @@ private fun StepRing(progress: ToastProgress, @Suppress("UNUSED_PARAMETER") acce
             val inset = stroke / 2
             val arcSize = Size(size.width - stroke, size.height - stroke)
             drawArc(
-                color = Color.White.copy(alpha = 0.08f),
+                color = PomboColors.Overlay8,
                 startAngle = 0f, sweepAngle = 360f, useCenter = false,
                 topLeft = androidx.compose.ui.geometry.Offset(inset, inset),
                 size = arcSize,
@@ -292,7 +292,7 @@ private fun StepRing(progress: ToastProgress, @Suppress("UNUSED_PARAMETER") acce
         }
         Text(
             progress.label,
-            color = Color.White.copy(alpha = 0.45f),
+            color = PomboColors.Overlay45,
             fontSize = 10.sp, lineHeight = 12.sp
         )
     }
