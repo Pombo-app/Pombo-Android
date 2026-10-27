@@ -520,6 +520,14 @@ fun ChatScreen(vm: AppViewModel) {
             }
             // Channel options (web: mobile kebab on the right)
             var chMenu by remember { mutableStateOf(false) }
+            var confirmLeave by remember { mutableStateOf(false) }
+            if (confirmLeave) LeaveChannelDialog(
+                name = ch.name.ifBlank { ch.peerAddress ?: "this channel" },
+                isDm = ch.type == "dm",
+                onDismiss = { confirmLeave = false },
+                onLeave = { confirmLeave = false; vm.removeChannel(ch.messageStreamId) },
+                onBlock = { confirmLeave = false; vm.blockPeer(ch.messageStreamId) }
+            )
             Box {
                 IconButton(onClick = { chMenu = true }) {
                     Icon(Icons.Filled.MoreVert, contentDescription = "Channel options", tint = PomboColors.Overlay30)
@@ -569,7 +577,7 @@ fun ChatScreen(vm: AppViewModel) {
                         com.pombo.android.ui.ContextMenuItem(
                             "Leave channel", Icons.AutoMirrored.Filled.Logout,
                             iconTint = PomboColors.Danger, labelColor = PomboColors.Danger
-                        ) { chMenu = false; vm.removeChannel(ch.messageStreamId) }
+                        ) { chMenu = false; confirmLeave = true }
                     }
                 }
             }
@@ -1700,4 +1708,56 @@ internal fun visibleTimeline(
         if (isHidden && !moderates) return@filter false
         !bans(banned, msg) && !(early != null && bans(early.banSince, msg))
     }
+}
+
+@Composable
+private fun LeaveChannelDialog(
+    name: String,
+    isDm: Boolean,
+    onDismiss: () -> Unit,
+    onLeave: () -> Unit,
+    onBlock: () -> Unit
+) {
+    PomboDialogFrame(if (isDm) "Leave Conversation" else "Leave Channel", onDismiss) {
+        Text(
+            androidx.compose.ui.text.buildAnnotatedString {
+                append("Are you sure you want to leave ")
+                pushStyle(androidx.compose.ui.text.SpanStyle(color = PomboColors.Overlay80, fontWeight = FontWeight.Medium))
+                append("\"$name\"")
+                pop()
+                append("?")
+            },
+            color = PomboColors.Overlay50, fontSize = 14.sp
+        )
+        Spacer(Modifier.height(12.dp))
+        Text(
+            if (isDm) "New messages will reopen the conversation." else "You can rejoin later with the invite link.",
+            color = PomboColors.Overlay30, fontSize = 12.sp
+        )
+        Spacer(Modifier.height(20.dp))
+        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            Box(
+                Modifier.weight(1f)
+                    .background(PomboColors.Overlay5, RoundedCornerShape(12.dp))
+                    .border(1.dp, PomboColors.Overlay8, RoundedCornerShape(12.dp))
+                    .clickableNoRipple(onDismiss)
+                    .padding(vertical = 10.dp),
+                contentAlignment = Alignment.Center
+            ) { Text("Cancel", color = PomboColors.Overlay50, fontSize = 14.sp, fontWeight = FontWeight.Medium) }
+            LeaveDangerButton("Leave", onLeave)
+            if (isDm) LeaveDangerButton("Block", onBlock)
+        }
+    }
+}
+
+@Composable
+private fun androidx.compose.foundation.layout.RowScope.LeaveDangerButton(label: String, onClick: () -> Unit) {
+    Box(
+        Modifier.weight(1f)
+            .background(PomboColors.Danger.copy(alpha = 0.20f), RoundedCornerShape(12.dp))
+            .border(1.dp, PomboColors.Danger.copy(alpha = 0.30f), RoundedCornerShape(12.dp))
+            .clickableNoRipple(onClick)
+            .padding(vertical = 10.dp),
+        contentAlignment = Alignment.Center
+    ) { Text(label, color = PomboColors.Danger, fontSize = 14.sp, fontWeight = FontWeight.Medium) }
 }

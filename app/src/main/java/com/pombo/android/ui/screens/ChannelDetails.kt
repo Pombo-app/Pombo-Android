@@ -156,7 +156,6 @@ internal fun ChannelSettingsSheet(vm: AppViewModel, channel: Channel, canModerat
                     ChannelSubPanel.MEMBERS -> ChannelMembersPanel(vm, channel, canModerate)
                     ChannelSubPanel.MODERATION -> ChannelModerationPanel(vm, channel, canModerate)
                     ChannelSubPanel.STORAGE -> ChannelStoragePanel(vm, channel, canModerate)
-                    ChannelSubPanel.DELETE -> ChannelDeletePanel(vm, channel, onDismiss)
                     ChannelSubPanel.DESTROY -> ChannelDestroyPanel(vm, channel, onDismiss)
                 }
             }
@@ -183,8 +182,6 @@ private enum class ChannelSubPanel(val label: String) {
     MEMBERS("Members"),
     MODERATION("Moderation"),
     STORAGE("Storage"),
-    /** Local leave — the streams stay on-chain. */
-    DELETE("Leave Channel"),
     /** On-chain delete of all three streams — irreversible for everyone. */
     DESTROY("Delete Channel")
 }
@@ -2067,25 +2064,6 @@ private fun ChannelModerationPanel(vm: AppViewModel, channel: Channel, canModera
             }
         }
     }
-}
-
-@Composable
-private fun ChannelDeletePanel(vm: AppViewModel, channel: Channel, onDismiss: () -> Unit) {
-    Text("Leave channel", color = PomboColors.Danger, fontSize = 15.sp, fontWeight = FontWeight.SemiBold)
-    Spacer(Modifier.height(6.dp))
-    Text(
-        "Removes it from this device. The streams stay on-chain and you can rejoin with the stream ID.",
-        color = PomboColors.Overlay40, fontSize = 12.sp
-    )
-    Spacer(Modifier.height(12.dp))
-    Box(
-        Modifier.fillMaxWidth()
-            .background(PomboColors.Danger.copy(alpha = 0.12f), RoundedCornerShape(12.dp))
-            .border(1.dp, PomboColors.Danger.copy(alpha = 0.30f), RoundedCornerShape(12.dp))
-            .clickableNoRipple { onDismiss(); vm.removeChannel(channel.messageStreamId) }
-            .padding(vertical = 12.dp),
-        contentAlignment = Alignment.Center
-    ) { Text("Leave channel", color = PomboColors.Danger, fontSize = 14.sp, fontWeight = FontWeight.Medium) }
 }
 
 /**
