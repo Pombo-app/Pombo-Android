@@ -34,6 +34,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.ui.draw.alpha
+import androidx.compose.material.icons.outlined.AccountBalanceWallet
 import androidx.compose.material.icons.outlined.AddCircleOutline
 import androidx.compose.material.icons.outlined.Home
 import androidx.compose.runtime.mutableFloatStateOf
@@ -127,6 +128,7 @@ fun MainShell(vm: AppViewModel) {
     var showCreate by remember { mutableStateOf(false) }
     var showJoin by remember { mutableStateOf(false) }
     var showConnect by remember { mutableStateOf(false) }
+    var walletOpen by remember { mutableStateOf(false) }
     val isGuest by vm.isGuest.collectAsState()
 
     // Settings has many panels: the pill's Settings button opens a dropdown to
@@ -241,6 +243,8 @@ fun MainShell(vm: AppViewModel) {
                 current = tab,
                 address = vm.address.collectAsState().value,
                 ensAvatarUrl = vm.ensAvatars.collectAsState().value[vm.address.collectAsState().value?.lowercase()],
+                showWallet = !isGuest,
+                onWallet = { settingsMenu = false; walletOpen = true },
                 onSettingsAnchor = { settingsAnchorX = it },
                 onSelect = { picked ->
                     when (picked) {
@@ -270,6 +274,8 @@ fun MainShell(vm: AppViewModel) {
             vm.createChannel(spec); showCreate = false
         }
     }
+
+    if (walletOpen) com.pombo.android.ui.WalletSheet(vm) { walletOpen = false }
 
     if (showJoin) JoinChannelDialog(onDismiss = { showJoin = false }) { id, pwd, name, cls ->
         vm.joinChannel(id, pwd, name, cls); showJoin = false
@@ -387,6 +393,9 @@ private fun PillNav(
     address: String?,
     /** ENS picture for my own address, when the account has one. */
     ensAvatarUrl: String? = null,
+    /** A guest is a throwaway identity, not an account with funds. */
+    showWallet: Boolean,
+    onWallet: () -> Unit,
     onSelect: (Tab) -> Unit,
     /** Centre x of the Settings item, in root coordinates. */
     onSettingsAnchor: (Float) -> Unit = {},
@@ -407,8 +416,11 @@ private fun PillNav(
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.spacedBy(4.dp)
     ) {
-        Tab.entries.forEach { t ->
-            if (t == Tab.PROFILE) {
+        listOf(Tab.CHATS, Tab.EXPLORE, null, Tab.SETTINGS, Tab.PROFILE).forEach { t ->
+            if (t == null) {
+                // Wallet opens a sheet over the current view and is never the active tab.
+                if (showWallet) PillItem("Wallet", Icons.Outlined.AccountBalanceWallet, active = false, onClick = onWallet)
+            } else if (t == Tab.PROFILE) {
                 val active = current == t
                 Box(
                     Modifier

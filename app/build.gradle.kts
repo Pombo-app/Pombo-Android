@@ -168,6 +168,8 @@ dependencies {
     implementation("io.coil-kt:coil-svg:2.7.0")
     // Animated GIF/WebP playback in chat (the web just uses <img>, which animates).
     implementation("io.coil-kt:coil-gif:2.7.0")
+    // Wallet address QR (Project Nayuki QR Code generator, MIT licence).
+    implementation("io.nayuki:qrcodegen:1.8.0")
 
     implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.9.0")
 

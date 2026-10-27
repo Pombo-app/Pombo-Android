@@ -28,7 +28,6 @@ import androidx.compose.material.icons.filled.MailOutline
 import androidx.compose.material.icons.filled.Pause
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.ui.draw.alpha
-import androidx.compose.material.icons.outlined.AccountBalanceWallet
 import androidx.compose.material.icons.outlined.Campaign
 import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.foundation.layout.offset
@@ -140,20 +139,6 @@ internal fun ChatsTab(vm: AppViewModel, onCreate: () -> Unit, onJoin: () -> Unit
                     // Join by stream ID. Creating a channel lives in Explore.
                     HeaderIconButton(34.dp, onJoin) {
                         Text("#", color = PomboColors.Text, fontSize = 22.sp, fontWeight = FontWeight.Bold)
-                    }
-                    Spacer(Modifier.width(8.dp))
-                    // Wallet: what this account holds. The bell keeps the outer
-                    // edge, where the web mobile header also puts it and where a
-                    // badge is most visible.
-                    var walletOpen by remember { mutableStateOf(false) }
-                    HeaderIconButton(34.dp, { walletOpen = true }) {
-                        Icon(
-                            Icons.Outlined.AccountBalanceWallet, contentDescription = "Wallet",
-                            tint = PomboColors.Text, modifier = Modifier.size(24.dp)
-                        )
-                    }
-                    if (walletOpen) {
-                        com.pombo.android.ui.WalletSheet(vm) { walletOpen = false }
                     }
                     Spacer(Modifier.width(8.dp))
                     // Bell: recent channel invites. Android addition — on the
