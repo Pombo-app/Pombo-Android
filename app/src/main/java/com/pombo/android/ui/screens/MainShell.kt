@@ -33,10 +33,8 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Close
-import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.ui.draw.alpha
 import androidx.compose.material.icons.outlined.AddCircleOutline
-import androidx.compose.material.icons.outlined.ChatBubbleOutline
 import androidx.compose.material.icons.outlined.Home
 import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.foundation.layout.offset
@@ -139,13 +137,6 @@ fun MainShell(vm: AppViewModel) {
     var settingsMenu by remember { mutableStateOf(false) }
     /** Centre x of the Settings pill item, reported by PillNav. */
     var settingsAnchorX by remember { mutableFloatStateOf(0f) }
-    // Explore now offers two destinations (2026-08-21): Threads (today's
-    // channel Explore) and Live Streams (not built yet — locked). The pill
-    // tap opens a picker instead of navigating straight to Threads, same
-    // pattern as Settings' panel picker.
-    var exploreMenu by remember { mutableStateOf(false) }
-    /** Centre x of the Explore pill item, reported by PillNav. */
-    var exploreAnchorX by remember { mutableFloatStateOf(0f) }
     val scope = androidx.compose.runtime.rememberCoroutineScope()
 
     // Back gesture = navigate back, not leave the app. Declared innermost-last,
@@ -155,7 +146,6 @@ fun MainShell(vm: AppViewModel) {
     val homeTab = if (guestNow) Tab.EXPLORE else Tab.CHATS
     androidx.activity.compose.BackHandler(enabled = tab != homeTab) { tab = homeTab }
     androidx.activity.compose.BackHandler(enabled = settingsMenu) { settingsMenu = false }
-    androidx.activity.compose.BackHandler(enabled = exploreMenu) { exploreMenu = false }
 
     var showImportKey by remember { mutableStateOf(false) }
     // Web walletFlows: "Create New Account" opens the avatar/name wizard, not
@@ -216,11 +206,11 @@ fun MainShell(vm: AppViewModel) {
             }
         }
 
-        // Tap-anywhere-else closes the settings/explore dropdown. Declared
-        // before the pill Column, so it is drawn under both the menu and the
-        // pill and catches only the taps that miss them.
-        if (settingsMenu || exploreMenu) {
-            Box(Modifier.fillMaxSize().clickableNoRipple { settingsMenu = false; exploreMenu = false })
+        // Tap-anywhere-else closes the settings dropdown. Declared before the
+        // pill Column, so it is drawn under both the menu and the pill and
+        // catches only the taps that miss them.
+        if (settingsMenu) {
+            Box(Modifier.fillMaxSize().clickableNoRipple { settingsMenu = false })
         }
 
         // Floating pill nav + guest label underneath (web: .pill-guest-label).
@@ -247,40 +237,27 @@ fun MainShell(vm: AppViewModel) {
                     scope.launch { settingsPager.animateScrollToPage(panel.ordinal) }
                 }
             }
-            PillMenuAnchor(visible = exploreMenu, anchorX = exploreAnchorX, width = 220.dp) {
-                ExploreDropdown(threadsActive = tab == Tab.EXPLORE) {
-                    exploreMenu = false
-                    tab = Tab.EXPLORE
-                    vm.setChatOrigin(com.pombo.android.AppViewModel.ChatOrigin.EXPLORE)
-                }
-            }
             PillNav(
                 current = tab,
                 address = vm.address.collectAsState().value,
                 ensAvatarUrl = vm.ensAvatars.collectAsState().value[vm.address.collectAsState().value?.lowercase()],
                 onSettingsAnchor = { settingsAnchorX = it },
-                onExploreAnchor = { exploreAnchorX = it },
                 onSelect = { picked ->
                     when (picked) {
                         Tab.SETTINGS -> {
                             // Settings only offers its panel list — navigation
                             // happens when a panel is picked, not on the tap itself.
-                            exploreMenu = false
                             settingsMenu = !settingsMenu
-                        }
-                        Tab.EXPLORE -> {
-                            // Explore now offers Threads / Live Streams — same
-                            // picker-first pattern as Settings (2026-08-21).
-                            settingsMenu = false
-                            exploreMenu = !exploreMenu
                         }
                         else -> {
                             settingsMenu = false
-                            exploreMenu = false
                             tab = picked
                             // Remember where the user is, so a chat opened next
                             // returns to this tab.
-                            vm.setChatOrigin(com.pombo.android.AppViewModel.ChatOrigin.CHATS)
+                            vm.setChatOrigin(
+                                if (picked == Tab.EXPLORE) com.pombo.android.AppViewModel.ChatOrigin.EXPLORE
+                                else com.pombo.android.AppViewModel.ChatOrigin.CHATS
+                            )
                         }
                     }
                 }
@@ -413,8 +390,6 @@ private fun PillNav(
     onSelect: (Tab) -> Unit,
     /** Centre x of the Settings item, in root coordinates. */
     onSettingsAnchor: (Float) -> Unit = {},
-    /** Centre x of the Explore item, in root coordinates. */
-    onExploreAnchor: (Float) -> Unit = {},
     modifier: Modifier = Modifier
 ) {
     // .pill-nav-inner: rgba(255,255,255,0.06) fill, 0.08 border, radius 2rem,
@@ -454,13 +429,11 @@ private fun PillNav(
             } else {
                 PillItem(
                     t.label, t.icon, active = current == t,
-                    // The settings/explore dropdowns centre on THIS icon, so
-                    // its centre has to travel out of the pill's own layout.
-                    modifier = when (t) {
-                        Tab.SETTINGS -> Modifier.onGloballyPositioned { onSettingsAnchor(it.boundsInRoot().center.x) }
-                        Tab.EXPLORE -> Modifier.onGloballyPositioned { onExploreAnchor(it.boundsInRoot().center.x) }
-                        else -> Modifier
-                    }
+                    // The settings dropdown centres on THIS icon, so its centre
+                    // has to travel out of the pill's own layout.
+                    modifier = if (t == Tab.SETTINGS) {
+                        Modifier.onGloballyPositioned { onSettingsAnchor(it.boundsInRoot().center.x) }
+                    } else Modifier
                 ) { onSelect(t) }
             }
         }
@@ -587,65 +560,6 @@ private fun AboutDialog(onDismiss: () -> Unit) {
         )
         Spacer(Modifier.height(16.dp))
         Text("pombo.cc", color = PomboColors.TextDim, fontSize = 13.sp)
-    }
-}
-
-/**
- * Explore's picker (2026-08-21): same anatomy as [SettingsDropdown] — opens
- * upward from the Explore pill item. Live Streams is a new channel type that
- * does not exist yet, so it renders locked with a "Soon" badge and does
- * nothing on tap, same behaviour the user asked for.
- */
-@Composable
-private fun ExploreDropdown(
-    /** False off the Explore tab: the highlight says where you are. */
-    threadsActive: Boolean,
-    onPickThreads: () -> Unit
-) {
-    // Card chrome (shape, fill, caret, animation) lives in PillMenuAnchor.
-    Column {
-        Row(
-            Modifier.fillMaxWidth()
-                .background(
-                    if (threadsActive) Color.White.copy(alpha = 0.08f) else Color.Transparent,
-                    RoundedCornerShape(8.dp)
-                )
-                .clickableNoRipple(onPickThreads)
-                .padding(horizontal = 12.dp, vertical = 8.dp),
-            verticalAlignment = Alignment.CenterVertically
-        ) {
-            Icon(
-                Icons.Outlined.ChatBubbleOutline, contentDescription = null,
-                tint = Color.White.copy(alpha = 0.40f), modifier = Modifier.size(16.dp)
-            )
-            Spacer(Modifier.width(8.dp))
-            Text(
-                "Threads",
-                color = Color.White.copy(alpha = if (threadsActive) 0.90f else 0.60f),
-                fontSize = 13.sp
-            )
-        }
-        Row(
-            Modifier.fillMaxWidth()
-                .padding(top = 2.dp)
-                .padding(horizontal = 12.dp, vertical = 8.dp),
-            verticalAlignment = Alignment.CenterVertically
-        ) {
-            Icon(
-                Icons.Filled.PlayArrow, contentDescription = null,
-                tint = Color.White.copy(alpha = 0.35f), modifier = Modifier.size(16.dp)
-            )
-            Spacer(Modifier.width(8.dp))
-            Text("Live Streams", color = Color.White.copy(alpha = 0.35f), fontSize = 13.sp, modifier = Modifier.weight(1f))
-            Text(
-                "SOON",
-                color = Color.White.copy(alpha = 0.40f), fontSize = 9.sp, fontWeight = FontWeight.SemiBold,
-                letterSpacing = 0.03.em,
-                modifier = Modifier
-                    .background(Color.White.copy(alpha = 0.08f), RoundedCornerShape(20.dp))
-                    .padding(horizontal = 7.dp, vertical = 3.dp)
-            )
-        }
     }
 }
 
