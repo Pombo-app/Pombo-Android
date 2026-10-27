@@ -811,7 +811,7 @@ private fun MessageBubble(
                                 when {
                                     hasEns -> Icon(
                                         Icons.Filled.CheckCircleOutline, contentDescription = "ENS verified",
-                                        tint = Color(0xFF4ADE80), modifier = Modifier.size(14.dp)
+                                        tint = PomboColors.Success, modifier = Modifier.size(14.dp)
                                     )
                                     msg.trustLevel == 2 -> Icon(
                                         Icons.Filled.Star, contentDescription = "Trusted contact",
@@ -991,7 +991,7 @@ private fun MessageBubble(
                 // the touch point. Item order, icons and colours follow
                 // index.html:2540-2600.
                 if (menu) {
-                    val red = Color(0xFFF87171)      // text-red-400
+                    val red = PomboColors.Danger
                     com.pombo.android.ui.PomboContextMenu(
                         touchOffset = menuAt,
                         onDismiss = { menu = false }

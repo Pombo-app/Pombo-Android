@@ -354,7 +354,7 @@ private fun AccountPanel(vm: AppViewModel) {
                     Row(verticalAlignment = Alignment.CenterVertically) {
                         Icon(
                             Icons.Filled.CheckCircleOutline, contentDescription = null,
-                            tint = Color(0xFF4ADE80), modifier = Modifier.size(14.dp)
+                            tint = PomboColors.Success, modifier = Modifier.size(14.dp)
                         )
                         Spacer(Modifier.width(4.dp))
                         // text-xs text-blue-400
@@ -759,15 +759,15 @@ private fun DmInboxPanel(vm: AppViewModel) {
                 is AppViewModel.InboxHealth.Loading ->
                     Triple(Color.White.copy(alpha = 0.40f), "Diagnosing...", "Checking streams, permissions and storage")
                 is AppViewModel.InboxHealth.Healthy ->
-                    Triple(Color(0xFF4ADE80), "Inbox healthy", h.detail)
+                    Triple(PomboColors.Success, "Inbox healthy", h.detail)
                 is AppViewModel.InboxHealth.Issues ->
                     Triple(Color(0xFFFACC15), "Issues found", h.summary)
                 is AppViewModel.InboxHealth.Failed ->
-                    Triple(Color(0xFFF87171), "Error", h.message)
+                    Triple(PomboColors.Danger, "Error", h.message)
                 is AppViewModel.InboxHealth.Repairing ->
                     Triple(PomboColors.Accent, "Repairing...", h.step)
                 is AppViewModel.InboxHealth.Repaired ->
-                    Triple(Color(0xFF4ADE80), "Repaired", h.detail)
+                    Triple(PomboColors.Success, "Repaired", h.detail)
                 else -> Triple(Color.White.copy(alpha = 0.20f), "Not checked", "")
             }
             Row(
@@ -1176,8 +1176,8 @@ private fun GraphApiCard(vm: AppViewModel) {
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     val (dot, label, labelColor) = when (health) {
                         null -> Triple(Color.White.copy(alpha = 0.20f), "Not checked", Color.White.copy(alpha = 0.40f))
-                        true -> Triple(Color(0xFF22C55E), "OK", Color(0xFF4ADE80))
-                        else -> Triple(Color(0xFFEF4444), "Not responding", Color(0xFFF87171))
+                        true -> Triple(Color(0xFF22C55E), "OK", PomboColors.Success)
+                        else -> Triple(Color(0xFFEF4444), "Not responding", PomboColors.Danger)
                     }
                     Box(Modifier.size(8.dp).background(dot, CircleShape))
                     Spacer(Modifier.width(6.dp))
@@ -1252,12 +1252,12 @@ private fun PolygonRpcCard(vm: AppViewModel) {
                 Spacer(Modifier.height(6.dp))
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     val (dot, label, labelColor) = when {
-                        notice != null -> Triple(Color(0xFFEF4444), notice!!, Color(0xFFF87171))
+                        notice != null -> Triple(Color(0xFFEF4444), notice!!, PomboColors.Danger)
                         testing -> Triple(Color(0xFFFACC15), "Testing...", Color(0xFFFACC15))
                         tested.isEmpty() ->
                             Triple(Color.White.copy(alpha = 0.20f), "Not tested", Color.White.copy(alpha = 0.40f))
-                        working.isEmpty() -> Triple(Color(0xFFEF4444), "Not connected", Color(0xFFF87171))
-                        else -> Triple(Color(0xFF22C55E), "Connected", Color(0xFF4ADE80))
+                        working.isEmpty() -> Triple(Color(0xFFEF4444), "Not connected", PomboColors.Danger)
+                        else -> Triple(Color(0xFF22C55E), "Connected", PomboColors.Success)
                     }
                     Box(Modifier.size(8.dp).background(dot, CircleShape))
                     Spacer(Modifier.width(6.dp))
@@ -1369,7 +1369,7 @@ private fun PolygonRpcCard(vm: AppViewModel) {
                 }
                 error?.let {
                     Spacer(Modifier.height(6.dp))
-                    Text(it, color = Color(0xFFF87171), fontSize = 11.sp)
+                    Text(it, color = PomboColors.Danger, fontSize = 11.sp)
                 }
                 Spacer(Modifier.height(8.dp))
                 Text(
@@ -1449,7 +1449,7 @@ private fun RpcEndpointRow(
                     .format(java.util.Date(health.at))
                 Text(
                     "${if (fallback) "failing" else "excluded"}: ${com.pombo.android.core.RpcHealth.describe(health)} at $at",
-                    color = Color(0xFFF87171).copy(alpha = 0.80f), fontSize = 10.sp,
+                    color = PomboColors.Danger.copy(alpha = 0.80f), fontSize = 10.sp,
                     maxLines = 2, overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis
                 )
             }
@@ -1482,7 +1482,7 @@ private fun RpcProbeLabel(probe: AppViewModel.RpcProbe?, testing: Boolean) {
         probe == null && testing -> "testing" to Color(0xFFFACC15)
         probe == null -> "not tested" to Color.White.copy(alpha = 0.25f)
         probe.reach == com.pombo.android.core.GasEstimator.Reach.DEAD ->
-            "no answer" to Color(0xFFF87171)
+            "no answer" to PomboColors.Danger
         probe.reach == com.pombo.android.core.GasEstimator.Reach.LIMITED ->
             "rate limited" to Color(0xFFFACC15)
         probe.reach == com.pombo.android.core.GasEstimator.Reach.REFUSED ->
@@ -1490,7 +1490,7 @@ private fun RpcProbeLabel(probe: AppViewModel.RpcProbe?, testing: Boolean) {
         !probe.onPolygon -> "not Polygon" to Color(0xFFFACC15)
         probe.webView == AppViewModel.WebViewProbe.BLOCKED ->
             "blocked in app" to Color(0xFFFACC15)
-        else -> "${probe.ms ?: 0} ms" to Color(0xFF4ADE80)
+        else -> "${probe.ms ?: 0} ms" to PomboColors.Success
     }
     Text(text, color = color, fontSize = 10.sp, maxLines = 1)
 }
@@ -1732,7 +1732,7 @@ private fun DangerButton(label: String, enabled: Boolean = true, onClick: () -> 
     ) {
         Text(
             label,
-            color = if (enabled) Color(0xFFF87171) else Color(0xFFF87171).copy(alpha = 0.35f),
+            color = if (enabled) PomboColors.Danger else PomboColors.Danger.copy(alpha = 0.35f),
             fontSize = 14.sp
         )
     }
@@ -1780,7 +1780,7 @@ private fun HoldToConfirmButton(label: String, onConfirm: () -> Unit) {
             Modifier
                 .fillMaxWidth(progress)
                 .height(40.dp)
-                .background(Color(0xFFF87171).copy(alpha = 0.40f))
+                .background(PomboColors.Danger.copy(alpha = 0.40f))
         )
         Box(Modifier.fillMaxWidth().height(40.dp), contentAlignment = Alignment.Center) {
             Text(label, color = Color.White, fontSize = 14.sp, fontWeight = FontWeight.Medium)

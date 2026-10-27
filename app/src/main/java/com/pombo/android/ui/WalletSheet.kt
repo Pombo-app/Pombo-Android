@@ -257,7 +257,7 @@ fun WalletSheet(vm: AppViewModel, onDismiss: () -> Unit) {
         addError?.let {
             Text(
                 it,
-                color = Color(0xFFF87171), fontSize = 12.sp,
+                color = PomboColors.Danger, fontSize = 12.sp,
                 modifier = Modifier.fillMaxWidth().padding(start = 16.dp, end = 16.dp, bottom = 4.dp)
             )
         }

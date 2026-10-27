@@ -34,6 +34,7 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.pombo.android.core.MediaController
+import com.pombo.android.ui.theme.PomboColors
 import com.pombo.android.core.StorageMedia
 
 /**
@@ -69,7 +70,7 @@ val LocalStorageTransfers = staticCompositionLocalOf<StorageTransfers?> { null }
 private val CARD_WIDTH = 300.dp                 // FIXED — never varies with stats content
 private val CARD_SHAPE = RoundedCornerShape(12.dp)
 private val CARD_BG = Color.White.copy(alpha = 0.05f)
-private val GREEN = Color(0xFF4ADE80)
+private val GREEN = PomboColors.Success
 private val BLUE = Color(0xFF3B82F6)
 
 /** 1.2 MB, 340 KB — the web's formatFileSize. */

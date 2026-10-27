@@ -559,7 +559,7 @@ private fun ActiveTransfersSection(vm: AppViewModel, channels: List<Channel>) {
             val up = transferUploads[seed.fileId]
             val rate = com.pombo.android.ui.formatSpeed(up?.bytesPerSecond)
             TransferRow(
-                icon = Icons.Filled.ArrowUpward, iconTint = Color(0xFF4ADE80).copy(alpha = 0.7f),
+                icon = Icons.Filled.ArrowUpward, iconTint = PomboColors.Success.copy(alpha = 0.7f),
                 badge = "mesh", name = seed.fileName.ifEmpty { seed.fileId.take(8) },
                 sub = com.pombo.android.ui.formatBytes(seed.fileSize) +
                     (if (rate.isEmpty()) "" else " · ↑ $rate") +

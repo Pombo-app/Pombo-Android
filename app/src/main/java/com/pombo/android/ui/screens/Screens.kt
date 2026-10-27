@@ -317,7 +317,7 @@ internal fun GateEntryDialog(vm: AppViewModel, entry: AppViewModel.GateEntry) {
     }
     // One status line, state-coloured: green = access granted, red = blocked
     val okTone = Color(0xFF34D399).copy(alpha = 0.90f)
-    val badTone = Color(0xFFF87171).copy(alpha = 0.80f)
+    val badTone = PomboColors.Danger.copy(alpha = 0.80f)
     val dimTone = Color.White.copy(alpha = 0.50f)
     val status: Pair<String, Color>? = when (info.mode) {
         GateModes.TOKEN -> {
@@ -913,7 +913,7 @@ fun ImportKeyDialog(onDismiss: () -> Unit, onImport: (String) -> Unit) {
             Spacer(Modifier.height(8.dp))
             Text(
                 "Invalid format - must be 64 hex characters",
-                color = Color(0xFFF87171), fontSize = 12.sp
+                color = PomboColors.Danger, fontSize = 12.sp
             )
         }
 
@@ -2552,7 +2552,7 @@ internal fun OnlineUsersDropdown(
                 Spacer(Modifier.width(10.dp))
                 Row(Modifier.weight(1f), verticalAlignment = Alignment.CenterVertically) {
                     if (ens != null) {
-                        Text("✓", color = Color(0xFF4ADE80), fontSize = 12.sp)
+                        Text("✓", color = PomboColors.Success, fontSize = 12.sp)
                         Spacer(Modifier.width(4.dp))
                     }
                     Text(

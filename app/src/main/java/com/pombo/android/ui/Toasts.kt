@@ -51,18 +51,19 @@ import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import com.pombo.android.ui.theme.PomboColors
 import kotlin.math.abs
 import kotlin.math.roundToInt
 
 /** Toast kinds and colours from the web (.toast.success/.error/.info/.warning). */
 enum class ToastKind(val color: Color) {
-    SUCCESS(Color(0xFF4ADE80)),
-    ERROR(Color(0xFFF87171)),
+    SUCCESS(PomboColors.Success),
+    ERROR(PomboColors.Danger),
     INFO(Color(0xFF60A5FA)),
     WARNING(Color(0xFFFBBF24)),
     // components.css:1366 `.toast.loading .toast-icon { color: #ff5c00 }` —
     // this was blue, copied from INFO.
-    LOADING(Color(0xFFFF5C00))
+    LOADING(PomboColors.Accent)
 }
 
 /**
@@ -282,7 +283,7 @@ private fun StepRing(progress: ToastProgress, @Suppress("UNUSED_PARAMETER") acce
                 style = Stroke(width = stroke)
             )
             drawArc(
-                color = Color(0xFFFF5C00),
+                color = PomboColors.Accent,
                 startAngle = 0f, sweepAngle = 360f * animated, useCenter = false,
                 topLeft = androidx.compose.ui.geometry.Offset(inset, inset),
                 size = arcSize,

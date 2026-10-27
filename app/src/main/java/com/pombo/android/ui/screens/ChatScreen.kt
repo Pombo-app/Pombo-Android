@@ -568,7 +568,7 @@ fun ChatScreen(vm: AppViewModel) {
                         com.pombo.android.ui.ContextMenuDivider()
                         com.pombo.android.ui.ContextMenuItem(
                             "Leave channel", Icons.AutoMirrored.Filled.Logout,
-                            iconTint = Color(0xFFF87171), labelColor = Color(0xFFF87171)
+                            iconTint = PomboColors.Danger, labelColor = PomboColors.Danger
                         ) { chMenu = false; vm.removeChannel(ch.messageStreamId) }
                     }
                 }
@@ -594,7 +594,7 @@ fun ChatScreen(vm: AppViewModel) {
             val warning = state == ChannelManager.SubscriptionState.ACTIVE
                 && msLeft < com.pombo.android.core.GateFormat.WARNING_MS
             if (lapsed || (warning && !subWarnDismissed)) {
-                val tint = if (lapsed) Color(0xFFF87171) else Color(0xFFFBBF24)
+                val tint = if (lapsed) PomboColors.Danger else Color(0xFFFBBF24)
                 val stripShape = RoundedCornerShape(bottomStart = 12.dp, bottomEnd = 12.dp)
                 val edge = tint.copy(alpha = 0.15f)
                 Box(

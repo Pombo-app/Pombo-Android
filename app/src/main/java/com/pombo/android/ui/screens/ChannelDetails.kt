@@ -435,7 +435,7 @@ private fun ChannelDetailsMain(
                         .format(java.util.Date(ps.paidUntil * 1000L))
                 },
                 valueColor = when {
-                    ps.state != ChannelManager.SubscriptionState.ACTIVE -> Color(0xFFF87171).copy(alpha = 0.80f)
+                    ps.state != ChannelManager.SubscriptionState.ACTIVE -> PomboColors.Danger.copy(alpha = 0.80f)
                     msLeft < com.pombo.android.core.GateFormat.WARNING_MS -> Color(0xFFFBBF24)
                     else -> Color.White.copy(alpha = 0.70f)
                 }
@@ -753,7 +753,7 @@ private fun ChannelNavRow(
     destructive: Boolean = false,
     onClick: () -> Unit
 ) {
-    val danger = Color(0xFFF87171)
+    val danger = PomboColors.Danger
     Row(
         Modifier.fillMaxWidth()
             .background(
@@ -903,7 +903,7 @@ private fun ChannelMembersPanel(vm: AppViewModel, channel: Channel, canModerate:
                                 (if (expired) "expired " else "until ") + java.text.SimpleDateFormat(
                                     "d MMM yyyy", java.util.Locale.getDefault()
                                 ).format(java.util.Date(row.paidUntil * 1000L)),
-                                color = if (expired) Color(0xFFF87171).copy(alpha = 0.80f)
+                                color = if (expired) PomboColors.Danger.copy(alpha = 0.80f)
                                     else Color.White.copy(alpha = 0.40f),
                                 fontSize = 11.sp, modifier = Modifier.padding(start = 4.dp)
                             )
@@ -1796,7 +1796,7 @@ private fun ChannelModerationPanel(vm: AppViewModel, channel: Channel, canModera
                         addr, ensNames[addr], nicknames[addr], declaredNames[addr]?.first,
                         rosterNames[addr], declaredNames[addr]?.second ?: 0L)
                     Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.padding(top = 2.dp)) {
-                        if (onChain) MemberBadge("Protocol", Color(0xFFF87171))
+                        if (onChain) MemberBadge("Protocol", PomboColors.Danger)
                         if (onChain && onClient) Spacer(Modifier.width(4.dp))
                         if (onClient) MemberBadge("Client", Color(0xFFA855F7))
                     }
