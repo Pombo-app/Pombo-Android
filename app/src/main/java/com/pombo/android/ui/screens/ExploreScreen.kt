@@ -56,6 +56,8 @@ import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.semantics
 import com.pombo.android.AppViewModel
 import com.pombo.android.data.Channel
 import com.pombo.android.ui.Avatar
@@ -64,7 +66,7 @@ import com.pombo.android.ui.theme.PomboColors
 
 @Composable
 @OptIn(androidx.compose.foundation.layout.ExperimentalLayoutApi::class)
-internal fun ExploreTab(vm: AppViewModel, onCreate: () -> Unit, onConnect: () -> Unit) {
+internal fun ExploreTab(vm: AppViewModel, onCreate: () -> Unit, onJoin: () -> Unit, onConnect: () -> Unit) {
     val items by vm.explore.collectAsState()
     val loading by vm.exploreLoading.collectAsState()
     val status by vm.status.collectAsState()
@@ -102,21 +104,39 @@ internal fun ExploreTab(vm: AppViewModel, onCreate: () -> Unit, onConnect: () ->
     }
     Column(Modifier.fillMaxSize()) {
         PomboHeader(status) {
-            if (isGuest) {
-                CreateAccountButton(onConnect)
-            } else {
-                // Web #header-create-channel-btn: `px-4 py-1.5 rounded-xl
-                // bg-[#F6851B]/15 border-[#F6851B]/30` with a WHITE plus — a
-                // rounded rectangle, not the circle we had, and the glyph is
-                // white rather than orange.
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                // Web #header-join-id-btn: the create button's shape in a neutral wash.
                 Box(
                     Modifier
-                        .background(PomboColors.Accent.copy(alpha = 0.15f), RoundedCornerShape(12.dp))
-                        .border(1.dp, PomboColors.Accent.copy(alpha = 0.30f), RoundedCornerShape(12.dp))
-                        .clickableNoRipple(onCreate)
-                        .padding(horizontal = 16.dp, vertical = 6.dp),
+                        .height(28.dp)
+                        .background(Color.White.copy(alpha = 0.05f), RoundedCornerShape(12.dp))
+                        .border(1.dp, Color.White.copy(alpha = 0.08f), RoundedCornerShape(12.dp))
+                        .clickableNoRipple(onJoin)
+                        .padding(horizontal = 16.dp),
                     contentAlignment = Alignment.Center
-                ) { Icon(Icons.Filled.Add, contentDescription = "Create channel", tint = Color.White, modifier = Modifier.size(16.dp)) }
+                ) {
+                    Text(
+                        "#", color = Color.White, fontSize = 15.sp, fontWeight = FontWeight.Bold,
+                        modifier = Modifier.semantics { contentDescription = "Join by ID" }
+                    )
+                }
+                Spacer(Modifier.width(12.dp))
+                if (isGuest) {
+                    CreateAccountButton(onConnect)
+                } else {
+                    // Web #header-create-channel-btn: `px-4 py-1.5 rounded-xl
+                    // bg-[#F6851B]/15 border-[#F6851B]/30` with a WHITE plus — a
+                    // rounded rectangle, not the circle we had, and the glyph is
+                    // white rather than orange.
+                    Box(
+                        Modifier
+                            .background(PomboColors.Accent.copy(alpha = 0.15f), RoundedCornerShape(12.dp))
+                            .border(1.dp, PomboColors.Accent.copy(alpha = 0.30f), RoundedCornerShape(12.dp))
+                            .clickableNoRipple(onCreate)
+                            .padding(horizontal = 16.dp, vertical = 6.dp),
+                        contentAlignment = Alignment.Center
+                    ) { Icon(Icons.Filled.Add, contentDescription = "Create channel", tint = Color.White, modifier = Modifier.size(16.dp)) }
+                }
             }
         }
         // Only PomboHeader stays fixed — the section label, search, filters

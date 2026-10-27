@@ -173,7 +173,10 @@ fun MainShell(vm: AppViewModel) {
         ) {
             when (tab) {
                 Tab.CHATS -> ChatsTab(vm, onContacts = { tab = Tab.CONTACTS }, onConnect = { showConnect = true })
-                Tab.EXPLORE -> ExploreTab(vm, onCreate = { showCreate = true }, onConnect = { showConnect = true })
+                Tab.EXPLORE -> ExploreTab(
+                    vm, onCreate = { showCreate = true }, onJoin = { showJoin = true },
+                    onConnect = { showConnect = true }
+                )
                 Tab.CONTACTS -> ContactsTab(vm)
                 Tab.SETTINGS -> SettingsTab(
                     vm, settingsPanel,
