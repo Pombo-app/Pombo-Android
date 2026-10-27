@@ -129,6 +129,7 @@ fun ChatScreen(vm: AppViewModel) {
     val online by vm.onlineCount.collectAsState()
     val onlineUsers by vm.onlineUsers.collectAsState()
     val netStatus by vm.status.collectAsState()
+    val appOffline by vm.offline.collectAsState()
     val presenceReady by vm.presenceReady.collectAsState()
     val typing by vm.typingFrom.collectAsState()
     var onlineOpen by remember { mutableStateOf(false) }
@@ -436,7 +437,14 @@ fun ChatScreen(vm: AppViewModel) {
                     // already connected is the common case, so the per-channel
                     // flag is the one that actually covers the gap.
                     val connecting = netStatus != NetStatus.CONNECTED || !presenceReady
-                    if (ch.type == "dm") {
+                    if (appOffline) {
+                        Spacer(Modifier.width(6.dp))
+                        if (ch.type != "dm") {
+                            Text("·", color = dim, fontSize = 13.sp)
+                            Spacer(Modifier.width(6.dp))
+                        }
+                        Text("Offline", color = dim, fontSize = 13.sp)
+                    } else if (ch.type == "dm") {
                         // A DM has one counterpart: show the peer's live status
                         // next to the envelope (their presence heartbeat within
                         // the online timeout = Online, else Offline).

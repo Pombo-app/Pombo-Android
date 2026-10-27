@@ -153,6 +153,22 @@ internal val REACTION_EMOJIS = listOf(
 )
 
 @Composable
+private fun OfflineBanner() {
+    Column(Modifier.fillMaxWidth().background(PomboColors.SurfaceRaised)) {
+        Row(
+            Modifier.fillMaxWidth().height(24.dp),
+            horizontalArrangement = Arrangement.Center,
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Box(Modifier.size(6.dp).background(PomboColors.Danger, CircleShape))
+            Spacer(Modifier.width(6.dp))
+            Text("Offline, trying to connect", color = PomboColors.Overlay70, fontSize = 12.sp)
+        }
+        Box(Modifier.fillMaxWidth().height(1.dp).background(PomboColors.Overlay6))
+    }
+}
+
+@Composable
 fun PomboApp(vm: AppViewModel) {
     val hasWallet by vm.hasWallet.collectAsState()
     val current by vm.current.collectAsState()
@@ -200,10 +216,16 @@ fun PomboApp(vm: AppViewModel) {
             com.pombo.android.ui.LocalFileTransfers provides fileTransfers,
             com.pombo.android.ui.LocalStorageTransfers provides storageTransfers
         ) {
-            when {
-                mnemonic != null -> MnemonicScreen(mnemonic!!, onDone = vm::dismissMnemonic)
-                current != null -> ChatScreen(vm)
-                else -> MainShell(vm)
+            val offline by vm.offline.collectAsState()
+            Column(Modifier.fillMaxSize()) {
+                if (offline) OfflineBanner()
+                Box(Modifier.weight(1f)) {
+                    when {
+                        mnemonic != null -> MnemonicScreen(mnemonic!!, onDone = vm::dismissMnemonic)
+                        current != null -> ChatScreen(vm)
+                        else -> MainShell(vm)
+                    }
+                }
             }
         }
 

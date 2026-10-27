@@ -1527,14 +1527,29 @@ class AppViewModel(app: Application) : AndroidViewModel(app), PomboBridge.Listen
         }
     )
 
+    private val connection = com.pombo.android.core.ConnectionMonitor(
+        viewModelScope,
+        probe = {
+            manager.storageEndpoints.latestKnownUrl()?.let { com.pombo.android.core.StorageHttp.answers(it) }
+        },
+        sleep = { delay(it) }
+    )
+
+    /** True once the app has failed to reach anything for a minute; drives the offline banner. */
+    val offline: StateFlow<Boolean> = connection.offline
+
     private val networkCallback = object : android.net.ConnectivityManager.NetworkCallback() {
         override fun onCapabilitiesChanged(network: android.net.Network, caps: android.net.NetworkCapabilities) {
             val up = caps.hasCapability(android.net.NetworkCapabilities.NET_CAPABILITY_VALIDATED)
             val cameUp = up && !networkValidated
             networkValidated = up
+            connection.setNetworkUp(up)
             if (cameUp) viewModelScope.launch { nodeRevival.kick() }
         }
-        override fun onLost(network: android.net.Network) { networkValidated = false }
+        override fun onLost(network: android.net.Network) {
+            networkValidated = false
+            connection.setNetworkUp(false)
+        }
     }
 
     private val _address = MutableStateFlow(store.address)
@@ -1872,8 +1887,13 @@ class AppViewModel(app: Application) : AndroidViewModel(app), PomboBridge.Listen
             )
         }
         runCatching {
-            app.getSystemService(android.net.ConnectivityManager::class.java)
-                ?.registerDefaultNetworkCallback(networkCallback)
+            val cm = app.getSystemService(android.net.ConnectivityManager::class.java)
+            // No callback fires at all when there is no network at start.
+            if (cm?.activeNetwork == null) {
+                networkValidated = false
+                connection.setNetworkUp(false)
+            }
+            cm?.registerDefaultNetworkCallback(networkCallback)
         }
     }
 
@@ -3855,6 +3875,7 @@ class AppViewModel(app: Application) : AndroidViewModel(app), PomboBridge.Listen
             "connecting" -> _status.value = NetStatus.CONNECTING
             "node-up" -> {
                 nodeRevival.onAlive()
+                connection.setNodeAlive(true)
                 if (_status.value == NetStatus.CONNECTING) _status.value = NetStatus.CONNECTED
                 manager.kickOpenReadRetry()
             }
@@ -3865,6 +3886,7 @@ class AppViewModel(app: Application) : AndroidViewModel(app), PomboBridge.Listen
         android.util.Log.w("PomboBridge", "Streamr node failed to start: $message")
         _status.value = NetStatus.CONNECTING
         nodeRevival.onDead()
+        connection.setNodeAlive(false)
     }
 
     override fun onBridgeConnected(address: String) {
