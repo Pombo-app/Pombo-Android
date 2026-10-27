@@ -1739,12 +1739,11 @@ private fun DangerButton(label: String, enabled: Boolean = true, onClick: () -> 
 }
 
 /**
- * Hold-to-confirm, matching the web's 2-second press-and-hold on both
- * destructive actions. A tap does nothing: the delay is the confirmation, so
- * neither copying a private key nor deleting an account can happen by accident.
+ * Hold-to-confirm for irreversible actions. A tap does nothing: the 2-second
+ * hold is the confirmation, so none of them can happen by accident.
  */
 @Composable
-private fun HoldToConfirmButton(label: String, onConfirm: () -> Unit) {
+internal fun HoldToConfirmButton(label: String, onConfirm: () -> Unit) {
     var holding by remember { mutableStateOf(false) }
     val progress by androidx.compose.animation.core.animateFloatAsState(
         targetValue = if (holding) 1f else 0f,

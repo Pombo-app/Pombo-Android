@@ -2066,17 +2066,9 @@ private fun ChannelModerationPanel(vm: AppViewModel, channel: Channel, canModera
     }
 }
 
-/**
- * On-chain deletion of the whole channel (web #delete-channel-modal).
- *
- * Behind a typed confirmation rather than a plain button: this destroys the
- * streams for every member, not just this device, and there is no undo.
- */
+/** On-chain deletion of the whole channel: gone for every member, no undo. */
 @Composable
 private fun ChannelDestroyPanel(vm: AppViewModel, channel: Channel, onDismiss: () -> Unit) {
-    var confirmText by remember { mutableStateOf("") }
-    val armed = confirmText.trim().equals(channel.name.trim(), ignoreCase = true)
-
     Text("Delete channel", color = PomboColors.Danger, fontSize = 15.sp, fontWeight = FontWeight.SemiBold)
     Spacer(Modifier.height(10.dp))
     GasWarningBanner(
@@ -2084,44 +2076,9 @@ private fun ChannelDestroyPanel(vm: AppViewModel, channel: Channel, onDismiss: (
             "It cannot be reversed."
     )
     Spacer(Modifier.height(14.dp))
-    Text(
-        "Type the channel name to confirm",
-        color = PomboColors.Overlay60, fontSize = 12.sp
-    )
-    Spacer(Modifier.height(6.dp))
-    OutlinedTextField(
-        value = confirmText, onValueChange = { confirmText = it },
-        placeholder = { Text(channel.name, color = PomboColors.Overlay20, fontSize = 14.sp) },
-        singleLine = true, shape = RoundedCornerShape(12.dp),
-        textStyle = androidx.compose.ui.text.TextStyle(fontSize = 14.sp, color = PomboColors.TextPrimary),
-        colors = pomboFieldColors(), modifier = Modifier.fillMaxWidth()
-    )
-    Spacer(Modifier.height(12.dp))
-    Box(
-        Modifier.fillMaxWidth()
-            .background(
-                PomboColors.Danger.copy(alpha = if (armed) 0.12f else 0.04f),
-                RoundedCornerShape(12.dp)
-            )
-            .border(
-                1.dp,
-                PomboColors.Danger.copy(alpha = if (armed) 0.30f else 0.10f),
-                RoundedCornerShape(12.dp)
-            )
-            .then(
-                if (armed) Modifier.clickableNoRipple {
-                    onDismiss()
-                    vm.deleteChannelOnChain(channel.messageStreamId, channel.name)
-                } else Modifier
-            )
-            .padding(vertical = 12.dp),
-        contentAlignment = Alignment.Center
-    ) {
-        Text(
-            "Delete channel permanently",
-            color = PomboColors.Danger.copy(alpha = if (armed) 1f else 0.35f),
-            fontSize = 14.sp, fontWeight = FontWeight.Medium
-        )
+    HoldToConfirmButton("Hold to Delete (2s)") {
+        onDismiss()
+        vm.deleteChannelOnChain(channel.messageStreamId, channel.name)
     }
 }
 
