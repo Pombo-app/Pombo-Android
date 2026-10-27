@@ -336,14 +336,12 @@ internal fun PomboHeader(status: NetStatus, trailing: @Composable (() -> Unit)? 
             androidx.compose.foundation.Image(
                 painter = androidx.compose.ui.res.painterResource(id = com.pombo.android.R.drawable.pombo_logo),
                 contentDescription = "Pombo",
-                modifier = Modifier.size(34.dp)
+                modifier = Modifier.size(40.dp)
             )
             if (status == NetStatus.CONNECTING || status == NetStatus.ERROR) {
                 NetworkDot(Modifier.align(Alignment.BottomEnd).offset(x = 1.dp, y = 1.dp))
             }
         }
-        Spacer(Modifier.width(8.dp))
-        Text("Pombo", color = PomboColors.Text, fontSize = 17.sp, fontWeight = FontWeight.ExtraBold)
         Spacer(Modifier.weight(1f))
         if (trailing != null) trailing()
     }
