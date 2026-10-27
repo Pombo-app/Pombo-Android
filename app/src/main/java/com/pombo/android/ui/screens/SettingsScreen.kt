@@ -16,7 +16,6 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.layout.heightIn
-import androidx.compose.foundation.layout.IntrinsicSize
 import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.foundation.gestures.detectTapGestures
@@ -35,9 +34,10 @@ import androidx.compose.ui.draw.alpha
 import androidx.compose.material.icons.outlined.Explore
 import androidx.compose.material.icons.outlined.Person
 import androidx.compose.material.icons.outlined.Search
-import androidx.compose.material.icons.outlined.Refresh
 import androidx.compose.material.icons.outlined.Settings
 import androidx.compose.material.icons.outlined.AccountBalanceWallet
+import androidx.compose.material.icons.outlined.ChevronLeft
+import androidx.compose.material.icons.outlined.ChevronRight
 import androidx.compose.material.icons.outlined.Link
 import androidx.compose.material.icons.outlined.Lock
 import androidx.compose.material.icons.outlined.Shield
@@ -83,66 +83,59 @@ import com.pombo.android.ui.Avatar
 import com.pombo.android.ui.theme.PomboColors
 
 
-/**
- * Settings-only header: the current panel's name sits centred and marked
- * orange with an underline — the treatment the web gives its active filter
- * tab (.channel-filter-tab: uppercase, tracking-widest, #F6851B + 2px
- * border). The other tabs keep the brand header above.
- */
+/** Web #settings-mobile-header: the title alone on the list, Back + title inside a section. */
 @Composable
-private fun SettingsHeader(title: String) {
-    Box(
-        Modifier.fillMaxWidth()
-            .background(PomboColors.Background)
-            .padding(horizontal = 14.dp, vertical = 10.dp)
-            .heightIn(min = 36.dp)
-    ) {
-        Column(
-            Modifier.align(Alignment.Center).width(IntrinsicSize.Max),
-            horizontalAlignment = Alignment.CenterHorizontally
+private fun SettingsHeader(title: String, onBack: (() -> Unit)? = null) {
+    Column(Modifier.fillMaxWidth().background(PomboColors.Background)) {
+        Row(
+            Modifier.fillMaxWidth().height(56.dp)
+                .padding(start = if (onBack != null) 4.dp else 16.dp, end = 16.dp),
+            verticalAlignment = Alignment.CenterVertically
         ) {
-            Text(
-                title.uppercase(),
-                color = PomboColors.Accent,
-                fontSize = 12.sp,
-                fontWeight = FontWeight.SemiBold,
-                letterSpacing = 0.15.em
-            )
-            Spacer(Modifier.height(4.dp))
-            Box(
-                Modifier.fillMaxWidth().height(2.dp)
-                    .background(PomboColors.Accent, RoundedCornerShape(1.dp))
-            )
+            if (onBack != null) {
+                HeaderIconButton(48.dp, onBack) {
+                    Icon(
+                        Icons.Outlined.ChevronLeft, contentDescription = "Back",
+                        tint = Color.White.copy(alpha = 0.70f), modifier = Modifier.size(24.dp)
+                    )
+                }
+            }
+            Text(title, color = PomboColors.Text, fontSize = 17.sp, fontWeight = FontWeight.SemiBold)
         }
+        Box(Modifier.fillMaxWidth().height(1.dp).background(Color.White.copy(alpha = 0.06f)))
     }
 }
 
 /**
- * Order and grouping follow the web's #pill-settings-dropdown, which separates
- * the panels with `<hr>` into: what the account IS, what it KEEPS PRIVATE, and
- * what the app is. `section` marks which group a panel belongs to, so the
- * dropdown can draw the dividers without hard-coding positions.
- *
- * The enum order also drives the settings pager, so swiping between panels
- * follows the same sequence as the menu.
+ * Order and grouping of the settings list: what the account IS, then what it
+ * KEEPS PRIVATE. `section` marks the group, so the list draws the dividers
+ * without hard-coding positions.
  */
 internal enum class SettingsPanel(val label: String, val icon: ImageVector, val section: Int) {
     ACCOUNT("Account", Icons.Outlined.Person, 0),
     NOTIFICATIONS("Notifications", Icons.Outlined.Notifications, 0),
-    API("API", Icons.Outlined.Link, 0),
+    NETWORKS("Networks", Icons.Outlined.Link, 0),
     CONTENT("Content", Icons.Outlined.SmartDisplay, 0),
     PRIVACY("Privacy", Icons.Outlined.Shield, 1),
     SECURITY("Security", Icons.Outlined.Lock, 1),
     DM_INBOX("DM Inbox", Icons.Outlined.MailOutline, 1)
-    // ABOUT moved to the Profile screen (2026-08-21) — see AboutPanel's call
-    // site in ProfileTab.
+    // ABOUT lives on the Profile screen.
 }
 
-@OptIn(androidx.compose.foundation.ExperimentalFoundationApi::class)
+/**
+ * The section list, or one section with Back to the list ([panel] null = list).
+ */
 @Composable
-internal fun SettingsTab(vm: AppViewModel, pagerState: androidx.compose.foundation.pager.PagerState) {
-    val status by vm.status.collectAsState()
-
+internal fun SettingsTab(
+    vm: AppViewModel,
+    panel: SettingsPanel?,
+    onOpen: (SettingsPanel) -> Unit,
+    onBack: () -> Unit
+) {
+    if (panel == null) {
+        SettingsIndex(vm, onOpen)
+        return
+    }
     // Any tap outside a text field drops its focus, which is also what
     // commits the display-name edit below.
     val focusManager = androidx.compose.ui.platform.LocalFocusManager.current
@@ -151,40 +144,101 @@ internal fun SettingsTab(vm: AppViewModel, pagerState: androidx.compose.foundati
             detectTapGestures { focusManager.clearFocus() }
         }
     ) {
-        // The header names the panel being viewed (Account, Wallet, …), so the
-        // old label under it would just repeat the word.
-        SettingsHeader(SettingsPanel.entries[pagerState.currentPage].label)
+        SettingsHeader(panel.label, onBack)
         Spacer(Modifier.height(8.dp))
-        // Panels are swiped horizontally; the pill dropdown jumps straight to one.
-        androidx.compose.foundation.pager.HorizontalPager(
-            state = pagerState,
-            modifier = Modifier.fillMaxSize()
-        ) { page ->
-            // Scroll lives HERE, once, for every panel. Panels used to be fixed
-            // Columns that simply clipped whatever ran past the screen — Account
-            // grew past it and Import/Export became unreachable. Security and
-            // Privacy carried their own scroller; those were removed, since two
-            // verticalScrolls of the same orientation nested means the inner one
-            // measures against infinite height and never scrolls at all.
-            Column(
-                Modifier
-                    .fillMaxSize()
-                    .verticalScroll(rememberScrollState())
-                    .padding(horizontal = 14.dp)
-                    .padding(bottom = 16.dp)
-            ) {
-                when (SettingsPanel.entries[page]) {
-                    SettingsPanel.ACCOUNT -> AccountPanel(vm)
-                    SettingsPanel.NOTIFICATIONS -> NotificationsSection(vm)
-                    SettingsPanel.SECURITY -> SecurityPanel(vm)
-                    SettingsPanel.DM_INBOX -> DmInboxPanel(vm)
-                    SettingsPanel.PRIVACY -> PrivacyPanel(vm)
-                    SettingsPanel.API -> ApiPanel(vm)
-                    SettingsPanel.CONTENT -> ContentPanel(vm)
-                }
+        // Scroll lives HERE, once, for every panel: two verticalScrolls of the
+        // same orientation nested means the inner one measures against infinite
+        // height and never scrolls at all.
+        Column(
+            Modifier
+                .fillMaxSize()
+                .verticalScroll(rememberScrollState())
+                .padding(horizontal = 14.dp)
+                .padding(bottom = 16.dp)
+        ) {
+            when (panel) {
+                SettingsPanel.ACCOUNT -> AccountPanel(vm)
+                SettingsPanel.NOTIFICATIONS -> NotificationsSection(vm)
+                SettingsPanel.SECURITY -> SecurityPanel(vm)
+                SettingsPanel.DM_INBOX -> DmInboxPanel(vm)
+                SettingsPanel.PRIVACY -> PrivacyPanel(vm)
+                SettingsPanel.NETWORKS -> ApiPanel(vm)
+                SettingsPanel.CONTENT -> ContentPanel(vm)
             }
         }
     }
+}
+
+/** Web #settings-panel-index: one row per section, Sync Devices as an action at the end. */
+@Composable
+private fun SettingsIndex(vm: AppViewModel, onOpen: (SettingsPanel) -> Unit) {
+    val isGuest by vm.isGuest.collectAsState()
+    Column(Modifier.fillMaxSize()) {
+        SettingsHeader("Settings")
+        Column(
+            Modifier.fillMaxSize().verticalScroll(rememberScrollState())
+                .padding(horizontal = 14.dp, vertical = 12.dp)
+        ) {
+            SettingsPanel.entries.forEachIndexed { i, panel ->
+                val previous = SettingsPanel.entries.getOrNull(i - 1)
+                if (previous != null && previous.section != panel.section) SettingsIndexDivider()
+                SettingsIndexRow(panel.label, panel.icon, chevron = true) { onOpen(panel) }
+            }
+            // Guests have no inbox to sync to.
+            if (!isGuest) {
+                SettingsIndexDivider()
+                val syncing by vm.sync.syncing.collectAsState()
+                SettingsIndexRow(
+                    if (syncing) "Syncing your data" else "Sync Devices",
+                    Icons.Outlined.Sync, chevron = false, busy = syncing
+                ) { if (!syncing) vm.syncNow() }
+            }
+        }
+    }
+}
+
+@Composable
+private fun SettingsIndexRow(
+    label: String,
+    icon: ImageVector,
+    chevron: Boolean,
+    busy: Boolean = false,
+    onClick: () -> Unit
+) {
+    Row(
+        Modifier.fillMaxWidth().clickableNoRipple(onClick).padding(horizontal = 6.dp, vertical = 14.dp),
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        if (busy) {
+            androidx.compose.material3.CircularProgressIndicator(
+                modifier = Modifier.size(20.dp),
+                color = PomboColors.Accent,
+                trackColor = PomboColors.Accent.copy(alpha = 0.16f),
+                strokeWidth = 2.5.dp
+            )
+        } else {
+            Icon(icon, contentDescription = null, tint = Color.White.copy(alpha = 0.50f), modifier = Modifier.size(20.dp))
+        }
+        Spacer(Modifier.width(14.dp))
+        Text(
+            label, color = Color.White.copy(alpha = 0.85f), fontSize = 15.sp,
+            fontWeight = FontWeight.Medium, modifier = Modifier.weight(1f)
+        )
+        if (chevron) {
+            Icon(
+                Icons.Outlined.ChevronRight, contentDescription = null,
+                tint = Color.White.copy(alpha = 0.30f), modifier = Modifier.size(20.dp)
+            )
+        }
+    }
+}
+
+@Composable
+private fun SettingsIndexDivider() {
+    Box(
+        Modifier.fillMaxWidth().padding(horizontal = 6.dp, vertical = 6.dp).height(1.dp)
+            .background(Color.White.copy(alpha = 0.06f))
+    )
 }
 
 /**
@@ -1731,42 +1785,6 @@ private fun HoldToConfirmButton(label: String, onConfirm: () -> Unit) {
         Box(Modifier.fillMaxWidth().height(40.dp), contentAlignment = Alignment.Center) {
             Text(label, color = Color.White, fontSize = 14.sp, fontWeight = FontWeight.Medium)
         }
-    }
-}
-
-
-/**
- * "Sync Devices" — the web puts this in the same pill dropdown as the settings
- * panels (#pill-sync-devices-btn), with an 18px #F6851B spinner while running.
- */
-@Composable
-internal fun SyncDevicesRow(vm: AppViewModel) {
-    val syncing by vm.sync.syncing.collectAsState()
-    Row(
-        Modifier
-            .fillMaxWidth()
-            .clickableNoRipple { if (!syncing) vm.syncNow() }
-            .padding(horizontal = 12.dp, vertical = 8.dp),
-        verticalAlignment = Alignment.CenterVertically
-    ) {
-        if (syncing) {
-            androidx.compose.material3.CircularProgressIndicator(
-                modifier = Modifier.size(16.dp),
-                color = Color(0xFFF6851B),
-                trackColor = Color(0xFFF6851B).copy(alpha = 0.16f),
-                strokeWidth = 2.5.dp
-            )
-        } else {
-            Icon(
-                Icons.Outlined.Refresh, contentDescription = null,
-                tint = Color.White.copy(alpha = 0.40f), modifier = Modifier.size(16.dp)
-            )
-        }
-        Spacer(Modifier.width(8.dp))
-        Text(
-            if (syncing) "Syncing your data" else "Sync Devices",
-            color = Color.White.copy(alpha = 0.60f), fontSize = 13.sp
-        )
     }
 }
 

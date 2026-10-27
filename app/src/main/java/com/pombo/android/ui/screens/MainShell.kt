@@ -1,13 +1,5 @@
 package com.pombo.android.ui.screens
 
-import androidx.compose.animation.AnimatedVisibility
-import androidx.compose.animation.core.tween
-import androidx.compose.animation.fadeIn
-import androidx.compose.animation.fadeOut
-import androidx.compose.animation.scaleIn
-import androidx.compose.animation.scaleOut
-import androidx.compose.animation.slideInVertically
-import androidx.compose.animation.slideOutVertically
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
@@ -27,7 +19,6 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.shape.CircleShape
-import androidx.compose.foundation.shape.GenericShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
@@ -37,11 +28,7 @@ import androidx.compose.ui.draw.alpha
 import androidx.compose.material.icons.outlined.AccountBalanceWallet
 import androidx.compose.material.icons.outlined.AddCircleOutline
 import androidx.compose.material.icons.outlined.Home
-import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.foundation.layout.offset
-import androidx.compose.ui.layout.onGloballyPositioned
-import androidx.compose.ui.layout.boundsInRoot
-import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.material.icons.outlined.Explore
 import androidx.compose.material.icons.outlined.People
 import androidx.compose.material.icons.outlined.Person
@@ -51,7 +38,6 @@ import androidx.compose.material.icons.outlined.Close
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.draw.clip
-import kotlinx.coroutines.launch
 import androidx.compose.material3.Icon
 import androidx.compose.material3.Text
 import androidx.compose.ui.window.Dialog
@@ -65,20 +51,11 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.drawBehind
-import androidx.compose.ui.draw.shadow
-import androidx.compose.ui.geometry.CornerRadius
-import androidx.compose.ui.geometry.RoundRect
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.graphics.Path
-import androidx.compose.ui.graphics.PathOperation
-import androidx.compose.ui.graphics.TransformOrigin
-import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
-import androidx.compose.ui.unit.Density
 import androidx.compose.ui.unit.Dp
-import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.em
@@ -131,23 +108,18 @@ fun MainShell(vm: AppViewModel) {
     var walletOpen by remember { mutableStateOf(false) }
     val isGuest by vm.isGuest.collectAsState()
 
-    // Settings has many panels: the pill's Settings button opens a dropdown to
-    // jump straight to one, and panels are swipeable left/right from there.
-    val settingsPager = androidx.compose.foundation.pager.rememberPagerState(
-        pageCount = { SettingsPanel.entries.size }
-    )
-    var settingsMenu by remember { mutableStateOf(false) }
-    /** Centre x of the Settings pill item, reported by PillNav. */
-    var settingsAnchorX by remember { mutableFloatStateOf(0f) }
-    val scope = androidx.compose.runtime.rememberCoroutineScope()
+    /** The open Settings section; null = the section list. */
+    var settingsPanel by remember { mutableStateOf<SettingsPanel?>(null) }
 
     // Back gesture = navigate back, not leave the app. Declared innermost-last,
-    // because the LAST enabled handler is the one that runs: the open dropdown
-    // wins over the tab, and only on the landing tab does back fall through to
-    // the system and actually minimise Pombo.
+    // because the LAST enabled handler is the one that runs: an open settings
+    // section wins over the tab, and only on the landing tab does back fall
+    // through to the system and actually minimise Pombo.
     val homeTab = if (guestNow) Tab.EXPLORE else Tab.CHATS
     androidx.activity.compose.BackHandler(enabled = tab != homeTab) { tab = homeTab }
-    androidx.activity.compose.BackHandler(enabled = settingsMenu) { settingsMenu = false }
+    androidx.activity.compose.BackHandler(enabled = tab == Tab.SETTINGS && settingsPanel != null) {
+        settingsPanel = null
+    }
 
     var showImportKey by remember { mutableStateOf(false) }
     // Web walletFlows: "Create New Account" opens the avatar/name wizard, not
@@ -203,16 +175,13 @@ fun MainShell(vm: AppViewModel) {
                 Tab.CHATS -> ChatsTab(vm, onCreate = { showCreate = true }, onJoin = { showJoin = true }, onConnect = { showConnect = true })
                 Tab.EXPLORE -> ExploreTab(vm, onCreate = { showCreate = true }, onConnect = { showConnect = true })
                 Tab.CONTACTS -> ContactsTab(vm)
-                Tab.SETTINGS -> SettingsTab(vm, settingsPager)
+                Tab.SETTINGS -> SettingsTab(
+                    vm, settingsPanel,
+                    onOpen = { settingsPanel = it },
+                    onBack = { settingsPanel = null }
+                )
                 Tab.PROFILE -> ProfileTab(vm, onAddAccount = { showConnect = true })
             }
-        }
-
-        // Tap-anywhere-else closes the settings dropdown. Declared before the
-        // pill Column, so it is drawn under both the menu and the pill and
-        // catches only the taps that miss them.
-        if (settingsMenu) {
-            Box(Modifier.fillMaxSize().clickableNoRipple { settingsMenu = false })
         }
 
         // Floating pill nav + guest label underneath (web: .pill-guest-label).
@@ -227,43 +196,22 @@ fun MainShell(vm: AppViewModel) {
                 .padding(bottom = PILL_NAV_BOTTOM_OFFSET),
             horizontalAlignment = Alignment.CenterHorizontally
         ) {
-            PillMenuAnchor(visible = settingsMenu, anchorX = settingsAnchorX, width = 200.dp) {
-                SettingsDropdown(
-                    current = SettingsPanel.entries[settingsPager.currentPage]
-                        .takeIf { tab == Tab.SETTINGS },
-                    // Guests have no inbox to sync to, so the web hides this.
-                    syncRow = if (!isGuest) ({ SyncDevicesRow(vm) }) else null
-                ) { panel ->
-                    settingsMenu = false
-                    tab = Tab.SETTINGS
-                    scope.launch { settingsPager.animateScrollToPage(panel.ordinal) }
-                }
-            }
             PillNav(
                 current = tab,
                 address = vm.address.collectAsState().value,
                 ensAvatarUrl = vm.ensAvatars.collectAsState().value[vm.address.collectAsState().value?.lowercase()],
                 showWallet = !isGuest,
-                onWallet = { settingsMenu = false; walletOpen = true },
-                onSettingsAnchor = { settingsAnchorX = it },
+                onWallet = { walletOpen = true },
                 onSelect = { picked ->
-                    when (picked) {
-                        Tab.SETTINGS -> {
-                            // Settings only offers its panel list — navigation
-                            // happens when a panel is picked, not on the tap itself.
-                            settingsMenu = !settingsMenu
-                        }
-                        else -> {
-                            settingsMenu = false
-                            tab = picked
-                            // Remember where the user is, so a chat opened next
-                            // returns to this tab.
-                            vm.setChatOrigin(
-                                if (picked == Tab.EXPLORE) com.pombo.android.AppViewModel.ChatOrigin.EXPLORE
-                                else com.pombo.android.AppViewModel.ChatOrigin.CHATS
-                            )
-                        }
-                    }
+                    tab = picked
+                    // Settings always opens on its section list.
+                    if (picked == Tab.SETTINGS) settingsPanel = null
+                    // Remember where the user is, so a chat opened next
+                    // returns to this tab.
+                    vm.setChatOrigin(
+                        if (picked == Tab.EXPLORE) com.pombo.android.AppViewModel.ChatOrigin.EXPLORE
+                        else com.pombo.android.AppViewModel.ChatOrigin.CHATS
+                    )
                 }
             )
         }
@@ -282,111 +230,6 @@ fun MainShell(vm: AppViewModel) {
     }
 }
 
-/** Caret and corner geometry, shared by a pill menu's fill and its outline. */
-private val PILL_MENU_CARET_HALF_WIDTH = 8.dp
-private val PILL_MENU_CARET_HEIGHT = 7.dp
-private val PILL_MENU_CORNER = 16.dp
-
-/**
- * Silhouette of a pill dropdown: rounded card plus a caret pointing down at
- * [caretCenterX] (px, in the card's own coordinates). The two are united into
- * one path so fill and outline treat them as a single surface — no seam where
- * the caret meets the card. The caret clamps clear of the rounded corners; the
- * card itself may be clamped to the screen edge, so the caret position is what
- * keeps pointing at the pill icon.
- */
-private fun Density.pillMenuPath(
-    width: Float,
-    height: Float,
-    caretCenterX: Float
-): Path {
-    val caretHalfWidth = PILL_MENU_CARET_HALF_WIDTH.toPx()
-    val corner = PILL_MENU_CORNER.toPx()
-    val bodyBottom = height - PILL_MENU_CARET_HEIGHT.toPx()
-    val body = Path().apply {
-        addRoundRect(RoundRect(0f, 0f, width, bodyBottom, CornerRadius(corner)))
-    }
-    val cx = caretCenterX.coerceIn(corner + caretHalfWidth, width - corner - caretHalfWidth)
-    val caret = Path().apply {
-        // Starts 1px inside the card so the union has real overlap to fuse.
-        moveTo(cx - caretHalfWidth, bodyBottom - 1f)
-        lineTo(cx, height)
-        lineTo(cx + caretHalfWidth, bodyBottom - 1f)
-        close()
-    }
-    return Path.combine(PathOperation.Union, body, caret)
-}
-
-private fun Density.pillMenuShape(caretCenterX: Float): GenericShape = GenericShape { size, _ ->
-    addPath(pillMenuPath(size.width, size.height, caretCenterX))
-}
-
-/**
- * Anchored, animated shell shared by the pill's dropdown menus (web:
- * .pill-settings-dropdown / dropdownOpenUp). Scales up from the caret tip —
- * the menu visibly grows out of the icon that opened it — and the card clamps
- * to the screen edge while the caret keeps following [anchorX].
- */
-@Composable
-private fun PillMenuAnchor(
-    visible: Boolean,
-    /** Centre x of the owning pill icon, in root coordinates. */
-    anchorX: Float,
-    width: Dp,
-    content: @Composable () -> Unit
-) {
-    val density = LocalDensity.current
-    val screenW = with(density) {
-        androidx.compose.ui.platform.LocalConfiguration.current.screenWidthDp.dp.toPx()
-    }
-    val menuW = with(density) { width.toPx() }
-    val margin = with(density) { 8.dp.toPx() }
-    val menuX = (anchorX - menuW / 2f).coerceIn(margin, (screenW - menuW - margin).coerceAtLeast(margin))
-    val origin = TransformOrigin(if (screenW > 0f) anchorX / screenW else 0.5f, 1f)
-    val rise = with(density) { 4.dp.roundToPx() }
-    AnimatedVisibility(
-        visible = visible,
-        enter = fadeIn(tween(160)) +
-            scaleIn(tween(160), initialScale = 0.95f, transformOrigin = origin) +
-            slideInVertically(tween(160)) { rise },
-        exit = fadeOut(tween(120)) +
-            scaleOut(tween(120), targetScale = 0.95f, transformOrigin = origin) +
-            slideOutVertically(tween(120)) { rise }
-    ) {
-        val caretCenterX = anchorX - menuX
-        val shape = remember(caretCenterX, density) { with(density) { pillMenuShape(caretCenterX) } }
-        Box(Modifier.fillMaxWidth().padding(bottom = 4.dp)) {
-            Box(
-                Modifier
-                    .offset { IntOffset(menuX.toInt(), 0) }
-                    .width(width)
-                    .shadow(16.dp, shape, clip = false)
-                    // Opaque, unlike the web's 0.97 + blur(20px): Compose has
-                    // no backdrop blur, and on a near-black ground even 1.5%
-                    // transmission leaves bright text behind readable through
-                    // the card.
-                    .background(Color(0xFF16161B), shape)
-                    // Stroked by hand rather than with Modifier.border: given a
-                    // generic path, border renders the outline at a fraction of
-                    // the requested alpha (measured 2/255 of lift for 0.10
-                    // white), which erased the hairline the web draws.
-                    .drawBehind {
-                        drawPath(
-                            pillMenuPath(size.width, size.height, caretCenterX),
-                            color = Color.White.copy(alpha = 0.10f),
-                            style = Stroke(1.dp.toPx())
-                        )
-                    }
-                    // Keep content out of the shape's caret band.
-                    .padding(bottom = PILL_MENU_CARET_HEIGHT)
-                    .padding(8.dp)
-            ) {
-                content()
-            }
-        }
-    }
-}
-
 @Composable
 private fun PillNav(
     current: Tab,
@@ -397,8 +240,6 @@ private fun PillNav(
     showWallet: Boolean,
     onWallet: () -> Unit,
     onSelect: (Tab) -> Unit,
-    /** Centre x of the Settings item, in root coordinates. */
-    onSettingsAnchor: (Float) -> Unit = {},
     modifier: Modifier = Modifier
 ) {
     // .pill-nav-inner: rgba(255,255,255,0.06) fill, 0.08 border, radius 2rem,
@@ -439,14 +280,7 @@ private fun PillNav(
                     else Icon(t.icon, contentDescription = t.label, tint = Color.White.copy(alpha = 0.5f), modifier = Modifier.size(20.dp))
                 }
             } else {
-                PillItem(
-                    t.label, t.icon, active = current == t,
-                    // The settings dropdown centres on THIS icon, so its centre
-                    // has to travel out of the pill's own layout.
-                    modifier = if (t == Tab.SETTINGS) {
-                        Modifier.onGloballyPositioned { onSettingsAnchor(it.boundsInRoot().center.x) }
-                    } else Modifier
-                ) { onSelect(t) }
+                PillItem(t.label, t.icon, active = current == t) { onSelect(t) }
             }
         }
     }
@@ -572,57 +406,6 @@ private fun AboutDialog(onDismiss: () -> Unit) {
         )
         Spacer(Modifier.height(16.dp))
         Text("pombo.cc", color = PomboColors.TextDim, fontSize = 13.sp)
-    }
-}
-
-/** Web .pill-settings-dropdown — opens upward from the Settings pill item. */
-@Composable
-private fun SettingsDropdown(
-    /** Null off the Settings tab: the highlight says where you are. */
-    current: SettingsPanel?,
-    syncRow: (@Composable () -> Unit)? = null,
-    onPick: (SettingsPanel) -> Unit
-) {
-    // Card chrome (shape, fill, caret, animation) lives in PillMenuAnchor.
-    Column {
-        SettingsPanel.entries.forEachIndexed { i, panel ->
-            // Web: `<hr class="border-white/[0.06] my-0.5">` between sections.
-            val previous = SettingsPanel.entries.getOrNull(i - 1)
-            if (previous != null && previous.section != panel.section) {
-                Box(
-                    Modifier.fillMaxWidth().padding(vertical = 4.dp).height(1.dp)
-                        .background(Color.White.copy(alpha = 0.06f))
-                )
-            }
-            val active = panel == current
-            Row(
-                Modifier
-                    .fillMaxWidth()
-                    .background(
-                        if (active) Color.White.copy(alpha = 0.08f) else Color.Transparent,
-                        RoundedCornerShape(8.dp)
-                    )
-                    .clickableNoRipple { onPick(panel) }
-                    .padding(horizontal = 12.dp, vertical = 8.dp),
-                verticalAlignment = Alignment.CenterVertically
-            ) {
-                Icon(
-                    panel.icon, contentDescription = null,
-                    tint = Color.White.copy(alpha = 0.40f), modifier = Modifier.size(16.dp)
-                )
-                Spacer(Modifier.width(8.dp))
-                Text(
-                    panel.label,
-                    color = Color.White.copy(alpha = if (active) 0.90f else 0.60f),
-                    fontSize = 13.sp
-                )
-            }
-        }
-        syncRow?.let {
-            Box(Modifier.fillMaxWidth().padding(vertical = 4.dp).height(1.dp)
-                .background(Color.White.copy(alpha = 0.06f)))
-            it()
-        }
     }
 }
 
