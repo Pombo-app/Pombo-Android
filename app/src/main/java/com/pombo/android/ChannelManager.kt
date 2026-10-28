@@ -3465,10 +3465,7 @@ class ChannelManager(
                 val opened = items.optJSONObject(i)?.let {
                     com.pombo.android.core.SealedSenderCrypto.open(it, myPk, me)
                 }
-                out.put(
-                    opened?.let { JSONObject().put("sender", it.first).put("message", it.second) }
-                        ?: JSONObject.NULL
-                )
+                out.put(opened?.let(::sealedResult) ?: JSONObject.NULL)
             }
             out
         }
@@ -3479,10 +3476,14 @@ class ChannelManager(
         val myPk = myPrivateKey() ?: return null
         val me = myAddress() ?: return null
         return withContext(Dispatchers.Default) {
-            com.pombo.android.core.SealedSenderCrypto.open(envelope, myPk, me)
-                ?.let { JSONObject().put("sender", it.first).put("message", it.second) }
+            com.pombo.android.core.SealedSenderCrypto.open(envelope, myPk, me)?.let(::sealedResult)
         }
     }
+
+    /** The seal's own proof named the sender, whatever the payload claimed. */
+    private fun sealedResult(opened: Pair<String, JSONObject>): JSONObject =
+        JSONObject().put("sender", opened.first)
+            .put("message", opened.second.put(ACCOUNT_PROVEN, true))
 
     /**
      * Sealed-sender v2 publish: the envelope is sealed natively (the identity
@@ -3563,7 +3564,7 @@ class ChannelManager(
             // wallet in that era.
             if (envelope.optString("type").isEmpty()) return
             sender = publisherIdRaw?.lowercase()?.ifEmpty { null } ?: return
-            data = envelope
+            data = envelope.apply { remove(ACCOUNT_PROVEN) }
         }
 
         // My own messages are never in my inbox; if one shows up, it is not mine
@@ -4314,7 +4315,7 @@ class ChannelManager(
                     val envelope = entry.opt("content") as? JSONObject ?: continue
                     if (envelope.optString("type").isEmpty()) continue
                     sender = meta.optString("publisherId").lowercase()
-                    plain = envelope
+                    plain = envelope.apply { remove(ACCOUNT_PROVEN) }
                 }
                 // My own messages live in local storage, never in my inbox;
                 // and this timeline shows one peer only.
@@ -4416,9 +4417,14 @@ class ChannelManager(
             ensName = ensStore.cachedName(sender),
             ensAvatar = ensStore.cachedAvatar(sender),
             edited = data.optBoolean("_edited", false),
-            // DMs are authenticated by the ECDH envelope itself: only the two
-            // parties can produce one, so there is no per-message badge.
-            verified = true,
+            // A sealed envelope's proof names the sender; legacy plaintext
+            // payloads carry none and get no badge.
+            verified = if (sender.equals(me, ignoreCase = true) || data.optBoolean(ACCOUNT_PROVEN)) true else null,
+            trustLevel = when {
+                isTrustedContact(sender) -> 2
+                ensStore.cachedName(sender) != null -> 1
+                else -> 0
+            },
             envelopeTs = data.optLong("_timestamp", 0L),
             seq = if (data.has("_seq")) data.optInt("_seq") else null,
             publisherId = data.optStringOrNull("_publisherId")
@@ -6741,7 +6747,7 @@ class ChannelManager(
     private fun stripLocalFields(data: JSONObject): JSONObject {
         val out = JSONObject()
         for (k in data.keys()) {
-            if (k == "verified" || k == "pending" || k == "_dmSent" ||
+            if (k == "verified" || k == ACCOUNT_PROVEN || k == "pending" || k == "_dmSent" ||
                 k == "sender" || k == "account" || k == "signature" || k == "channelId") continue
             out.put(k, data.opt(k))
         }
@@ -7159,14 +7165,17 @@ class ChannelManager(
      * sealed envelope and identity is decided after opening it (port step 4).
      */
     private suspend fun attachAccount(data: JSONObject, publisherId: String?): String? {
+        data.remove(ACCOUNT_PROVEN)
         var account = publisherId?.lowercase()?.ifEmpty { null }
+        var proven = false
         val proof = data.optString("proof").ifEmpty { null }
         if (proof != null && account != null) {
-            recoverProofAccount(account, proof)?.let { account = it }
+            recoverProofAccount(account, proof)?.let { account = it; proven = true }
         }
         if (account != null) {
             data.put("account", account)
             data.put("sender", account)
+            data.put(ACCOUNT_PROVEN, proven)
         }
         return account
     }
@@ -7916,6 +7925,11 @@ class ChannelManager(
          *  signed envelope (web config gate.timestampSkewMs). One-sided: a
          *  payload older than its envelope is a legitimate republish. */
         const val TIMESTAMP_TOLERANCE_MS = 5 * 60_000L
+        /**
+         * Local mark (never from the wire): a proof bound this message's
+         * publisher to its account. The author badge reads only this.
+         */
+        const val ACCOUNT_PROVEN = "_accountProven"
         /** Web isRecentMessage: only messages under 30s old get the replay check. */
         const val RECENT_MESSAGE_MS = 30_000L
 
@@ -7930,9 +7944,6 @@ class ChannelManager(
         const val CHUNK_RECOVERY_DELAY_MS = 8_000L
         const val CHUNK_RECOVERY_WINDOW_MS = 15 * 60 * 1000L
         const val CHUNK_RECOVERY_MAX_ATTEMPTS = 3
-        // Web signature-verification batching (channels.js:2888).
-        const val VERIFY_BATCH_MAX = 50
-        const val VERIFY_BATCH_WINDOW_MS = 100L
         // config.channels.latestMessageFetchLast
         const val LATEST_PREVIEW_FETCH = 10
 

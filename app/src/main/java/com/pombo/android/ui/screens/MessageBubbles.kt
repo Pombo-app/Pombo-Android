@@ -822,30 +822,21 @@ private fun MessageBubble(
                         }
                     }
                     if (showSender) {
-                        // Web getVerificationBadge: ENS → circled green check,
-                        // trusted contact → amber star, plain valid → ✓.
-                        // Web: `trustLevel === 1 || (trustLevel >= 1 && ensName)`
-                        // — i.e. "an ENS name is known". There it always holds,
-                        // because the web stores the name inside `msg.verified`
-                        // at verification time. Ours arrives on two independent
-                        // paths (trustLevel at verification, ensName when the
-                        // lookup returns), and for history the lookup lands
-                        // second, leaving trustLevel 0 next to an .eth name and
-                        // a plain tick. Either signal is enough.
+                        // The ENS name arrives on two independent paths
+                        // (trustLevel at verification, ensName when the lookup
+                        // returns); for history the lookup lands second, so
+                        // either signal is enough.
                         val hasEns = msg.trustLevel == 1 || msg.ensName != null
+                        val badge = when {
+                            msg.verified == false -> com.pombo.android.ui.AuthorBadgeKind.FAILED
+                            msg.verified != true -> null
+                            hasEns -> com.pombo.android.ui.AuthorBadgeKind.ENS
+                            msg.trustLevel == 2 && !msg.mine -> com.pombo.android.ui.AuthorBadgeKind.CONTACT
+                            else -> com.pombo.android.ui.AuthorBadgeKind.VERIFIED
+                        }
                         Row(verticalAlignment = Alignment.CenterVertically) {
-                            if (msg.verified == true) {
-                                when {
-                                    hasEns -> Icon(
-                                        Icons.Filled.CheckCircleOutline, contentDescription = "ENS verified",
-                                        tint = PomboColors.Success, modifier = Modifier.size(14.dp)
-                                    )
-                                    msg.trustLevel == 2 -> Icon(
-                                        Icons.Filled.Star, contentDescription = "Trusted contact",
-                                        tint = Color(0xFFD4A544), modifier = Modifier.size(14.dp)
-                                    )
-                                    else -> Text("✓", color = PomboColors.Success, fontSize = 11.sp, fontWeight = FontWeight.Bold)
-                                }
+                            if (badge != null) {
+                                com.pombo.android.ui.AuthorBadge(badge)
                                 Spacer(Modifier.width(3.dp))
                             }
                             Text(
@@ -1007,6 +998,11 @@ private fun MessageBubble(
                         MessageMeta(msg, onRetry, modifier = Modifier.padding(start = 14.dp, bottom = 1.dp))
                     }
                     }
+                    if (msg.verified == false) Text(
+                        "Could not verify: dated ahead of your clock",
+                        color = PomboColors.Danger, fontSize = 12.sp, lineHeight = 16.sp,
+                        modifier = Modifier.padding(top = 4.dp)
+                    )
                 }
 
                 // Long-press context menu (web #message-context-menu), opened at
@@ -1360,10 +1356,6 @@ private fun MessageMeta(
                 textDecoration = androidx.compose.ui.text.style.TextDecoration.Underline,
                 modifier = Modifier.clickableNoRipple(onRetry)
             )
-        }
-        if (msg.verified == false) {
-            Spacer(Modifier.width(4.dp))
-            Text("❌", fontSize = 12.sp, lineHeight = 16.sp)
         }
     }
 }

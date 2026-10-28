@@ -7,20 +7,18 @@ import org.json.JSONArray
 import org.json.JSONObject
 import org.junit.After
 import org.junit.Assert.assertEquals
-import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
-import org.junit.Assert.assertTrue
 import org.junit.Before
 import org.junit.Test
 
 /**
- * Message verification: the badge under a message and the trust ladder behind
- * it. Two paths meet here — a legacy signature recovered in a batch, and the
- * current format where identity was already settled at ingest — and the replay
- * guard runs on both.
+ * Message verification: the author badge under a message and the trust ladder
+ * behind it. The badge is anti-spoofing: only a publisher proof that recovered
+ * at ingest vouches for the author.
  *
- * `verified` has three states and they are not interchangeable: true (checked),
- * false (checked and wrong, a red flag) and null (nothing to check, no badge).
+ * `verified` has three states and they are not interchangeable: true (proven),
+ * false (a fresh message failed the clock check, a red flag) and null (nothing
+ * proven, no badge).
  */
 class MessageVerificationTest {
 
@@ -29,6 +27,7 @@ class MessageVerificationTest {
     private val room = ChannelManagerHarness.channel(streamId)
     private val peer = "0xpeer"
     private val trusted = "0xtrusted"
+    private val ephemeral = "0xephemeral"
 
     private val h = ChannelManagerHarness(channels = listOf(room), trustedContacts = setOf(trusted))
     private val manager = h.manager
@@ -36,84 +35,54 @@ class MessageVerificationTest {
     @Before fun setUp() = manager.openChannel(streamId)
     @After fun tearDown() = h.stop()
 
-    /** The batch answer the bridge would give for a set of recovered addresses. */
-    private fun recovers(vararg addresses: String) {
-        coEvery { h.bridge.call(eq("verifyCanonicalBatch"), any(), any()) } returns
-            JSONObject().put("addresses", JSONArray(addresses.toList()))
-    }
-
-    private fun bridgeFails() {
-        coEvery { h.bridge.call(eq("verifyCanonicalBatch"), any(), any()) } throws
-            IllegalStateException("bridge is down")
+    /** The account the bridge recovers from any proof. */
+    private fun proofRecovers(account: String) {
+        coEvery { h.bridge.call(eq("recoverPublisherProofBatch"), any(), any()) } returns
+            JSONObject().put("accounts", JSONArray(listOf(account)))
     }
 
     private fun text(
         id: String = "m1",
-        sender: String = peer,
-        signature: String? = "0xsig",
+        proof: String? = "0xproof",
+        signature: String? = null,
         timestamp: Long = System.currentTimeMillis(),
-        from: String? = peer
+        from: String = ephemeral,
+        extra: JSONObject.() -> Unit = {}
     ) {
         val content = JSONObject().put("type", "text").put("id", id)
-            .put("text", "hello").put("sender", sender).put("timestamp", timestamp)
-        signature?.let { content.put("signature", it) }
-        h.deliver(streamId, StreamConstants.P_MESSAGES, content, from ?: "")
+            .put("text", "hello").put("timestamp", timestamp)
+        proof?.let { content.put("proof", it) }
+        signature?.let { content.put("signature", it).put("sender", from) }
+        content.extra()
+        h.deliver(streamId, StreamConstants.P_MESSAGES, content, from)
     }
-
-    /** The batch waits VERIFY_BATCH_WINDOW_MS before it flushes. */
-    private fun afterFlush() = Thread.sleep(ChannelManager.VERIFY_BATCH_WINDOW_MS + 400)
 
     private fun msg(id: String = "m1") = manager.messages.value.find { it.id == id }
 
     @Test
-    fun `a signature that recovers to the sender verifies the message`() {
-        recovers(peer)
+    fun `a proof that recovers vouches for the account`() {
+        proofRecovers(peer)
         text()
-        afterFlush()
+        assertEquals(peer, msg()!!.sender)
         assertEquals(true, msg()!!.verified)
     }
 
     @Test
-    fun `a signature that recovers to someone else does not verify`() {
-        recovers("0xsomeoneelse")
-        text()
-        afterFlush()
-        assertEquals(false, msg()!!.verified)
+    fun `no proof means no badge, not a red flag`() {
+        text(proof = null)
+        assertNull(msg()!!.verified)
     }
 
     @Test
-    fun `a signature that recovers to nothing does not verify`() {
-        recovers("")
-        text()
-        afterFlush()
-        assertEquals(false, msg()!!.verified)
+    fun `a proven mark shipped on the wire is ignored`() {
+        text(proof = null) { put(ChannelManager.ACCOUNT_PROVEN, true) }
+        assertNull(msg()!!.verified)
     }
 
-    /** A bridge that is down must fail the batch closed, not leave it unbadged. */
+    /** Legacy signed messages are attributed to their address, never badged. */
     @Test
-    fun `a bridge failure marks the whole batch unverified`() {
-        bridgeFails()
-        text(id = "m1")
-        text(id = "m2")
-        afterFlush()
-        assertEquals(false, msg("m1")!!.verified)
-        assertEquals(false, msg("m2")!!.verified)
-    }
-
-    /**
-     * Current format (D6): no app-layer signature. Identity was settled at
-     * ingest by the publisher proof, so the account is authority enough.
-     */
-    @Test
-    fun `an unsigned message is verified from its account`() {
-        text(signature = null)
-        assertEquals(true, msg()!!.verified)
-    }
-
-    /** No account at all is "nothing to check", not "check failed". */
-    @Test
-    fun `an unsigned message with no account gets no badge`() {
-        text(signature = null, from = "")
+    fun `a legacy signed message gets no badge`() {
+        text(proof = null, signature = "0xsig", from = peer)
         assertNull(msg()!!.verified)
     }
 
@@ -121,64 +90,43 @@ class MessageVerificationTest {
      *  drops it before verification could even badge it. */
     @Test
     fun `a fresh message with a wildly wrong timestamp is refused`() {
-        recovers(peer)
+        proofRecovers(peer)
         text(timestamp = System.currentTimeMillis() + ChannelManager.TIMESTAMP_TOLERANCE_MS * 2)
         assertNull(msg())
     }
 
     /**
-     * And it applies only to fresh ones: a resend routinely delivers old
-     * messages, and failing those for being old is the bug the age check
-     * exists to avoid.
+     * The clock check applies only to fresh messages: a resend routinely
+     * delivers old ones, and failing those for being old is the bug the age
+     * check exists to avoid.
      */
     @Test
     fun `an old message is not refused for being old`() {
-        recovers(peer)
+        proofRecovers(peer)
         text(timestamp = System.currentTimeMillis() - 60 * 60_000)
-        afterFlush()
         assertEquals(true, msg()!!.verified)
     }
 
     @Test
-    fun `a verified sender who is a trusted contact gets the top trust level`() {
-        recovers(trusted)
-        text(sender = trusted, from = trusted)
-        afterFlush()
+    fun `a proven sender who is a trusted contact gets the top trust level`() {
+        proofRecovers(trusted)
+        text()
         assertEquals(2, msg()!!.trustLevel)
     }
 
     @Test
-    fun `a verified sender with an ENS name gets the middle trust level`() {
+    fun `a proven sender with an ENS name gets the middle trust level`() {
         every { h.ensStore.cachedName(peer) } returns "peer.eth"
         coEvery { h.ensStore.name(any(), any()) } returns "peer.eth"
-        recovers(peer)
+        proofRecovers(peer)
         text()
-        afterFlush()
         assertEquals(1, msg()!!.trustLevel)
     }
 
     @Test
-    fun `a verified sender who is neither stays at the base trust level`() {
-        recovers(peer)
+    fun `a proven sender who is neither stays at the base trust level`() {
+        proofRecovers(peer)
         text()
-        afterFlush()
-        assertEquals(0, msg()!!.trustLevel)
-    }
-
-    /**
-     * A failed signature grants no trust level of its own. It does NOT bar one:
-     * [ChannelManager.resolveEnsFor] raises every message from a sender whose
-     * ENS resolves, on purpose and independently of the signature — the badge
-     * says "this name is real", not "this message is verified", and the two
-     * are shown separately.
-     */
-    @Test
-    fun `a failed signature grants no trust level of its own`() {
-        recovers("0xsomeoneelse")
-        text()
-        afterFlush()
-        assertFalse(msg()!!.verified!!)
         assertEquals(0, msg()!!.trustLevel)
     }
 }
-
