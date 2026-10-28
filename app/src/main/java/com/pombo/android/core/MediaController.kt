@@ -873,6 +873,9 @@ class MediaController(
      * something it just finished, so the swarm would lose a seeder every time
      * somebody saved — the opposite of what should happen.
      */
+    /** The complete file on disk, for playing it in place; null until every piece is here. */
+    fun localFile(fileId: String): java.io.File? = seeding[fileId]?.store?.completeFile()
+
     fun exportTo(fileId: String, sink: java.io.OutputStream): Boolean = try {
         val store = seeding[fileId]?.store
         if (store == null) false else { store.exportTo(sink); true }

@@ -1993,6 +1993,9 @@ class AppViewModel(app: Application) : AndroidViewModel(app), PomboBridge.Listen
 
     /** Whether a storage download has landed on disk, ready to save. */
     fun storageFileReady(transferId: String) = manager.storageCompletedFile(transferId) != null
+    fun storageCompletedFile(transferId: String) = manager.storageCompletedFile(transferId)
+    fun storageOriginal(transferId: String) = manager.storageOriginal(transferId)
+    fun localMeshFile(fileId: String) = manager.media.localFile(fileId)
 
     // Auto-save bookkeeping: which completed transfers already had saveFile/
     // saveStorageFile run for them, so a bubble doesn't re-trigger the
@@ -3818,6 +3821,7 @@ class AppViewModel(app: Application) : AndroidViewModel(app), PomboBridge.Listen
                 override val fileName = fName
                 override val fileType = fMime
                 override val size = fSize
+                override val original = uri
                 override fun openStream() = resolver.openInputStream(uri)
                     ?: throw java.io.IOException("cannot open the selected file")
                 override fun openSlicer(): com.pombo.android.core.StorageMedia.Source.Slicer {

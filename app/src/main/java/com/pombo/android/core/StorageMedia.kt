@@ -104,6 +104,8 @@ class StorageMedia(
         fun openStream(): InputStream
         /** Random-access reader (non-compressed path). */
         fun openSlicer(): Slicer
+        /** The picked file itself, which the sender plays instead of downloading. */
+        val original: android.net.Uri? get() = null
         interface Slicer : Closeable {
             fun readAt(offset: Long, length: Int): ByteArray
         }

@@ -170,6 +170,9 @@ dependencies {
     implementation("io.coil-kt:coil-gif:2.7.0")
     // Wallet address QR (Project Nayuki QR Code generator, MIT licence).
     implementation("io.nayuki:qrcodegen:1.8.0")
+    // Inline video player for shared videos (the web uses <video>).
+    implementation("androidx.media3:media3-exoplayer:1.4.1")
+    implementation("androidx.media3:media3-ui:1.4.1")
 
     implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.9.0")
 

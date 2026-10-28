@@ -7463,6 +7463,8 @@ class ChannelManager(
     fun storageCompletedFile(transferId: String): java.io.File? =
         files.storageCompletedFile(transferId)
 
+    fun storageOriginal(transferId: String): android.net.Uri? = files.storageOriginal(transferId)
+
     fun cancelTransfer(fileId: String) = files.cancelTransfer(fileId)
 
     fun pauseTransfer(fileId: String) = files.pauseTransfer(fileId)

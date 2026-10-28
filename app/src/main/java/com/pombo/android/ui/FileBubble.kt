@@ -48,6 +48,8 @@ interface FileTransfers {
     fun isSaved(fileId: String): Boolean
     fun onDownload(messageId: String)
     fun onSave(fileId: String, fileName: String)
+    /** The complete file on this device, or null. */
+    fun localFile(fileId: String): java.io.File?
 }
 
 val LocalFileTransfers = staticCompositionLocalOf<FileTransfers?> { null }
@@ -62,6 +64,12 @@ interface StorageTransfers {
     fun isSaved(transferId: String): Boolean
     fun onDownload(messageId: String)
     fun onSave(transferId: String, fileName: String)
+    /** The downloaded file on this device, or null. */
+    fun completedFile(transferId: String): java.io.File?
+    /** The file this session sent, or null. */
+    fun original(transferId: String): android.net.Uri?
+    /** The open channel is a DM: our own uploads live in the peer's inbox, which we cannot read. */
+    val inDm: Boolean
 }
 
 val LocalStorageTransfers = staticCompositionLocalOf<StorageTransfers?> { null }
@@ -175,11 +183,33 @@ fun FileBubbleContent(
     // that would drop unrequested copies into the sender's Downloads. The web
     // has the same boundary for free — its auto-save runs in onFileComplete.
     val downloadDone = progress?.done == true && progress.downloaded
+    val isVideo = file.fileType.startsWith("video/")
     LaunchedEffect(downloadDone, saved) {
-        if (downloadDone && !saved) transfers?.onSave(file.fileId, file.fileName)
+        if (downloadDone && !saved && !isVideo) transfers?.onSave(file.fileId, file.fileName)
     }
 
     val totalSize = formatBytes(file.fileSize)
+    if (isVideo) {
+        val source = if (localFile) transfers?.localFile(file.fileId)?.let(android.net.Uri::fromFile) else null
+        VideoTile(
+            id = file.fileId,
+            fileName = file.fileName,
+            size = totalSize,
+            source = source,
+            downloading = downloading,
+            progress = pct,
+            status = when {
+                progress?.failure != null -> progress.failure
+                downloading && progress != null -> "${formatBytes(progress.received)} of $totalSize"
+                source == null && !canDownload -> "Not on this device"
+                source != null && mine && transfers?.isSeeding(file.fileId) == true -> "Sharing"
+                else -> ""
+            },
+            onDownload = if (canDownload && source == null && !downloading) ({ transfers?.onDownload(messageId) }) else null,
+            onSave = if (source != null) ({ transfers?.onSave(file.fileId, file.fileName) }) else null
+        )
+        return
+    }
     val detail = when {
         downloading && progress != null -> {
             val speed = formatSpeed(progress.bytesPerSecond)
@@ -268,9 +298,12 @@ fun StorageFileBubbleContent(
     val ready = completed
     val totalSize = formatBytes(file.originalSize)
 
+    val isVideo = file.fileType?.startsWith("video/") == true
+    val unreachable = mine && !ready && !uploading && transfers?.inDm == true
+
     // Saving is automatic once the bytes are here.
     LaunchedEffect(ready, saved) {
-        if (ready && !saved) transfers?.onSave(file.transferId, file.fileName)
+        if (ready && !saved && !isVideo) transfers?.onSave(file.transferId, file.fileName)
     }
 
     // Two-line stats (mirror formatStorageUpload/DownloadDetail).
@@ -285,6 +318,7 @@ fun StorageFileBubbleContent(
             val transferred = if (dl.total > 0) formatBytes(dl.received.toLong() * dl.fileSize / dl.total) else "0 B"
             "Paused · ${dl.percent}% · $transferred of ${formatBytes(dl.fileSize)}" to ""
         }
+        unreachable -> "$totalSize · not on this device" to ""
         else -> totalSize to ""
     }
     val isError = upErr != null || dlErr != null
@@ -306,6 +340,27 @@ fun StorageFileBubbleContent(
     }
 
     val incomplete = file.storedChunks != null && file.totalChunks != null && file.storedChunks < file.totalChunks
+
+    if (isVideo) {
+        val completedFile = if (ready) transfers?.completedFile(file.transferId) else null
+        val source = completedFile?.let(android.net.Uri::fromFile) ?: transfers?.original(file.transferId)
+        VideoTile(
+            id = file.transferId,
+            fileName = file.fileName,
+            size = totalSize,
+            source = source,
+            downloading = active,
+            progress = pct,
+            status = when {
+                active || isError -> line1
+                source == null && unreachable -> "Not on this device"
+                else -> ""
+            },
+            onDownload = if (source == null && !active && !unreachable) ({ transfers?.onDownload(messageId) }) else null,
+            onSave = if (completedFile != null) ({ transfers?.onSave(file.transferId, file.fileName) }) else null
+        )
+        return
+    }
 
     Column(Modifier.width(CARD_WIDTH).clip(CARD_SHAPE).background(CARD_BG)) {
         Row(

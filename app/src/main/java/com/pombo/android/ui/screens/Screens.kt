@@ -174,6 +174,7 @@ fun PomboApp(vm: AppViewModel) {
     val current by vm.current.collectAsState()
     val mnemonic by vm.newMnemonic.collectAsState()
     val error by vm.lastError.collectAsState()
+    val videoFullscreen = remember { mutableStateOf<android.net.Uri?>(null) }
 
     Box(
         Modifier
@@ -196,12 +197,14 @@ fun PomboApp(vm: AppViewModel) {
                 override fun isSaved(fileId: String) = savedFileIds.contains(fileId)
                 override fun onDownload(messageId: String) = vm.downloadFile(messageId)
                 override fun onSave(fileId: String, fileName: String) = vm.saveFile(fileId, fileName)
+                override fun localFile(fileId: String) = vm.localMeshFile(fileId)
             }
         }
         val storageUploads by vm.storageUploads.collectAsState()
         val storageDownloads by vm.storageDownloads.collectAsState()
         val savedTransferIds by vm.savedTransferIds.collectAsState()
-        val storageTransfers = remember(storageUploads, storageDownloads, savedTransferIds) {
+        val inDm = current?.type == "dm"
+        val storageTransfers = remember(storageUploads, storageDownloads, savedTransferIds, inDm) {
             object : com.pombo.android.ui.StorageTransfers {
                 override fun uploadFor(transferId: String) = storageUploads[transferId]
                 override fun downloadFor(transferId: String) = storageDownloads[transferId]
@@ -209,12 +212,16 @@ fun PomboApp(vm: AppViewModel) {
                 override fun isSaved(transferId: String) = savedTransferIds.contains(transferId)
                 override fun onDownload(messageId: String) = vm.downloadStorageFile(messageId)
                 override fun onSave(transferId: String, fileName: String) = vm.saveStorageFile(transferId, fileName)
+                override fun completedFile(transferId: String) = vm.storageCompletedFile(transferId)
+                override fun original(transferId: String) = vm.storageOriginal(transferId)
+                override val inDm = inDm
             }
         }
         androidx.compose.runtime.CompositionLocalProvider(
             com.pombo.android.ui.LocalYouTubeEmbedsEnabled provides ytEmbeds,
             com.pombo.android.ui.LocalFileTransfers provides fileTransfers,
-            com.pombo.android.ui.LocalStorageTransfers provides storageTransfers
+            com.pombo.android.ui.LocalStorageTransfers provides storageTransfers,
+            com.pombo.android.ui.LocalVideoFullscreen provides videoFullscreen
         ) {
             val offline by vm.offline.collectAsState()
             Column(Modifier.fillMaxSize()) {
@@ -228,6 +235,7 @@ fun PomboApp(vm: AppViewModel) {
                 }
             }
         }
+        com.pombo.android.ui.VideoFullscreenHost(videoFullscreen)
 
         // Errors surface as toasts, like the web — the banner stays only as a
         // fallback for anything that still sets lastError directly.
