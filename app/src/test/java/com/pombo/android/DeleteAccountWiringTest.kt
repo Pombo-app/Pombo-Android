@@ -8,8 +8,9 @@ import org.junit.Test
  * Source guard: AppViewModel cannot be instantiated in a JVM test.
  *
  * Every store is cleared while the scope still points at the deleted account,
- * and only then does disconnect() move the scope to the account that remains;
- * the other way round erases the remaining account's data. A guest session
+ * and only then does disconnect() drop it, leaving no account current: the
+ * remaining ones are listed by the guest session and entered through the
+ * credential-gated switch. A guest session
  * keeps the last real account stored as current, so neither deleting nor
  * exporting the key may run there.
  */
@@ -58,6 +59,20 @@ class DeleteAccountWiringTest {
         assertTrue("disconnect no longer re-scopes the stores", scope >= 0)
         assertTrue("the scope must move after store.clear()", drop in 0 until scope)
         assertTrue("the scope must move before reconnecting", scope < reconnect)
+    }
+
+    @Test
+    fun `deleting leaves no account current, so the next one is entered through the switch`() {
+        val wallet = File("src/main/java/com/pombo/android/identity/WalletStore.kt").readText()
+        val clear = body(wallet, "fun clear()")
+        assertTrue("clear() no longer drops the current account", clear.contains("remove(KEY_CURRENT)"))
+        assertTrue("clear() makes another account current", !clear.contains("putString(KEY_CURRENT"))
+        val disconnect = body(vm, "fun disconnect()")
+        val rearm = disconnect.indexOf("guestStarted = false")
+        assertTrue(
+            "disconnect must re-arm the guest start before reconnecting, or the remaining accounts are never listed",
+            rearm in 0 until disconnect.indexOf("bridge.reconnect()")
+        )
     }
 
     @Test

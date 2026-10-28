@@ -2406,7 +2406,10 @@ class AppViewModel(app: Application) : AndroidViewModel(app), PomboBridge.Listen
         _username.value = store.username
         _hasWallet.value = store.hasWallet
         bridge.privateKey = store.privateKey ?: ""
-        _status.value = if (store.hasWallet) NetStatus.CONNECTING else NetStatus.NO_IDENTITY
+        _status.value = NetStatus.NO_IDENTITY
+        // The guest session is what lists the remaining accounts, so the bridge's
+        // no-identity must start one even if this process already had a guest.
+        guestStarted = false
         bridge.reconnect()
     }
 

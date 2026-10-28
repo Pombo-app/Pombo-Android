@@ -96,15 +96,14 @@ class WalletStore(context: Context) {
         return true
     }
 
-    /** Removes the current account; switches to another if present, else clears. */
+    /**
+     * Removes the current account and leaves none current: making another one
+     * current here would open it without the device credential a switch asks for.
+     */
     fun clear() {
         val cur = address
-        val remaining = readAccounts().filterNot { it.address.equals(cur, ignoreCase = true) }
-        writeAccounts(remaining)
-        prefs.edit().apply {
-            if (remaining.isNotEmpty()) putString(KEY_CURRENT, remaining.first().address)
-            else remove(KEY_CURRENT)
-        }.apply()
+        writeAccounts(readAccounts().filterNot { it.address.equals(cur, ignoreCase = true) })
+        prefs.edit().remove(KEY_CURRENT).apply()
     }
 
     // Username is scoped per address.
