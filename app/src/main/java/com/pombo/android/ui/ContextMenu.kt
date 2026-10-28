@@ -139,7 +139,7 @@ private fun PomboMenuSurface(content: @Composable ColumnScope.() -> Unit) {
             // A Popup hands its content the whole window as the max width, so
             // items that fillMaxWidth would stretch the menu edge to edge.
             .width(IntrinsicSize.Max)
-            .widthIn(min = 180.dp)
+            .widthIn(min = 200.dp)
             .shadow(16.dp, RoundedCornerShape(12.dp))
             .background(PomboColors.SurfaceRaised, RoundedCornerShape(12.dp))
             .border(1.dp, PomboColors.Overlay10, RoundedCornerShape(12.dp))
@@ -148,7 +148,7 @@ private fun PomboMenuSurface(content: @Composable ColumnScope.() -> Unit) {
     )
 }
 
-/** `.context-menu-item`: px-4 py-2, text-sm, 16px icon, gap-2. */
+/** `.context-menu-item` on touch: 40dp row, 15sp label, 18dp icon, gap 12. */
 @Composable
 fun ContextMenuItem(
     label: String,
@@ -163,12 +163,12 @@ fun ContextMenuItem(
         Modifier
             .fillMaxWidth()
             .clickableNoRipple(onClick)
-            .padding(horizontal = 16.dp, vertical = 8.dp),
+            .padding(horizontal = 16.dp, vertical = 10.dp),
         verticalAlignment = Alignment.CenterVertically,
-        horizontalArrangement = Arrangement.spacedBy(8.dp)
+        horizontalArrangement = Arrangement.spacedBy(12.dp)
     ) {
-        Icon(icon, contentDescription = null, tint = iconTint, modifier = Modifier.size(16.dp))
-        Text(label, color = labelColor, fontSize = 14.sp)
+        Icon(icon, contentDescription = null, tint = iconTint, modifier = Modifier.size(18.dp))
+        Text(label, color = labelColor, fontSize = 15.sp, lineHeight = 20.sp)
     }
 }
 

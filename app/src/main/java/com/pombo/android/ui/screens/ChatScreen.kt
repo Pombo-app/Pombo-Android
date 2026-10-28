@@ -553,7 +553,7 @@ fun ChatScreen(vm: AppViewModel) {
                     shape = RoundedCornerShape(12.dp),
                     containerColor = PomboColors.SurfaceRaised,
                     border = androidx.compose.foundation.BorderStroke(1.dp, PomboColors.Overlay10),
-                    modifier = Modifier.widthIn(min = 180.dp)
+                    modifier = Modifier.widthIn(min = 200.dp)
                 ) {
                     val headerClipboard = androidx.compose.ui.platform.LocalClipboardManager.current
                     com.pombo.android.ui.ContextMenuItem(
