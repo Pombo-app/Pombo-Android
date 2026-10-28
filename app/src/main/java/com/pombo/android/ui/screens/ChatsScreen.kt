@@ -100,7 +100,7 @@ private fun mergeOrder(global: List<String>, slice: List<String>): List<String> 
 }
 
 @Composable
-internal fun ChatsTab(vm: AppViewModel, onContacts: () -> Unit, onConnect: () -> Unit = {}) {
+internal fun ChatsTab(vm: AppViewModel, onContacts: () -> Unit, onConnect: () -> Unit = {}, onExplore: () -> Unit = {}) {
     val status by vm.status.collectAsState()
     val channels by vm.channels.collectAsState()
     val busy by vm.busy.collectAsState()
@@ -255,12 +255,20 @@ internal fun ChatsTab(vm: AppViewModel, onContacts: () -> Unit, onConnect: () ->
         }
 
         if (filtered.isEmpty()) {
-            Box(Modifier.weight(1f).fillMaxWidth(), contentAlignment = Alignment.Center) {
+            Column(
+                Modifier.weight(1f).fillMaxWidth(),
+                horizontalAlignment = Alignment.CenterHorizontally,
+                verticalArrangement = Arrangement.Center
+            ) {
                 Text(
                     if (busy) "…" else "No channels yet",
                     color = PomboColors.TextSecondary, fontSize = 14.sp,
                     textAlign = androidx.compose.ui.text.style.TextAlign.Center
                 )
+                if (!busy && filter == ChannelFilter.ALL) {
+                    Spacer(Modifier.height(12.dp))
+                    EmptyStateButton("Explore channels", onExplore)
+                }
             }
         } else {
             // Swipe left/right anywhere on the list to move between the filter

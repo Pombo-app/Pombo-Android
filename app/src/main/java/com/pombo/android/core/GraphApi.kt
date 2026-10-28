@@ -145,8 +145,9 @@ object GraphApi {
      * subgraph narrows with two backslash-free substrings and the loop below
      * applies the exact a/e checks. Hidden channels never carry "visible"
      * anywhere (n/d/l/c are omitted when hidden).
+     * Null when The Graph could not be read, which is not an empty directory.
      */
-    suspend fun getPublicPomboChannels(first: Int = 50, skip: Int = 0): List<ChannelInfo> {
+    suspend fun getPublicPomboChannels(first: Int = 50, skip: Int = 0): List<ChannelInfo>? {
         val gql = """
             query GetPublicPomboChannels {
                 streams(
@@ -162,7 +163,8 @@ object GraphApi {
                 ) { id metadata createdAt updatedAt }
             }
         """.trimIndent()
-        val streams = query("pombo_public:$first:$skip", gql)?.optJSONArray("streams") ?: return emptyList()
+        val data = query("pombo_public:$first:$skip", gql) ?: return null
+        val streams = data.optJSONArray("streams") ?: return emptyList()
         val out = mutableListOf<ChannelInfo>()
         for (i in 0 until streams.length()) {
             val s = streams.optJSONObject(i) ?: continue

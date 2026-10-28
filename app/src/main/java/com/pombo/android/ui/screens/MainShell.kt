@@ -172,7 +172,12 @@ fun MainShell(vm: AppViewModel) {
                 .padding(bottom = if (tab == Tab.EXPLORE) 0.dp else PILL_NAV_BOTTOM_OFFSET + PILL_NAV_HEIGHT)
         ) {
             when (tab) {
-                Tab.CHATS -> ChatsTab(vm, onContacts = { tab = Tab.CONTACTS }, onConnect = { showConnect = true })
+                Tab.CHATS -> ChatsTab(
+                    vm,
+                    onContacts = { tab = Tab.CONTACTS },
+                    onConnect = { showConnect = true },
+                    onExplore = { tab = Tab.EXPLORE }
+                )
                 Tab.EXPLORE -> ExploreTab(
                     vm, onCreate = { showCreate = true }, onJoin = { showJoin = true },
                     onConnect = { showConnect = true }

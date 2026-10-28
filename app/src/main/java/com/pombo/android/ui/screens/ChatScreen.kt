@@ -721,6 +721,12 @@ fun ChatScreen(vm: AppViewModel) {
         }
 
         Box(Modifier.weight(1f).fillMaxWidth()) {
+            var reopens by remember(ch.messageStreamId) { mutableStateOf(0) }
+            var loadingSlow by remember(ch.messageStreamId, reopens) { mutableStateOf(false) }
+            LaunchedEffect(ch.messageStreamId, reopens) {
+                kotlinx.coroutines.delay(LOADING_SLOW_MS)
+                loadingSlow = true
+            }
             // Web renderMessages: while any loading signal is still live the
             // area shows a centred spinner; only once everything is quiescent
             // and still empty does it say "No messages yet".
@@ -824,11 +830,26 @@ fun ChatScreen(vm: AppViewModel) {
                             textAlign = androidx.compose.ui.text.style.TextAlign.Center,
                             modifier = Modifier.padding(horizontal = 32.dp)
                         )
+                    } else if (terminalEmpty && ch.type == "dm" && !isPreview) {
+                        Text("No messages yet", color = PomboColors.Overlay40, fontSize = 14.sp)
+                        Spacer(Modifier.height(12.dp))
+                        EmptyStateButton("Say hello") {
+                            composerInput.setTextAndPlaceCursorAtEnd("Hello 👋")
+                        }
                     } else if (terminalEmpty) {
                         Text(
                             "No messages yet. Start the conversation!",
                             color = PomboColors.Overlay40, fontSize = 14.sp
                         )
+                    } else if (loadingSlow) {
+                        Text("Taking longer than usual", color = PomboColors.Overlay40, fontSize = 14.sp)
+                        if (!isPreview) {
+                            Spacer(Modifier.height(12.dp))
+                            EmptyStateButton("Try again") {
+                                reopens++
+                                vm.reopenCurrent()
+                            }
+                        }
                     } else {
                         CircularProgressIndicator(
                             modifier = Modifier.size(24.dp),
@@ -1608,6 +1629,19 @@ private fun ChatComposer(
  * side, kept square so Modifier.size() does not distort it.
  */
 private const val PLANE_VIEW = 19.816f
+private const val LOADING_SLOW_MS = 30_000L
+
+/** The one action an empty or failed state offers (web: the same bordered button). */
+@Composable
+internal fun EmptyStateButton(label: String, onClick: () -> Unit) {
+    Box(
+        Modifier
+            .background(PomboColors.Overlay5, RoundedCornerShape(12.dp))
+            .border(1.dp, PomboColors.Overlay8, RoundedCornerShape(12.dp))
+            .clickableNoRipple(onClick)
+            .padding(horizontal = 16.dp, vertical = 8.dp)
+    ) { Text(label, color = PomboColors.Overlay70, fontSize = 14.sp) }
+}
 
 private val SendPlaneIcon: androidx.compose.ui.graphics.vector.ImageVector by lazy {
     androidx.compose.ui.graphics.vector.ImageVector.Builder(

@@ -2196,6 +2196,8 @@ class AppViewModel(app: Application) : AndroidViewModel(app), PomboBridge.Listen
     val explore: StateFlow<List<ExploreChannel>> = _explore.asStateFlow()
     private val _exploreLoading = MutableStateFlow(false)
     val exploreLoading: StateFlow<Boolean> = _exploreLoading.asStateFlow()
+    private val _exploreDirectoryFailed = MutableStateFlow(false)
+    val exploreDirectoryFailed: StateFlow<Boolean> = _exploreDirectoryFailed.asStateFlow()
 
     // ==================== identity ====================
 
@@ -3206,7 +3208,9 @@ class AppViewModel(app: Application) : AndroidViewModel(app), PomboBridge.Listen
                 val (pinned, hidden) = loadCurationManifest()
 
                 // 1. Public Pombo channels indexed by The Graph.
-                val discovered = com.pombo.android.core.GraphApi.getPublicPomboChannels()
+                val fetched = com.pombo.android.core.GraphApi.getPublicPomboChannels()
+                _exploreDirectoryFailed.value = fetched == null
+                val discovered = (fetched ?: emptyList())
                     .associateBy { it.streamId.lowercase() }
                     .toMutableMap()
 
@@ -3663,6 +3667,8 @@ class AppViewModel(app: Application) : AndroidViewModel(app), PomboBridge.Listen
         manager.openChannel(messageStreamId)
     }
     fun closeChannel() = manager.closeCurrent()
+    /** Open the current channel again from scratch, as leaving and coming back would. */
+    fun reopenCurrent() { current.value?.let { manager.openChannel(it.messageStreamId) } }
     fun removeChannel(messageStreamId: String) {
         val name = channels.value.find { it.messageStreamId == messageStreamId }?.name
         manager.removeChannel(messageStreamId)

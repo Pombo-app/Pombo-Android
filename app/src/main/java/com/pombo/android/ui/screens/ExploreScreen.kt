@@ -69,6 +69,7 @@ import com.pombo.android.ui.theme.PomboColors
 internal fun ExploreTab(vm: AppViewModel, onCreate: () -> Unit, onJoin: () -> Unit, onConnect: () -> Unit) {
     val items by vm.explore.collectAsState()
     val loading by vm.exploreLoading.collectAsState()
+    val directoryFailed by vm.exploreDirectoryFailed.collectAsState()
     val status by vm.status.collectAsState()
     // Preview sender labels resolve ENS at render (the name lands after the fetch).
     val ensNames by vm.ensNames.collectAsState()
@@ -302,6 +303,24 @@ internal fun ExploreTab(vm: AppViewModel, onCreate: () -> Unit, onJoin: () -> Un
         Spacer(Modifier.height(12.dp))
         } // end header item (label, search, access filters, category chips)
 
+        if (directoryFailed && shownExplore.isNotEmpty()) item {
+            Row(
+                Modifier
+                    .fillMaxWidth()
+                    .padding(bottom = 8.dp)
+                    .background(PomboColors.Overlay3, RoundedCornerShape(12.dp))
+                    .border(1.dp, PomboColors.Overlay6, RoundedCornerShape(12.dp))
+                    .padding(horizontal = 12.dp, vertical = 8.dp),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Text(
+                    "Couldn't reach the channel directory",
+                    color = PomboColors.Overlay50, fontSize = 12.sp,
+                    modifier = Modifier.weight(1f)
+                )
+                EmptyStateButton("Try again") { vm.loadExplore() }
+            }
+        }
         when {
             // Web: spinner + "Loading channels..." while the list is empty.
             loading && items.isEmpty() -> item {
@@ -317,9 +336,36 @@ internal fun ExploreTab(vm: AppViewModel, onCreate: () -> Unit, onJoin: () -> Un
                     Text("Loading channels...", color = PomboColors.Overlay40, fontSize = 14.sp)
                 }
             }
+            directoryFailed && shownExplore.isEmpty() -> item {
+                Column(
+                    Modifier.fillMaxWidth().padding(vertical = 48.dp),
+                    horizontalAlignment = Alignment.CenterHorizontally
+                ) {
+                    Text("Failed to load channels", color = PomboColors.Overlay40, fontSize = 14.sp)
+                    Spacer(Modifier.height(4.dp))
+                    Text("Couldn't reach the channel directory", color = PomboColors.Overlay30, fontSize = 12.sp)
+                    Spacer(Modifier.height(12.dp))
+                    EmptyStateButton("Try again") { vm.loadExplore() }
+                }
+            }
             shownExplore.isEmpty() -> item {
-                Box(Modifier.fillMaxWidth().padding(vertical = 48.dp), contentAlignment = Alignment.Center) {
+                val narrowed = query.isNotBlank() || category != "All" || language.isNotEmpty() ||
+                    privateOnly || accessFilter != "open"
+                Column(
+                    Modifier.fillMaxWidth().padding(vertical = 48.dp),
+                    horizontalAlignment = Alignment.CenterHorizontally
+                ) {
                     Text("No channels found", color = PomboColors.Overlay40, fontSize = 14.sp)
+                    if (narrowed) {
+                        Spacer(Modifier.height(12.dp))
+                        EmptyStateButton("Clear filters") {
+                            query = ""
+                            category = "All"
+                            language = ""
+                            privateOnly = false
+                            accessFilter = "open"
+                        }
+                    }
                 }
             }
             else -> items(shownExplore, key = { it.messageStreamId }) { ch ->
