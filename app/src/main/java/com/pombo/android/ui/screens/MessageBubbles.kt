@@ -31,7 +31,6 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.Send
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.outlined.SentimentSatisfied
-import androidx.compose.material.icons.filled.PushPin
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Edit
 import androidx.compose.material.icons.filled.CheckCircleOutline
@@ -61,16 +60,6 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.text.font.FontWeight
-import androidx.compose.material.icons.filled.VisibilityOff
-import androidx.compose.material.icons.outlined.ContentCopy
-import androidx.compose.material.icons.outlined.Badge
-import androidx.compose.material.icons.outlined.MailOutline
-import androidx.compose.material.icons.outlined.PersonRemove
-import androidx.compose.material.icons.outlined.PersonAddAlt
-import androidx.compose.material.icons.outlined.Edit
-import androidx.compose.material.icons.outlined.Delete
-import androidx.compose.material.icons.outlined.VisibilityOff
-import androidx.compose.material.icons.outlined.Block
 import androidx.compose.material.icons.outlined.Settings
 import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.draw.drawBehind
@@ -992,19 +981,20 @@ private fun MessageBubble(
                 // index.html:2540-2600.
                 if (menu) {
                     val red = PomboColors.Danger
+                    val icons = com.pombo.android.ui.PomboIcons
                     com.pombo.android.ui.PomboContextMenu(
                         touchOffset = menuAt,
                         onDismiss = { menu = false }
                     ) {
                         com.pombo.android.ui.ContextMenuItem(
-                            "Copy Text", Icons.Outlined.ContentCopy
+                            "Copy Text", icons.CopyText
                         ) { menu = false; clipboard.setText(androidx.compose.ui.text.AnnotatedString(msg.text)) }
                         com.pombo.android.ui.ContextMenuItem(
-                            "Copy Address", Icons.Outlined.Badge
+                            "Copy Address", icons.Clipboard
                         ) { menu = false; clipboard.setText(androidx.compose.ui.text.AnnotatedString(msg.sender)) }
                         if (canWrite) {
                             com.pombo.android.ui.ContextMenuItem(
-                                "Reply", Icons.AutoMirrored.Filled.Reply
+                                "Reply", icons.Reply
                             ) { menu = false; onReply() }
                         }
 
@@ -1012,16 +1002,14 @@ private fun MessageBubble(
                             com.pombo.android.ui.ContextMenuDivider()
                             // Web hides "Send DM" when you are already in that DM.
                             if (onBlock == null) com.pombo.android.ui.ContextMenuItem(
-                                "Send DM", Icons.Outlined.MailOutline,
-                                iconTint = Color(0xFF38BDF8)   // text-sky-400
+                                "Send DM", icons.Envelope
                             ) { menu = false; onSendDm() }
                             if (isContact) com.pombo.android.ui.ContextMenuItem(
-                                "Remove from Contacts", Icons.Outlined.PersonRemove,
+                                "Remove from Contacts", icons.UserMinus,
                                 iconTint = red, labelColor = red
                             ) { menu = false; onRemoveContact() }
                             else com.pombo.android.ui.ContextMenuItem(
-                                "Add to Contacts", Icons.Outlined.PersonAddAlt,
-                                iconTint = Color(0xFF10B981)   // text-emerald-500
+                                "Add to Contacts", icons.UserPlus
                             ) { menu = false; onAddContact() }
                         }
 
@@ -1037,10 +1025,10 @@ private fun MessageBubble(
                         if (showEdit || showOwnerDelete) {
                             com.pombo.android.ui.ContextMenuDivider()
                             if (showEdit) com.pombo.android.ui.ContextMenuItem(
-                                "Edit Message", Icons.Outlined.Edit
+                                "Edit Message", icons.Edit
                             ) { menu = false; onEdit() }
                             if (showOwnerDelete) com.pombo.android.ui.ContextMenuItem(
-                                "Delete Message", Icons.Outlined.Delete,
+                                "Delete Message", icons.Trash,
                                 iconTint = red, labelColor = red
                             ) { menu = false; confirmDelete = true }
                         }
@@ -1048,7 +1036,7 @@ private fun MessageBubble(
                         if (isDm && canErase && !msg.mine) {
                             com.pombo.android.ui.ContextMenuDivider()
                             com.pombo.android.ui.ContextMenuItem(
-                                "Erase from storage", Icons.Outlined.Delete,
+                                "Erase from storage", icons.Erase,
                                 iconTint = red, labelColor = red
                             ) { menu = false; confirmErase = true }
                         }
@@ -1065,25 +1053,33 @@ private fun MessageBubble(
                         val showBan = canHide && !msg.mine && !isCreator
                         if (canHide) {
                             com.pombo.android.ui.ContextMenuDivider()
-                            if (canModerate) com.pombo.android.ui.ContextMenuItem(
-                                if (isPinned) "Unpin Message" else "Pin Message",
-                                Icons.Filled.PushPin,
-                                iconTint = Color(0xFFFBBF24)   // text-amber-400
-                            ) { menu = false; onPin(!isPinned) }
+                            if (canModerate) {
+                                if (isPinned) com.pombo.android.ui.ContextMenuItem(
+                                    "Unpin Message", icons.Close
+                                ) { menu = false; onPin(false) }
+                                else com.pombo.android.ui.ContextMenuItem(
+                                    "Pin Message", icons.Pin,
+                                    iconTint = Color(0xFFFBBF24)   // text-amber-400
+                                ) { menu = false; onPin(true) }
+                            }
                             // Hide keeps the bytes and is reversible; Erase
                             // removes them from every provider that can, and
                             // only exists where one can (web _toggleAdminItems).
-                            if (!isErased) com.pombo.android.ui.ContextMenuItem(
-                                if (isHidden) "Unhide Message" else "Hide Message",
-                                Icons.Outlined.VisibilityOff,
-                                iconTint = red, labelColor = red
-                            ) { menu = false; onHide(!isHidden) }
+                            if (!isErased) {
+                                if (isHidden) com.pombo.android.ui.ContextMenuItem(
+                                    "Unhide Message", icons.Eye
+                                ) { menu = false; onHide(false) }
+                                else com.pombo.android.ui.ContextMenuItem(
+                                    "Hide Message", icons.Trash,
+                                    iconTint = red, labelColor = red
+                                ) { menu = false; onHide(true) }
+                            }
                             if (canErase && !isErased && !isErasing) com.pombo.android.ui.ContextMenuItem(
-                                "Erase from storage", Icons.Outlined.Delete,
+                                "Erase from storage", icons.Erase,
                                 iconTint = red, labelColor = red
                             ) { menu = false; confirmErase = true }
                             if (showBan) com.pombo.android.ui.ContextMenuItem(
-                                "Ban User", Icons.Outlined.Block,
+                                "Ban User", icons.Ban,
                                 iconTint = red, labelColor = red
                             ) { menu = false; confirmBan = true }
                         }
@@ -1093,7 +1089,7 @@ private fun MessageBubble(
                         if (!msg.mine && onBlock != null) {
                             com.pombo.android.ui.ContextMenuDivider()
                             com.pombo.android.ui.ContextMenuItem(
-                                "Block User", Icons.Outlined.Block,
+                                "Block User", icons.Ban,
                                 iconTint = red, labelColor = red
                             ) { menu = false; confirmBlock = true }
                         }

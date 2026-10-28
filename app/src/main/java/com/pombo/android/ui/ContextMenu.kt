@@ -153,7 +153,7 @@ private fun PomboMenuSurface(content: @Composable ColumnScope.() -> Unit) {
 fun ContextMenuItem(
     label: String,
     icon: ImageVector,
-    /** Icon tint; the web colours it per action (sky, emerald, amber, red). */
+    /** Icon tint; the web colours only Pin (amber) and destructive entries (red). */
     iconTint: Color = PomboColors.Overlay60,
     /** Label colour; destructive entries are red-400. */
     labelColor: Color = PomboColors.Overlay90,
