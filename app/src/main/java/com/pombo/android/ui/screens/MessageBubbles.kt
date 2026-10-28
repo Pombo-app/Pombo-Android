@@ -282,10 +282,11 @@ private fun MediaLightbox(bytes: ByteArray, onDismiss: () -> Unit) {
 private suspend fun saveImageToGallery(context: android.content.Context, bytes: ByteArray): Boolean =
     kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
         try {
-            val name = "pombo_${System.currentTimeMillis()}.jpg"
+            val (mime, ext) = imageType(bytes)
+            val name = "pombo_${System.currentTimeMillis()}.$ext"
             val values = android.content.ContentValues().apply {
                 put(android.provider.MediaStore.Images.Media.DISPLAY_NAME, name)
-                put(android.provider.MediaStore.Images.Media.MIME_TYPE, "image/jpeg")
+                put(android.provider.MediaStore.Images.Media.MIME_TYPE, mime)
                 if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.Q) {
                     put(android.provider.MediaStore.Images.Media.RELATIVE_PATH, "Pictures/Pombo")
                 }
@@ -301,6 +302,18 @@ private suspend fun saveImageToGallery(context: android.content.Context, bytes: 
             false
         }
     }
+
+/** MIME type and file extension from the image's leading bytes; JPEG otherwise. */
+internal fun imageType(bytes: ByteArray): Pair<String, String> {
+    fun at(i: Int) = if (i < bytes.size) bytes[i].toInt() and 0xFF else -1
+    return when {
+        at(0) == 0x89 && at(1) == 0x50 && at(2) == 0x4E && at(3) == 0x47 -> "image/png" to "png"
+        at(0) == 0x47 && at(1) == 0x49 && at(2) == 0x46 -> "image/gif" to "gif"
+        at(0) == 0x52 && at(1) == 0x49 && at(2) == 0x46 && at(3) == 0x46 &&
+            at(8) == 0x57 && at(9) == 0x45 && at(10) == 0x42 && at(11) == 0x50 -> "image/webp" to "webp"
+        else -> "image/jpeg" to "jpg"
+    }
+}
 
 // ==================== message grouping (web: MessageGrouper.js) ====================
 
