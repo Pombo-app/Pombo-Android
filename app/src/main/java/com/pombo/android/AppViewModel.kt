@@ -46,6 +46,10 @@ class AppViewModel(app: Application) : AndroidViewModel(app), PomboBridge.Listen
     private val failedOutbox = com.pombo.android.data.FailedOutboxStore(app)
     private val pendingCreateStore = com.pombo.android.data.PendingCreateStore(app)
     private val sentReactionsStore = com.pombo.android.data.SentReactionsStore(app)
+    private val pinsHiddenStore = com.pombo.android.data.PinsHiddenStore(app)
+    val pinsHidden get() = pinsHiddenStore.hidden
+    fun hidePins(streamId: String, newestTargetId: String) = pinsHiddenStore.hide(streamId, newestTargetId)
+    fun showPins(streamId: String) = pinsHiddenStore.show(streamId)
     private val epochKeyStore = com.pombo.android.data.EpochKeyStore(app)
     private val adminFloorStore = com.pombo.android.core.AdminFloorStore(app)
     private val notifier = com.pombo.android.core.Notifier(app)
@@ -235,6 +239,7 @@ class AppViewModel(app: Application) : AndroidViewModel(app), PomboBridge.Listen
             inviteStore.clearAccount()
             sentDmStore.clearAccount()
             sentReactionsStore.clearAccount()
+            pinsHiddenStore.clearAccount()
             failedOutbox.clearAccount()
             pendingCreateStore.clearAccount()
             epochKeyStore.clearAccount()
@@ -1674,6 +1679,8 @@ class AppViewModel(app: Application) : AndroidViewModel(app), PomboBridge.Listen
         viewModelScope.launch { previewStore.warmUp() }
         sentReactionsStore.scopeAddress = address
         sentReactionsStore.memoryOnly = guest
+        pinsHiddenStore.memoryOnly = guest
+        pinsHiddenStore.scopeAddress = address
         pushRegistry.scopeAddress = address
         contactsStore.memoryOnly = guest
         settingsStore.scopeAddress = address
@@ -1725,6 +1732,7 @@ class AppViewModel(app: Application) : AndroidViewModel(app), PomboBridge.Listen
         blobStore.scopeAddress = store.address
         previewStore.scopeAddress = store.address
         sentReactionsStore.scopeAddress = store.address
+        pinsHiddenStore.scopeAddress = store.address
         pushRegistry.scopeAddress = store.address
         settingsStore.scopeAddress = store.address
         syncStore.scopeAddress = store.address

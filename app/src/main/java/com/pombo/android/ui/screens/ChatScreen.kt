@@ -97,6 +97,7 @@ import androidx.compose.material.icons.outlined.Public
 import androidx.compose.material.icons.outlined.Storage
 import androidx.compose.material.icons.automirrored.filled.Logout
 import androidx.compose.ui.layout.layout
+import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.unit.Dp
 import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.ui.text.style.TextAlign
@@ -355,12 +356,14 @@ fun ChatScreen(vm: AppViewModel) {
             }
         }
 
-        // Dismissals are per-channel and session-scoped, and are dropped when
-        // the pin itself disappears so that unpin-then-repin surfaces the
-        // banner again (web _reconcileDismissals).
-        var dismissedPins by remember(ch.messageStreamId) { mutableStateOf(emptySet<String>()) }
-        val livePinIds = pins.map { it.targetId }.toSet()
-        LaunchedEffect(livePinIds) { dismissedPins = dismissedPins intersect livePinIds }
+        // Closed banner: hidden only while the newest pin is the one it was
+        // closed on. Never cleared from the pin list itself: pins arrive in
+        // pieces after the channel opens, and a partial list would reopen it.
+        val pinsHidden by vm.pinsHidden.collectAsState()
+        val closedOn = pinsHidden[ch.messageStreamId]
+        var pinCursor by remember(ch.messageStreamId) { mutableStateOf(0) }
+        LaunchedEffect(pins.lastOrNull()?.targetId) { pinCursor = 0 }
+        var pinBannerHeight by remember { mutableStateOf(52.dp) }
         // A ban the moderators keep in ADMIN_STATE rather than on the gate:
         // it hides the author's messages for everyone, so writing here reaches
         // nobody. The reader is told the same thing either way.
@@ -370,14 +373,13 @@ fun ChatScreen(vm: AppViewModel) {
                 || it == ChannelManager.SubscriptionState.UNSUBSCRIBED
                 || it == ChannelManager.SubscriptionState.BANNED
         }
-        // NEWEST first: `pins` arrives in pin order (oldest first), so the banner
-        // used to sit on the stalest pin forever. Reversed, it opens on the most
-        // recent one and each dismissal walks back one pin through history.
+        // NEWEST first: `pins` arrives in pin order (oldest first).
         // Pins ride the open admin stream: they resolve long before the
         // messages they float over, and after the gate has stopped granting
         // access. Neither is a moment to draw them in.
         val shownPins = if (accessLost || (loadingInitial && restoredTimeline == null)) emptyList()
-        else pins.filter { it.targetId !in dismissedPins }.asReversed()
+        else if (pins.isNotEmpty() && pins.last().targetId == closedOn) emptyList()
+        else pins.asReversed()
 
         // Channel header
         Row(
@@ -576,7 +578,8 @@ fun ChatScreen(vm: AppViewModel) {
                         iconTint = Color(0xFFFBBF24)
                     ) {
                         chMenu = false
-                        dismissedPins = emptySet()   // re-show, then jump to it
+                        vm.showPins(ch.messageStreamId)
+                        pinCursor = 0
                         scrollToMessage(pins.last().targetId)   // the newest pin, as in the banner
                     }
                     // Nothing to leave while previewing — the channel isn't saved.
@@ -888,7 +891,7 @@ fun ChatScreen(vm: AppViewModel) {
                 contentPadding = androidx.compose.foundation.layout.PaddingValues(
                     start = 12.dp, end = 12.dp,
                     // Headroom only while the banner is actually showing.
-                    top = if (shownPins.isNotEmpty()) 72.dp else 12.dp,
+                    top = if (shownPins.isNotEmpty()) 10.dp + pinBannerHeight + 12.dp else 12.dp,
                     bottom = 12.dp
                 )
             ) {
@@ -1066,18 +1069,23 @@ fun ChatScreen(vm: AppViewModel) {
             // Pinned banner floats over the messages (web .pinned-banner: glass
             // white 6%, border 8%, radius 16, inset 10/12).
             if (shownPins.isNotEmpty()) {
-                val first = shownPins.first()
+                val pinIndex = pinCursor % shownPins.size
+                val first = shownPins[pinIndex]
                 // Prefer the ENS name over the raw address, like everywhere else.
                 val ensNames by vm.ensNames.collectAsState()
                 LaunchedEffect(first.sender) { vm.ensureEns(first.sender) }
+                val density = androidx.compose.ui.platform.LocalDensity.current
                 Row(
                     Modifier
                         .align(Alignment.TopCenter)
                         .padding(horizontal = 12.dp, vertical = 10.dp)
                         .fillMaxWidth()
-                        // Tapping the banner jumps to the pinned message — the
-                        // banner was inert, so a pin could be seen but not found.
-                        .clickableNoRipple { scrollToMessage(first.targetId) }
+                        .onSizeChanged { pinBannerHeight = with(density) { it.height.toDp() } }
+                        // Jump to the shown pin, then show the one before it.
+                        .clickableNoRipple {
+                            scrollToMessage(first.targetId)
+                            pinCursor = pinIndex + 1
+                        }
                         // The web gets its frost from backdrop-filter: blur(20px).
                         // Compose has no backdrop blur, so a near-opaque dark base
                         // carries the same "floating glass" read without letting
@@ -1126,21 +1134,22 @@ fun ChatScreen(vm: AppViewModel) {
                     }
                     if (shownPins.size > 1) {
                         Text(
-                            "+${shownPins.size - 1}",
+                            "${pinIndex + 1}/${shownPins.size}",
                             color = PomboColors.Overlay40, fontSize = 12.sp
                         )
                     }
                     Spacer(Modifier.width(6.dp))
-                    // Dismiss reveals the pin before this one, or hides the banner
-                    // once they run out. It does NOT unpin — unpinning is a
-                    // moderation action for everyone, this is only "stop showing
-                    // me this one".
+                    // Closes the banner for this reader only; unpinning is a
+                    // moderation action for everyone.
                     Icon(
                         Icons.Filled.Close, contentDescription = "Dismiss pinned message",
                         tint = PomboColors.Overlay40,
                         modifier = Modifier
                             .size(16.dp)
-                            .clickableNoRipple { dismissedPins = dismissedPins + first.targetId }
+                            .clickableNoRipple {
+                                vm.hidePins(ch.messageStreamId, shownPins.first().targetId)
+                                pinCursor = 0
+                            }
                     )
                 }
             }
