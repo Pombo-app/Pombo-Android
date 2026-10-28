@@ -556,14 +556,6 @@ fun ChatScreen(vm: AppViewModel) {
                     modifier = Modifier.widthIn(min = 180.dp)
                 ) {
                     val headerClipboard = androidx.compose.ui.platform.LocalClipboardManager.current
-                    // The panel this opens is titled "Channel Details" in the
-                    // web (index.html:1414) and here; the entry said "Channel
-                    // settings", so the label and its destination disagreed.
-                    com.pombo.android.ui.ContextMenuItem(
-                        "Channel Details", Icons.Outlined.Settings
-                    ) { chMenu = false; showInfo = true }
-                    // Web DropdownManager copy-stream-id: the id was only
-                    // reachable by opening Channel Details and selecting it.
                     com.pombo.android.ui.ContextMenuItem(
                         "Copy Channel ID", Icons.Filled.Tag
                     ) {
@@ -574,20 +566,21 @@ fun ChatScreen(vm: AppViewModel) {
                     // The channel's pins, not the ones on screen: dismissing
                     // the banner is how the reader gets here to bring it back.
                     if (pins.isNotEmpty() && !accessLost) com.pombo.android.ui.ContextMenuItem(
-                        "Pinned", Icons.Filled.PushPin,
-                        iconTint = Color(0xFFFBBF24)
+                        "Pinned", Icons.Filled.PushPin
                     ) {
                         chMenu = false
                         vm.showPins(ch.messageStreamId)
                         pinCursor = 0
                         scrollToMessage(pins.last().targetId)   // the newest pin, as in the banner
                     }
+                    com.pombo.android.ui.ContextMenuItem(
+                        "Channel Details", Icons.Outlined.Settings
+                    ) { chMenu = false; showInfo = true }
                     // Nothing to leave while previewing — the channel isn't saved.
                     if (!isPreview) {
                         com.pombo.android.ui.ContextMenuDivider()
                         com.pombo.android.ui.ContextMenuItem(
-                            "Leave channel", Icons.AutoMirrored.Filled.Logout,
-                            iconTint = PomboColors.Danger, labelColor = PomboColors.Danger
+                            "Leave Channel", Icons.AutoMirrored.Filled.Logout
                         ) { chMenu = false; confirmLeave = true }
                     }
                 }
