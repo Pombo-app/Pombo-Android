@@ -686,14 +686,6 @@ const api = {
         return { address: w.address, privateKey: w.privateKey };
     },
 
-    // Verifies the Pombo canonical hash: keccak256(utf8(data)) -> personal_sign recovery.
-    // Byte-compatible with identityManager.createMessageHash + authManager.signMessage.
-    async verifyCanonical(a) {
-        const hash = window.ethers.keccak256(window.ethers.toUtf8Bytes(a.data));
-        const address = window.ethers.verifyMessage(hash, a.signature);
-        return { address: address };
-    },
-
     // ===== Streamr (transport) =====
 
     // Resolves once the node is up, so a rebuilt client learns at once
@@ -1950,21 +1942,6 @@ const api = {
             } catch (e) { out.push(null); }
         }
         return { accounts: out };
-    },
-
-    // One evaluateJavascript round-trip for a page of signature checks (web
-    // verifies in a worker pool; the WebView is single-threaded, so the win
-    // here is the per-call bridge overhead on large resends).
-    async verifyCanonicalBatch(a) {
-        var out = [];
-        for (var i = 0; i < a.items.length; i++) {
-            try {
-                var it = a.items[i];
-                var hash = window.ethers.keccak256(window.ethers.toUtf8Bytes(it.data));
-                out.push(window.ethers.verifyMessage(hash, it.signature));
-            } catch (e) { out.push(''); }
-        }
-        return { addresses: out };
     },
 
     // DM storage-chunk download: resend a time window from the RECEIVER's OWN
