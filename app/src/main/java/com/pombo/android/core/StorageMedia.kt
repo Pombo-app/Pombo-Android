@@ -354,7 +354,7 @@ class StorageMedia(
     }
 
     // ---- verify reads (by timestamp; HTTP with format=metadata fast path) ----
-    private class ReadStats { var winsOk = 0; var winsFailed = 0; var rows = 0; var foreignRows = 0 }
+    private class ReadStats { var winsOk = 0; var winsFailed = 0; var rows = 0; var foreignRows = 0; var storedAnswered = false }
 
     private suspend fun readStoredIndices(
         sid: String, windows: List<Win>, tsIndex: Map<String, Int>, bases: List<String>,
@@ -373,6 +373,7 @@ class StorageMedia(
     ): Set<Int> {
         if (storedKey != null) {
             storedIndices(sid, windows, tsIndex, storedKey, label)?.let { present ->
+                stats?.storedAnswered = true
                 onProgress?.invoke(present)
                 return present
             }
@@ -912,10 +913,21 @@ class StorageMedia(
                     }
                 }
 
+                // A read nobody answered (no `stored` reply, every window refused, as
+                // for a DM sender reading the peer's inbox) says nothing about the
+                // chunks; treating it as "all missing" republishes the file.
+                var lastReadKnown = true
+                suspend fun verifyRead(windows: List<Win>, label: String, onProgress: ((Set<Int>) -> Unit)? = null): Set<Int> {
+                    val st = ReadStats()
+                    val f = readStoredIndices(messageStreamId, windows, tsIndexForVerify(), bases, label, st, expectedPublisher = verifyPublisher, storedKey = chunkIdentityPk, onProgress = onProgress)
+                    lastReadKnown = st.storedAnswered || st.winsOk > 0
+                    return f
+                }
+
                 var missing = missingIdx()
                 if (missing.isNotEmpty()) {
                     up.phase = "Verifying on storage…"; emit(up)
-                    val found = readStoredIndices(messageStreamId, allPartitionWindows(firstChunkTs - 15000, wall() + 1000), tsIndexForVerify(), bases, "full sweep", expectedPublisher = verifyPublisher, storedKey = chunkIdentityPk) { fs ->
+                    val found = verifyRead(allPartitionWindows(firstChunkTs - 15000, wall() + 1000), "full sweep") { fs ->
                         stored.addAll(fs); updBar(); up.phase = "Verifying: ${stored.size}/$tc confirmed…"; emitThrottled(up)
                     }
                     stored.addAll(found); missing = missingIdx(); updBar()
@@ -931,7 +943,7 @@ class StorageMedia(
                     while (missing.isNotEmpty() && perf() - lastProgress < StorageMediaConfig.VERIFY_QUIET_MS && perf() - scStart < cap) {
                         delay(2500)
                         val before = missing.size
-                        stored.addAll(readStoredIndices(messageStreamId, windowsForIndices(missing), tsIndexForVerify(), bases, "drain", expectedPublisher = verifyPublisher, storedKey = chunkIdentityPk))
+                        stored.addAll(verifyRead(windowsForIndices(missing), "drain"))
                         missing = missingIdx(); updBar()
                         if (missing.size < before) lastProgress = perf()
                         up.phase = "Waiting for storage: ${missing.size} unconfirmed…"; emit(up)
@@ -939,7 +951,7 @@ class StorageMedia(
                 }
 
                 var pass = 0; var stalledPasses = 0
-                while (missing.isNotEmpty() && !verifyBlind && pass < 8 && stalledPasses < 3) {
+                while (missing.isNotEmpty() && !verifyBlind && lastReadKnown && pass < 8 && stalledPasses < 3) {
                     pass++
                     val storedBefore = stored.size
                     if (pass > 1) sendSpacing = min(2000.0, sendSpacing * 1.5)
@@ -949,8 +961,9 @@ class StorageMedia(
                     var lastProgress = perf()
                     while (missing.isNotEmpty()) {
                         delay(2000)
-                        stored.addAll(readStoredIndices(messageStreamId, windowsForIndices(missing), tsIndexForVerify(), bases, "post-repair pass $pass", expectedPublisher = verifyPublisher, storedKey = chunkIdentityPk))
+                        stored.addAll(verifyRead(windowsForIndices(missing), "post-repair pass $pass"))
                         val before = missing.size; missing = missingIdx(); updBar()
+                        if (!lastReadKnown) break
                         if (missing.size < before) { lastProgress = perf(); continue }
                         if (perf() - lastProgress >= StorageMediaConfig.VERIFY_QUIET_MS) {
                             Log.w(TAG, "Nothing new for ${StorageMediaConfig.VERIFY_QUIET_MS / 1000}s — republishing the ${missing.size} missing again"); break
@@ -958,7 +971,9 @@ class StorageMedia(
                     }
                     stalledPasses = if (stored.size > storedBefore) 0 else stalledPasses + 1
                 }
-                storedCount = if (verifyBlind && stored.isEmpty()) {
+                storedCount = if (!lastReadKnown && missing.isNotEmpty()) {
+                    Log.e(TAG, "Storage verify: no node could confirm the chunks (stored unanswered, reads refused) — announcing UNVERIFIED"); null
+                } else if (verifyBlind && stored.isEmpty()) {
                     Log.e(TAG, "Storage verify skipped (blind) — announcing UNVERIFIED"); null
                 } else {
                     Log.i(TAG, "Storage verify & repair: ${stored.size}/$tc confirmed${if (stored.size < tc) " — INCOMPLETE" else ""}"); stored.size
