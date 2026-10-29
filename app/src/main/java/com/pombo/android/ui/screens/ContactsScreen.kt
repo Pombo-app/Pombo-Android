@@ -80,15 +80,15 @@ internal fun ContactsTab(vm: AppViewModel) {
 
         if (contacts.isEmpty()) {
             Box(Modifier.weight(1f).fillMaxWidth(), contentAlignment = Alignment.Center) {
-                Text("No contacts yet. Add one with their address.", color = PomboColors.TextDim, fontSize = 13.sp)
+                Text("No contacts yet. Add one with their address.", color = PomboColors.TextSecondary, fontSize = 13.sp)
             }
         } else {
             LazyColumn(Modifier.weight(1f).fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(8.dp)) {
                 items(contacts, key = { it.address }) { c ->
                     Row(
                         Modifier.fillMaxWidth()
-                            .background(PomboColors.Surface, RoundedCornerShape(12.dp))
-                            .border(1.dp, PomboColors.Border, RoundedCornerShape(12.dp))
+                            .background(PomboColors.Bg, RoundedCornerShape(12.dp))
+                            .border(1.dp, PomboColors.Overlay8, RoundedCornerShape(12.dp))
                             .padding(12.dp),
                         verticalAlignment = Alignment.CenterVertically
                     ) {
@@ -105,13 +105,13 @@ internal fun ContactsTab(vm: AppViewModel) {
                             // then the FULL address in mono at 10px/white-30.
                             Text(
                                 c.nickname ?: ens ?: shortAddr(c.address),
-                                color = PomboColors.Text, fontSize = 13.sp,
+                                color = PomboColors.TextPrimary, fontSize = 13.sp,
                                 fontWeight = FontWeight.Medium, maxLines = 1
                             )
                             Spacer(Modifier.height(2.dp))
                             Text(
                                 c.address,
-                                color = Color.White.copy(alpha = 0.30f), fontSize = 10.sp,
+                                color = PomboColors.Overlay30, fontSize = 10.sp,
                                 fontFamily = androidx.compose.ui.text.font.FontFamily.Monospace,
                                 maxLines = 1,
                                 overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis
@@ -124,7 +124,7 @@ internal fun ContactsTab(vm: AppViewModel) {
                         Box {
                             Icon(
                                 Icons.Filled.MoreVert, contentDescription = "Contact options",
-                                tint = Color.White.copy(alpha = 0.25f),
+                                tint = PomboColors.Overlay25,
                                 modifier = Modifier.size(20.dp).clickableNoRipple { menuOpen = true }
                             )
                             if (menuOpen) {
@@ -142,7 +142,7 @@ internal fun ContactsTab(vm: AppViewModel) {
                                     }
                                     Box(
                                         Modifier.fillMaxWidth().padding(vertical = 4.dp).height(1.dp)
-                                            .background(Color.White.copy(alpha = 0.08f))
+                                            .background(PomboColors.Overlay8)
                                     )
                                     ContactMenuItem("Remove Contact", Icons.Outlined.Close, danger = true) {
                                         menuOpen = false; vm.removeContact(c.address)
@@ -187,13 +187,13 @@ private fun ContactMenuItem(
     ) {
         Icon(
             icon, contentDescription = null,
-            tint = if (danger) PomboColors.Danger.copy(alpha = 0.85f) else Color.White.copy(alpha = 0.60f),
+            tint = if (danger) PomboColors.Danger.copy(alpha = 0.85f) else PomboColors.Overlay60,
             modifier = Modifier.size(15.dp)
         )
         Spacer(Modifier.width(10.dp))
         Text(
             label,
-            color = if (danger) PomboColors.Danger.copy(alpha = 0.90f) else Color.White.copy(alpha = 0.80f),
+            color = if (danger) PomboColors.Danger.copy(alpha = 0.90f) else PomboColors.Overlay80,
             fontSize = 13.sp
         )
     }
@@ -210,7 +210,7 @@ private fun EditContactDialog(
         // The zero-width break is the only point the address may wrap at.
         Text(
             contact.address.take(21) + Char(0x200B) + contact.address.drop(21),
-            color = PomboColors.TextDim, fontSize = 11.sp, lineHeight = 16.sp,
+            color = PomboColors.TextSecondary, fontSize = 11.sp, lineHeight = 16.sp,
             fontFamily = androidx.compose.ui.text.font.FontFamily.Monospace
         )
         Spacer(Modifier.height(14.dp))

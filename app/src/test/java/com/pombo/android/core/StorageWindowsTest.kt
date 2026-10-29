@@ -65,4 +65,63 @@ class StorageWindowsTest {
         assertTrue(windows.any { it.partition == p && it.from <= 6000L && it.to >= 6000L })
         assertTrue(windows.any { it.partition == p && it.from == last - 5000 && it.to == 20000L })
     }
+
+    @Test
+    fun `sequentialWindows tiles the full range - start, end, then the middle in order`() {
+        val first = 1_000_000L; val last = 1_099_000L
+        val fromT = first - 30_000; val toT = last + 60_000
+        val windows = StorageWindows.sequentialWindows(first, last, 100, 2, 9, fromT, toT, 36)
+        val slices = windows.chunked(9).map { it.first().from to it.first().to }
+        assertEquals(fromT, slices[0].first)
+        assertEquals(toT, slices[1].second)
+        val tiled = listOf(slices[0]) + slices.drop(2) + listOf(slices[1])
+        for (k in 1 until tiled.size) assertEquals(tiled[k - 1].second, tiled[k].first)
+        assertEquals((2..10).toList(), windows.take(9).map { it.partition })
+    }
+
+    @Test
+    fun `chunk partitions stay inside the stream's real partitions`() {
+        assertEquals(9, StreamConstants.chunkPartitionsFor(12, 3))
+        assertEquals(8, StreamConstants.chunkPartitionsFor(11, 3))
+        assertEquals(9, StreamConstants.chunkPartitionsFor(13, 4))
+        assertEquals(9, StreamConstants.chunkPartitionsFor(20, 3))
+        assertEquals(0, StreamConstants.chunkPartitionsFor(3, 3))
+        assertEquals(9, StreamConstants.chunkPartitionsFor(null, 3))
+    }
+
+    @Test
+    fun `sequentialWindows falls back to full ranges without chunk timestamps`() {
+        assertEquals(
+            StorageWindows.chunkWindowsFor(2, 9, 5, 6),
+            StorageWindows.sequentialWindows(null, null, 100, 2, 9, 5, 6, 36)
+        )
+    }
+
+    private fun drain(p: StorageWindows.Picker) = generateSequence { p.next() }.toList()
+
+    @Test
+    fun `the picker hands out every window once, in order, with no player waiting`() {
+        val windows = (0 until 5).map { StorageWindows.Window(3, it * 10L, it * 10L + 10) }
+        assertEquals(windows, drain(StorageWindows.Picker(windows)))
+    }
+
+    @Test
+    fun `a player waiting ahead gets the windows from there on first, then the rest`() {
+        val slices = listOf(0L to 10L, 40L to 50L, 10L to 20L, 20L to 30L, 30L to 40L)
+        val windows = slices.flatMap { (f, t) -> listOf(StorageWindows.Window(3, f, t), StorageWindows.Window(4, f, t)) }
+        var wanted: Long? = null
+        val picker = StorageWindows.Picker(windows) { wanted }
+        assertEquals(windows[0], picker.next())
+        wanted = 25L
+        val rest = drain(picker)
+        assertEquals(listOf(20L, 20L, 30L, 30L, 40L, 40L, 0L, 10L, 10L), rest.map { it.from })
+        assertEquals(windows.toSet(), (rest + windows[0]).toSet())
+    }
+
+    @Test
+    fun `the wanted time sits one round of partitions before the chunk`() {
+        assertEquals(1000L + 91 * 10, StorageWindows.wantedTime(1000, 1990, 100, 9, 100))
+        assertEquals(null, StorageWindows.wantedTime(1000, 1990, 100, 9, -1))
+        assertEquals(null, StorageWindows.wantedTime(null, 1990, 100, 9, 5))
+    }
 }

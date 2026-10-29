@@ -405,6 +405,24 @@ object StorageHttp {
         return out
     }
 
+    /** Whether the node answers `GET /capabilities` at all; any HTTP status counts. */
+    suspend fun answers(base: String): Boolean = withContext(Dispatchers.IO) {
+        val conn = (URL("${base.trimEnd('/')}/capabilities").openConnection() as HttpURLConnection).apply {
+            requestMethod = "GET"
+            connectTimeout = 8_000
+            readTimeout = 8_000
+            useCaches = false
+        }
+        try {
+            conn.responseCode
+            true
+        } catch (_: java.io.IOException) {
+            false
+        } finally {
+            conn.disconnect()
+        }
+    }
+
     /**
      * Features a node announces on `GET /capabilities` (Pombo storage node
      * fork). Null on 404, which is a vanilla node.

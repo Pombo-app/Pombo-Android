@@ -152,6 +152,9 @@ class PieceStore private constructor(
      * Streamed rather than read into memory so a 500 MB file does not have to
      * fit in RAM to be saved.
      */
+    /** The data file, once every piece is in: it then holds the file's exact bytes. */
+    fun completeFile(): File? = if (isComplete()) dataFile else null
+
     @Throws(IOException::class)
     fun exportTo(sink: java.io.OutputStream) {
         if (!isComplete()) {

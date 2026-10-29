@@ -1,8 +1,17 @@
 package com.pombo.android.ui
 
+import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.interaction.MutableInteractionSource
+import androidx.compose.foundation.interaction.collectIsPressedAsState
+import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.material.icons.outlined.ContentCopy
+import androidx.compose.material.icons.outlined.QrCode2
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.geometry.Size
+import androidx.compose.ui.graphics.vector.ImageVector
+import io.nayuki.qrcodegen.QrCode
 import androidx.compose.foundation.border
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -51,9 +60,10 @@ import com.pombo.android.AppViewModel
 import com.pombo.android.ui.theme.PomboColors
 
 /**
- * The wallet: what this account holds on Polygon, reached from the header
- * beside the bell. Web parity with the wallet modal — balances only. The
- * address, the key and account actions stay with the account.
+ * The wallet: what this account holds on Polygon, reached from the pill. Web
+ * parity with the wallet sheet: the address to receive on, with copy and a QR
+ * shown on demand, then the balances. The key and account actions stay with
+ * the account.
  *
  * A token's symbol is text its author chose, so it is capped and shown beside
  * the address, which is the only identity a token really has.
@@ -77,8 +87,8 @@ fun WalletSheet(vm: AppViewModel, onDismiss: () -> Unit) {
     ModalBottomSheet(
         onDismissRequest = onDismiss,
         sheetState = sheetState,
-        containerColor = PomboColors.SurfaceHigh,
-        dragHandle = { BottomSheetDefaults.DragHandle(color = Color.White.copy(alpha = 0.20f)) }
+        containerColor = PomboColors.Surface8,
+        dragHandle = { BottomSheetDefaults.DragHandle(color = PomboColors.Overlay20) }
     ) {
         Row(
             Modifier.fillMaxWidth().padding(start = 16.dp, end = 12.dp, bottom = 6.dp),
@@ -86,14 +96,41 @@ fun WalletSheet(vm: AppViewModel, onDismiss: () -> Unit) {
         ) {
             Text(
                 "Wallet",
-                color = PomboColors.Text, fontSize = 15.sp, fontWeight = FontWeight.SemiBold,
+                color = PomboColors.TextPrimary, fontSize = 15.sp, fontWeight = FontWeight.SemiBold,
                 modifier = Modifier.weight(1f)
             )
             Icon(
                 Icons.Outlined.Refresh, contentDescription = "Refresh balances",
-                tint = Color.White.copy(alpha = 0.40f),
+                tint = PomboColors.Overlay40,
                 modifier = Modifier.size(18.dp).clickableNoRipple { vm.refreshWallet() }
             )
+        }
+
+        var showQr by remember { mutableStateOf(false) }
+        address?.let { addr ->
+            Row(
+                Modifier.fillMaxWidth().padding(start = 16.dp, end = 12.dp, top = 4.dp, bottom = 2.dp),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(4.dp)
+            ) {
+                Text(
+                    addr,
+                    color = PomboColors.Overlay60,
+                    fontSize = 13.sp, fontFamily = FontFamily.Monospace,
+                    maxLines = 1, overflow = TextOverflow.Ellipsis,
+                    modifier = Modifier.weight(1f)
+                )
+                AddressButton(Icons.Outlined.ContentCopy, "Copy address", active = false) {
+                    clipboard.setText(androidx.compose.ui.text.AnnotatedString(addr))
+                    vm.toast("Address copied", ToastKind.SUCCESS)
+                }
+                AddressButton(Icons.Outlined.QrCode2, "Show QR code", active = showQr) { showQr = !showQr }
+            }
+            if (showQr) {
+                Box(Modifier.fillMaxWidth().padding(top = 8.dp, bottom = 12.dp), contentAlignment = Alignment.Center) {
+                    AddressQr(addr)
+                }
+            }
         }
 
         Column(Modifier.heightIn(max = 360.dp).verticalScroll(rememberScrollState())) {
@@ -105,13 +142,13 @@ fun WalletSheet(vm: AppViewModel, onDismiss: () -> Unit) {
                     Column(Modifier.weight(1f)) {
                         Text(
                             row.symbol.ifEmpty { "…" },
-                            color = PomboColors.Text, fontSize = 14.sp, fontWeight = FontWeight.Medium,
+                            color = PomboColors.TextPrimary, fontSize = 14.sp, fontWeight = FontWeight.Medium,
                             maxLines = 1, overflow = TextOverflow.Ellipsis
                         )
                         if (row.kind != AppViewModel.WalletRow.Kind.BASE && row.address != null) {
                             Text(
                                 shortToken(row.address),
-                                color = Color.White.copy(alpha = 0.30f),
+                                color = PomboColors.Overlay30,
                                 fontSize = 11.sp, fontFamily = FontFamily.Monospace
                             )
                         }
@@ -119,22 +156,22 @@ fun WalletSheet(vm: AppViewModel, onDismiss: () -> Unit) {
                     when {
                         row.failed -> Text(
                             "Unavailable",
-                            color = Color.White.copy(alpha = 0.35f), fontSize = 12.sp
+                            color = PomboColors.Overlay35, fontSize = 12.sp
                         )
                         row.amount == null -> Text(
                             "···",
-                            color = Color.White.copy(alpha = 0.25f), fontSize = 14.sp
+                            color = PomboColors.Overlay25, fontSize = 14.sp
                         )
                         else -> Text(
                             row.amount,
-                            color = PomboColors.Text, fontSize = 14.sp
+                            color = PomboColors.TextPrimary, fontSize = 14.sp
                         )
                     }
                     if (row.kind == AppViewModel.WalletRow.Kind.CUSTOM && row.address != null) {
                         Spacer(Modifier.width(10.dp))
                         Icon(
                             Icons.Outlined.Close, contentDescription = "Remove token",
-                            tint = Color.White.copy(alpha = 0.30f),
+                            tint = PomboColors.Overlay30,
                             modifier = Modifier.size(16.dp)
                                 .clickableNoRipple { vm.removeWalletToken(row.address) }
                         )
@@ -152,10 +189,10 @@ fun WalletSheet(vm: AppViewModel, onDismiss: () -> Unit) {
             ) {
                 Icon(
                     Icons.Outlined.Add, contentDescription = null,
-                    tint = Color.White.copy(alpha = 0.40f), modifier = Modifier.size(16.dp)
+                    tint = PomboColors.Overlay40, modifier = Modifier.size(16.dp)
                 )
                 Spacer(Modifier.width(8.dp))
-                Text("Add token", color = Color.White.copy(alpha = 0.40f), fontSize = 13.sp)
+                Text("Add token", color = PomboColors.Overlay40, fontSize = 13.sp)
             }
         } else {
             Row(
@@ -164,14 +201,14 @@ fun WalletSheet(vm: AppViewModel, onDismiss: () -> Unit) {
             ) {
                 Box(
                     Modifier.weight(1f)
-                        .background(Color.White.copy(alpha = 0.05f), RoundedCornerShape(10.dp))
-                        .border(1.dp, Color.White.copy(alpha = 0.10f), RoundedCornerShape(10.dp))
+                        .background(PomboColors.Overlay5, RoundedCornerShape(10.dp))
+                        .border(1.dp, PomboColors.Overlay10, RoundedCornerShape(10.dp))
                         .padding(horizontal = 12.dp, vertical = 10.dp)
                 ) {
                     if (tokenInput.isEmpty()) {
                         Text(
                             "Token address (0x…)",
-                            color = Color.White.copy(alpha = 0.25f),
+                            color = PomboColors.Overlay25,
                             fontSize = 12.sp, fontFamily = FontFamily.Monospace
                         )
                     }
@@ -180,7 +217,7 @@ fun WalletSheet(vm: AppViewModel, onDismiss: () -> Unit) {
                         onValueChange = { tokenInput = it; vm.clearWalletAddError() },
                         singleLine = true,
                         textStyle = TextStyle(
-                            color = PomboColors.Text, fontSize = 12.sp, fontFamily = FontFamily.Monospace
+                            color = PomboColors.TextPrimary, fontSize = 12.sp, fontFamily = FontFamily.Monospace
                         ),
                         cursorBrush = SolidColor(PomboColors.Accent),
                         modifier = Modifier.fillMaxWidth()
@@ -198,7 +235,7 @@ fun WalletSheet(vm: AppViewModel, onDismiss: () -> Unit) {
                 Spacer(Modifier.width(6.dp))
                 Icon(
                     Icons.Outlined.Close, contentDescription = "Cancel",
-                    tint = Color.White.copy(alpha = 0.30f),
+                    tint = PomboColors.Overlay30,
                     modifier = Modifier.size(18.dp).clickableNoRipple {
                         adding = false; tokenInput = ""; vm.clearWalletAddError()
                     }
@@ -220,7 +257,7 @@ fun WalletSheet(vm: AppViewModel, onDismiss: () -> Unit) {
         addError?.let {
             Text(
                 it,
-                color = Color(0xFFF87171), fontSize = 12.sp,
+                color = PomboColors.Danger, fontSize = 12.sp,
                 modifier = Modifier.fillMaxWidth().padding(start = 16.dp, end = 16.dp, bottom = 4.dp)
             )
         }
@@ -261,6 +298,51 @@ fun WalletSheet(vm: AppViewModel, onDismiss: () -> Unit) {
             Text("Fund with MetaMask", color = Color.White, fontSize = 14.sp, fontWeight = FontWeight.Medium)
         }
         Spacer(Modifier.height(20.dp))
+    }
+}
+
+@Composable
+private fun AddressButton(icon: ImageVector, label: String, active: Boolean, onClick: () -> Unit) {
+    val interaction = remember { MutableInteractionSource() }
+    val pressed by interaction.collectIsPressedAsState()
+    val lit = active || pressed
+    Box(
+        Modifier.size(36.dp)
+            .background(if (lit) PomboColors.Overlay12 else Color.Transparent, CircleShape)
+            .clickable(interactionSource = interaction, indication = null, onClick = onClick),
+        contentAlignment = Alignment.Center
+    ) {
+        Icon(
+            icon, contentDescription = label,
+            tint = if (lit) PomboColors.Accent else PomboColors.Overlay50,
+            modifier = Modifier.size(18.dp)
+        )
+    }
+}
+
+/** Same code the web draws: ECC M, a one-module quiet zone, black on a white card. */
+@Composable
+private fun AddressQr(address: String) {
+    val qr = remember(address) { QrCode.encodeText(address, QrCode.Ecc.MEDIUM) }
+    Canvas(
+        Modifier
+            .background(Color.White, RoundedCornerShape(12.dp))
+            .padding(8.dp)
+            .size(168.dp)
+    ) {
+        val modules = qr.size + 2
+        val cell = size.minDimension / modules
+        for (y in 0 until qr.size) {
+            for (x in 0 until qr.size) {
+                if (qr.getModule(x, y)) {
+                    drawRect(
+                        Color.Black,
+                        topLeft = Offset((x + 1) * cell, (y + 1) * cell),
+                        size = Size(cell, cell)
+                    )
+                }
+            }
+        }
     }
 }
 

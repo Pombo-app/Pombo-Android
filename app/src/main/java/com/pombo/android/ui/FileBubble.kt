@@ -24,9 +24,12 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
 import androidx.compose.runtime.staticCompositionLocalOf
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
@@ -34,7 +37,9 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.pombo.android.core.MediaController
+import com.pombo.android.ui.theme.PomboColors
 import com.pombo.android.core.StorageMedia
+import com.pombo.android.core.StorageStreams
 
 /**
  * What a file bubble needs from the app, provided once at the top of the tree.
@@ -47,6 +52,8 @@ interface FileTransfers {
     fun isSaved(fileId: String): Boolean
     fun onDownload(messageId: String)
     fun onSave(fileId: String, fileName: String)
+    /** The complete file on this device, or null. */
+    fun localFile(fileId: String): java.io.File?
 }
 
 val LocalFileTransfers = staticCompositionLocalOf<FileTransfers?> { null }
@@ -61,6 +68,15 @@ interface StorageTransfers {
     fun isSaved(transferId: String): Boolean
     fun onDownload(messageId: String)
     fun onSave(transferId: String, fileName: String)
+    /** The downloaded file on this device, or null. */
+    fun completedFile(transferId: String): java.io.File?
+    /** The file this session sent, or null. */
+    fun original(transferId: String): android.net.Uri?
+    /** The open channel is a DM: our own uploads live in the peer's inbox, which we cannot read. */
+    val inDm: Boolean
+    /** This session announced the upload with gaps and can send it again. */
+    fun canRetry(transferId: String): Boolean
+    fun onRetry(transferId: String)
 }
 
 val LocalStorageTransfers = staticCompositionLocalOf<StorageTransfers?> { null }
@@ -68,8 +84,8 @@ val LocalStorageTransfers = staticCompositionLocalOf<StorageTransfers?> { null }
 // ---- shared design constants (mirror the web's unified file-card) ----
 private val CARD_WIDTH = 300.dp                 // FIXED — never varies with stats content
 private val CARD_SHAPE = RoundedCornerShape(12.dp)
-private val CARD_BG = Color.White.copy(alpha = 0.05f)
-private val GREEN = Color(0xFF4ADE80)
+private val CARD_BG = PomboColors.Overlay5
+private val GREEN = PomboColors.Success
 private val BLUE = Color(0xFF3B82F6)
 
 /** 1.2 MB, 340 KB — the web's formatFileSize. */
@@ -117,30 +133,31 @@ private fun FileCardAction(icon: ImageVector, tint: Color, bgAlpha: Float, onCli
 fun TransportBadge(label: String) {
     Text(
         label.uppercase(),
-        color = Color.White.copy(alpha = 0.4f),
+        color = PomboColors.Overlay40,
         fontSize = 9.sp,
         maxLines = 1,
         modifier = Modifier
             .padding(end = 6.dp)
             .clip(RoundedCornerShape(4.dp))
-            .background(Color.White.copy(alpha = 0.08f))
+            .background(PomboColors.Overlay8)
             .padding(horizontal = 5.dp, vertical = 1.dp)
     )
 }
 
 /** A thin bottom progress bar, [pct] in 0..1, [color] the fill. */
 @Composable
-private fun ProgressBar(pct: Float, color: Color) {
+private fun ProgressBar(pct: Float, color: Color, working: Boolean = false) {
     Box(
         Modifier
             .fillMaxWidth()
             .height(4.dp)
-            .background(Color.White.copy(alpha = 0.06f))
+            .background(PomboColors.Overlay6)
     ) {
         Box(
             Modifier
                 .fillMaxWidth(pct.coerceIn(0f, 1f))
                 .fillMaxHeight()
+                .alpha(workingAlpha(working))
                 .background(color)
         )
     }
@@ -174,11 +191,33 @@ fun FileBubbleContent(
     // that would drop unrequested copies into the sender's Downloads. The web
     // has the same boundary for free — its auto-save runs in onFileComplete.
     val downloadDone = progress?.done == true && progress.downloaded
+    val isVideo = file.fileType.startsWith("video/")
     LaunchedEffect(downloadDone, saved) {
-        if (downloadDone && !saved) transfers?.onSave(file.fileId, file.fileName)
+        if (downloadDone && !saved && !isVideo) transfers?.onSave(file.fileId, file.fileName)
     }
 
     val totalSize = formatBytes(file.fileSize)
+    if (isVideo) {
+        val source = if (localFile) transfers?.localFile(file.fileId)?.let(android.net.Uri::fromFile) else null
+        VideoTile(
+            id = file.fileId,
+            fileName = file.fileName,
+            size = totalSize,
+            source = source,
+            downloading = downloading,
+            progress = pct,
+            status = when {
+                progress?.failure != null -> progress.failure
+                downloading && progress != null -> "${formatBytes(progress.received)} of $totalSize"
+                source == null && !canDownload -> "Not on this device"
+                source != null && mine && transfers?.isSeeding(file.fileId) == true -> "Sharing"
+                else -> ""
+            },
+            onDownload = if (canDownload && source == null && !downloading) ({ transfers?.onDownload(messageId) }) else null,
+            onSave = if (source != null) ({ transfers?.onSave(file.fileId, file.fileName) }) else null
+        )
+        return
+    }
     val detail = when {
         downloading && progress != null -> {
             val speed = formatSpeed(progress.bytesPerSecond)
@@ -192,8 +231,8 @@ fun FileBubbleContent(
         // Saved is a pure status indicator — nothing to tap, nothing left to do.
         saved -> ({ FileCardAction(Icons.Filled.Check, GREEN.copy(alpha = 0.7f), 0.06f, null) })
         localFile -> ({ FileCardAction(Icons.Filled.Save, GREEN.copy(alpha = 0.7f), 0.06f) { transfers?.onSave(file.fileId, file.fileName) } })
-        downloading -> ({ FileCardAction(Icons.Filled.ArrowDownward, Color.White.copy(alpha = 0.25f), 0.04f, null) })
-        canDownload -> ({ FileCardAction(Icons.Filled.ArrowDownward, Color.White.copy(alpha = 0.6f), 0.06f) { transfers?.onDownload(messageId) } })
+        downloading -> ({ FileCardAction(Icons.Filled.ArrowDownward, PomboColors.Overlay25, 0.04f, null) })
+        canDownload -> ({ FileCardAction(Icons.Filled.ArrowDownward, PomboColors.Overlay60, 0.06f) { transfers?.onDownload(messageId) } })
         else -> null
     }
 
@@ -218,14 +257,14 @@ fun FileBubbleContent(
                 ) {
                     TransportBadge("mesh")
                     Text(
-                        detail, color = Color.White.copy(alpha = 0.35f), fontSize = 10.sp,
+                        detail, color = PomboColors.Overlay35, fontSize = 10.sp,
                         maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f, fill = false)
                     )
                     if (localFile && upload != null) {
-                        Icon(Icons.Filled.ArrowUpward, null, tint = Color.White.copy(alpha = 0.35f), modifier = Modifier.size(10.dp))
-                        Text(formatSpeed(upload.bytesPerSecond).ifEmpty { "0 B/s" }, color = Color.White.copy(alpha = 0.35f), fontSize = 10.sp, maxLines = 1)
-                        Icon(Icons.Filled.Person, null, tint = Color.White.copy(alpha = 0.35f), modifier = Modifier.size(10.dp))
-                        Text("${upload.leechers}", color = Color.White.copy(alpha = 0.35f), fontSize = 10.sp, maxLines = 1)
+                        Icon(Icons.Filled.ArrowUpward, null, tint = PomboColors.Overlay35, modifier = Modifier.size(10.dp))
+                        Text(formatSpeed(upload.bytesPerSecond).ifEmpty { "0 B/s" }, color = PomboColors.Overlay35, fontSize = 10.sp, maxLines = 1)
+                        Icon(Icons.Filled.Person, null, tint = PomboColors.Overlay35, modifier = Modifier.size(10.dp))
+                        Text("${upload.leechers}", color = PomboColors.Overlay35, fontSize = 10.sp, maxLines = 1)
                     }
                 }
                 if (localFile) Text("seeding...", color = GREEN.copy(alpha = 0.6f), fontSize = 10.sp, modifier = Modifier.padding(top = 2.dp))
@@ -267,9 +306,12 @@ fun StorageFileBubbleContent(
     val ready = completed
     val totalSize = formatBytes(file.originalSize)
 
+    val isVideo = file.fileType?.startsWith("video/") == true
+    val unreachable = mine && !ready && !uploading && transfers?.inDm == true
+
     // Saving is automatic once the bytes are here.
     LaunchedEffect(ready, saved) {
-        if (ready && !saved) transfers?.onSave(file.transferId, file.fileName)
+        if (ready && !saved && !isVideo) transfers?.onSave(file.transferId, file.fileName)
     }
 
     // Two-line stats (mirror formatStorageUpload/DownloadDetail).
@@ -284,6 +326,7 @@ fun StorageFileBubbleContent(
             val transferred = if (dl.total > 0) formatBytes(dl.received.toLong() * dl.fileSize / dl.total) else "0 B"
             "Paused · ${dl.percent}% · $transferred of ${formatBytes(dl.fileSize)}" to ""
         }
+        unreachable -> "$totalSize · not on this device" to ""
         else -> totalSize to ""
     }
     val isError = upErr != null || dlErr != null
@@ -293,18 +336,50 @@ fun StorageFileBubbleContent(
         (downloading || pausedDl) && dl != null && dl.total > 0 -> (dl.received.toFloat() / dl.total).coerceIn(0f, 1f)
         else -> 0f
     }
+    val working = uploading && up?.stage in setOf("verifying", "repairing", "announce")
 
     val action: (@Composable () -> Unit)? = when {
         // Saved is a pure status indicator — nothing to tap, nothing left to do.
         saved -> ({ FileCardAction(Icons.Filled.Check, GREEN.copy(alpha = 0.7f), 0.06f, null) })
         ready -> ({ FileCardAction(Icons.Filled.Save, GREEN.copy(alpha = 0.7f), 0.06f) { transfers?.onSave(file.transferId, file.fileName) } })
-        uploading -> ({ FileCardAction(Icons.Filled.ArrowUpward, Color.White.copy(alpha = 0.25f), 0.04f, null) })
-        downloading || pausedDl -> ({ FileCardAction(Icons.Filled.ArrowDownward, Color.White.copy(alpha = 0.25f), 0.04f, null) })
-        !mine -> ({ FileCardAction(Icons.Filled.ArrowDownward, Color.White.copy(alpha = 0.6f), 0.06f) { transfers?.onDownload(messageId) } })
+        uploading -> ({ FileCardAction(Icons.Filled.ArrowUpward, PomboColors.Overlay25, 0.04f, null) })
+        downloading || pausedDl -> ({ FileCardAction(Icons.Filled.ArrowDownward, PomboColors.Overlay25, 0.04f, null) })
+        !mine -> ({ FileCardAction(Icons.Filled.ArrowDownward, PomboColors.Overlay60, 0.06f) { transfers?.onDownload(messageId) } })
         else -> null
     }
 
     val incomplete = file.storedChunks != null && file.totalChunks != null && file.storedChunks < file.totalChunks
+
+    if (isVideo) {
+        val completedFile = if (ready) transfers?.completedFile(file.transferId) else null
+        // Kept once playback starts from the download, so its end does not restart the player.
+        val stream = remember(file.transferId) { mutableStateOf<android.net.Uri?>(null) }
+        LaunchedEffect(file.transferId, downloading, pausedDl, isError) {
+            if (isError || pausedDl) stream.value = null
+            else if (downloading && stream.value == null) stream.value = StorageStreams.uriFor(file.transferId)
+        }
+        val source = stream.value ?: completedFile?.let(android.net.Uri::fromFile) ?: transfers?.original(file.transferId)
+        VideoTile(
+            id = file.transferId,
+            fileName = file.fileName,
+            size = totalSize,
+            source = source,
+            downloading = active,
+            progress = pct,
+            working = working,
+            thumbnail = file.thumbnail,
+            status = when {
+                active || isError -> line1
+                incomplete -> "Incomplete on storage (${file.storedChunks}/${file.totalChunks})"
+                source == null && unreachable -> "Not on this device"
+                else -> ""
+            },
+            onDownload = if (source == null && !active && !unreachable && !incomplete) ({ transfers?.onDownload(messageId) }) else null,
+            onSave = if (completedFile != null) ({ transfers?.onSave(file.transferId, file.fileName) }) else null,
+            onRetry = if (incomplete && transfers?.canRetry(file.transferId) == true) ({ transfers.onRetry(file.transferId) }) else null
+        )
+        return
+    }
 
     Column(Modifier.width(CARD_WIDTH).clip(CARD_SHAPE).background(CARD_BG)) {
         Row(
@@ -334,15 +409,21 @@ fun StorageFileBubbleContent(
                         )
                     }
                 }
-                if (incomplete) Text(
-                    "⚠ incomplete on storage (${file.storedChunks}/${file.totalChunks})",
-                    color = Color(0xFFFBBF24).copy(alpha = 0.7f), fontSize = 10.sp, maxLines = 1,
-                    overflow = TextOverflow.Ellipsis, modifier = Modifier.padding(top = 2.dp)
-                )
+                if (incomplete) Row(Modifier.padding(top = 2.dp), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                    Text(
+                        "⚠ incomplete on storage (${file.storedChunks}/${file.totalChunks})",
+                        color = Color(0xFFFBBF24).copy(alpha = 0.7f), fontSize = 10.sp, maxLines = 1,
+                        overflow = TextOverflow.Ellipsis
+                    )
+                    if (transfers?.canRetry(file.transferId) == true) Text(
+                        "Retry", color = Color(0xFFFBBF24).copy(alpha = 0.9f), fontSize = 10.sp, maxLines = 1,
+                        modifier = Modifier.clickable { transfers.onRetry(file.transferId) }
+                    )
+                }
             }
             if (mine && action != null) action()
         }
-        if (active) ProgressBar(pct, Color(0xFF8B5CF6))
+        if (active) ProgressBar(pct, Color(0xFF8B5CF6), working)
     }
 }
 

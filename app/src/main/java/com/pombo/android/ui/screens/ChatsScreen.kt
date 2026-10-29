@@ -5,6 +5,7 @@ import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.requiredSize
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
@@ -28,7 +29,6 @@ import androidx.compose.material.icons.filled.MailOutline
 import androidx.compose.material.icons.filled.Pause
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.ui.draw.alpha
-import androidx.compose.material.icons.outlined.AccountBalanceWallet
 import androidx.compose.material.icons.outlined.Campaign
 import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.foundation.layout.offset
@@ -43,6 +43,8 @@ import androidx.compose.material.icons.outlined.Person
 import androidx.compose.material.icons.outlined.MailOutline
 import androidx.compose.material.icons.outlined.Close
 import androidx.compose.material.icons.outlined.Notifications
+import androidx.compose.material.icons.outlined.People
+import androidx.compose.material.icons.outlined.SwapVert
 import androidx.compose.material.icons.outlined.Storage
 import androidx.compose.ui.draw.clip
 import androidx.compose.material3.Icon
@@ -98,7 +100,7 @@ private fun mergeOrder(global: List<String>, slice: List<String>): List<String> 
 }
 
 @Composable
-internal fun ChatsTab(vm: AppViewModel, onCreate: () -> Unit, onJoin: () -> Unit, onConnect: () -> Unit = {}) {
+internal fun ChatsTab(vm: AppViewModel, onContacts: () -> Unit, onConnect: () -> Unit = {}, onExplore: () -> Unit = {}) {
     val status by vm.status.collectAsState()
     val channels by vm.channels.collectAsState()
     val busy by vm.busy.collectAsState()
@@ -137,29 +139,29 @@ internal fun ChatsTab(vm: AppViewModel, onCreate: () -> Unit, onJoin: () -> Unit
                 CreateAccountButton(onConnect)
             } else {
                 Row(verticalAlignment = Alignment.CenterVertically) {
-                    // Join by stream ID. Creating a channel lives in Explore.
-                    Box(
-                        Modifier.size(32.dp).background(Color.White.copy(alpha = 0.08f), CircleShape).clickableNoRipple(onJoin),
-                        contentAlignment = Alignment.Center
-                    ) { Text("#", color = PomboColors.Text, fontSize = 16.sp, fontWeight = FontWeight.Bold) }
-                    Spacer(Modifier.width(8.dp))
-                    // Wallet: what this account holds. The bell keeps the outer
-                    // edge, where the web mobile header also puts it and where a
-                    // badge is most visible.
-                    var walletOpen by remember { mutableStateOf(false) }
-                    Box(
-                        Modifier.size(32.dp)
-                            .background(Color.White.copy(alpha = 0.08f), CircleShape)
-                            .clickableNoRipple { walletOpen = true },
-                        contentAlignment = Alignment.Center
-                    ) {
+                    HeaderIconButton(34.dp, onContacts) {
                         Icon(
-                            Icons.Outlined.AccountBalanceWallet, contentDescription = "Wallet",
-                            tint = PomboColors.Text, modifier = Modifier.size(17.dp)
+                            Icons.Outlined.People, contentDescription = "Contacts",
+                            tint = PomboColors.TextPrimary, modifier = Modifier.size(24.dp)
                         )
                     }
-                    if (walletOpen) {
-                        com.pombo.android.ui.WalletSheet(vm) { walletOpen = false }
+                    Spacer(Modifier.width(8.dp))
+                    var transfersOpen by remember { mutableStateOf(false) }
+                    Box {
+                        TransfersButton(vm) { transfersOpen = true }
+                        androidx.compose.material3.DropdownMenu(
+                            expanded = transfersOpen,
+                            onDismissRequest = { transfersOpen = false },
+                            offset = androidx.compose.ui.unit.DpOffset(TRANSFERS_MENU_OFFSET, 0.dp),
+                            shape = RoundedCornerShape(12.dp),
+                            containerColor = PomboColors.SurfaceRaised,
+                            border = androidx.compose.foundation.BorderStroke(1.dp, PomboColors.Overlay10),
+                            // FIXED width: transfer stats redraw every second and a
+                            // wrap-content menu visibly breathes with each repaint.
+                            modifier = Modifier.width(320.dp)
+                        ) {
+                            ActiveTransfersSection(vm, channels)
+                        }
                     }
                     Spacer(Modifier.width(8.dp))
                     // Bell: recent channel invites. Android addition — on the
@@ -172,54 +174,22 @@ internal fun ChatsTab(vm: AppViewModel, onCreate: () -> Unit, onJoin: () -> Unit
                     // dismissed invites, dimmed, with Accept still available.
                     var showAllInvites by remember { mutableStateOf(false) }
                     Box {
-                        Box(
-                            Modifier.size(32.dp)
-                                .background(Color.White.copy(alpha = 0.08f), CircleShape)
-                                .clickableNoRipple { showAllInvites = false; invitesOpen = true },
-                            contentAlignment = Alignment.Center
-                        ) {
+                        HeaderIconButton(34.dp, { showAllInvites = false; invitesOpen = true }) {
                             Icon(
                                 Icons.Outlined.Notifications, contentDescription = "Channel invites",
-                                tint = PomboColors.Text, modifier = Modifier.size(17.dp)
+                                tint = PomboColors.TextPrimary, modifier = Modifier.size(24.dp)
                             )
                         }
-                        if (invites.isNotEmpty()) {
-                            Box(
-                                Modifier.align(Alignment.TopEnd)
-                                    .size(16.dp)
-                                    .background(PomboColors.Accent, CircleShape),
-                                contentAlignment = Alignment.Center
-                            ) {
-                                Text(
-                                    if (invites.size > 9) "9+" else invites.size.toString(),
-                                    color = Color.White, fontSize = 8.sp, fontWeight = FontWeight.Bold,
-                                    lineHeight = 8.sp,
-                                    textAlign = androidx.compose.ui.text.style.TextAlign.Center,
-                                    // Default line-height metrics push single-digit
-                                    // text a couple px low in a circle this tight —
-                                    // the classic Compose includeFontPadding offset.
-                                    style = androidx.compose.ui.text.TextStyle(
-                                        platformStyle = androidx.compose.ui.text.PlatformTextStyle(includeFontPadding = false)
-                                    )
-                                )
-                            }
-                        }
+                        if (invites.isNotEmpty()) HeaderBadge(invites.size, Modifier.align(Alignment.TopEnd))
                         androidx.compose.material3.DropdownMenu(
                             expanded = invitesOpen,
                             onDismissRequest = { invitesOpen = false },
-                            // End-aligned to the bell, the right edge stops 40dp
-                            // short of the screen's (8dp spacer + 32dp join
-                            // button) — at this width that reads as floating
-                            // mid-screen. The offset walks it to the margin.
-                            offset = androidx.compose.ui.unit.DpOffset(40.dp, 0.dp),
                             // Shape/color/border belong on the menu's own surface:
                             // a rounded background on the content leaves the
                             // surface's square corners showing behind it.
                             shape = RoundedCornerShape(12.dp),
-                            containerColor = Color(0xFF16161B),
-                            border = androidx.compose.foundation.BorderStroke(1.dp, Color.White.copy(alpha = 0.10f)),
-                            // FIXED width: transfer stats redraw every second and a
-                            // wrap-content menu visibly breathes with each repaint.
+                            containerColor = PomboColors.SurfaceRaised,
+                            border = androidx.compose.foundation.BorderStroke(1.dp, PomboColors.Overlay10),
                             modifier = Modifier.width(320.dp)
                         ) {
                             ChannelInvitesSection(
@@ -230,7 +200,6 @@ internal fun ChatsTab(vm: AppViewModel, onCreate: () -> Unit, onJoin: () -> Unit
                                 onShowAll = { showAllInvites = it },
                                 onAccepted = { invitesOpen = false }
                             )
-                            ActiveTransfersSection(vm, channels)
                         }
                     }
                 }
@@ -240,7 +209,7 @@ internal fun ChatsTab(vm: AppViewModel, onCreate: () -> Unit, onJoin: () -> Unit
         // Filter tabs (All / Personal / Communities) — active gets an orange underline
         Box(Modifier.fillMaxWidth().padding(horizontal = 8.dp)) {
             androidx.compose.material3.HorizontalDivider(
-                color = Color.White.copy(alpha = 0.06f),
+                color = PomboColors.Overlay6,
                 modifier = Modifier.align(Alignment.BottomCenter)
             )
             Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceEvenly) {
@@ -252,7 +221,7 @@ internal fun ChatsTab(vm: AppViewModel, onCreate: () -> Unit, onJoin: () -> Unit
                     ) {
                         Text(
                             f.label.uppercase(),
-                            color = if (active) PomboColors.Accent else Color.White.copy(alpha = 0.30f),
+                            color = if (active) PomboColors.Accent else PomboColors.Overlay30,
                             fontSize = 10.sp,
                             fontWeight = FontWeight.Medium,
                             letterSpacing = 0.15.em,
@@ -286,12 +255,20 @@ internal fun ChatsTab(vm: AppViewModel, onCreate: () -> Unit, onJoin: () -> Unit
         }
 
         if (filtered.isEmpty()) {
-            Box(Modifier.weight(1f).fillMaxWidth(), contentAlignment = Alignment.Center) {
+            Column(
+                Modifier.weight(1f).fillMaxWidth(),
+                horizontalAlignment = Alignment.CenterHorizontally,
+                verticalArrangement = Arrangement.Center
+            ) {
                 Text(
                     if (busy) "…" else "No channels yet",
-                    color = PomboColors.TextDim, fontSize = 14.sp,
+                    color = PomboColors.TextSecondary, fontSize = 14.sp,
                     textAlign = androidx.compose.ui.text.style.TextAlign.Center
                 )
+                if (!busy && filter == ChannelFilter.ALL) {
+                    Spacer(Modifier.height(12.dp))
+                    EmptyStateButton("Explore channels", onExplore)
+                }
             }
         } else {
             // Swipe left/right anywhere on the list to move between the filter
@@ -389,7 +366,7 @@ internal fun ChatsTab(vm: AppViewModel, onCreate: () -> Unit, onJoin: () -> Unit
                 Modifier.align(Alignment.BottomCenter).fillMaxWidth().height(32.dp)
                     .background(
                         Brush.verticalGradient(
-                            listOf(Color.Transparent, PomboColors.Background)
+                            listOf(Color.Transparent, PomboColors.Bg)
                         )
                     )
             )
@@ -436,6 +413,82 @@ internal fun ChatsTab(vm: AppViewModel, onCreate: () -> Unit, onJoin: () -> Unit
     }
 }
 
+/** End-aligns the transfers menu with the bell's, at the header margin: the bell plus its spacer. */
+private val TRANSFERS_MENU_OFFSET = 42.dp
+
+/**
+ * Header entry to the transfers: the count is downloads plus seeds, and a ring
+ * fills with the combined progress while anything downloads (web
+ * NotificationBellUI._transfersActivity).
+ */
+@Composable
+private fun TransfersButton(vm: AppViewModel, onClick: () -> Unit) {
+    val transferProgress by vm.fileProgress.collectAsState()
+    val activeSeeds by vm.activeSeeds.collectAsState()
+    val storageDownloads by vm.storageDownloads.collectAsState()
+    val mesh = transferProgress.values.filter { !it.done && it.failure == null }
+    val storage = storageDownloads.values.filter { it.status == "downloading" || it.status == "paused" }
+    val downloads = mesh.size + storage.size
+    val count = downloads + activeSeeds.size
+    var totalBytes = 0.0
+    var receivedBytes = 0.0
+    mesh.forEach { totalBytes += it.total; receivedBytes += it.received }
+    storage.forEach {
+        totalBytes += it.fileSize
+        if (it.total > 0) receivedBytes += it.received.toDouble() / it.total * it.fileSize
+    }
+    val fraction = if (totalBytes > 0) (receivedBytes / totalBytes).toFloat().coerceIn(0f, 1f) else 0f
+
+    Box {
+        HeaderIconButton(34.dp, onClick) {
+            if (downloads > 0) {
+                androidx.compose.foundation.Canvas(Modifier.requiredSize(36.dp)) {
+                    val stroke = 2.dp.toPx()
+                    val inset = stroke / 2
+                    val arcSize = androidx.compose.ui.geometry.Size(size.width - stroke, size.height - stroke)
+                    val topLeft = androidx.compose.ui.geometry.Offset(inset, inset)
+                    drawArc(
+                        PomboColors.Overlay10, 0f, 360f, false, topLeft, arcSize,
+                        style = androidx.compose.ui.graphics.drawscope.Stroke(stroke)
+                    )
+                    drawArc(
+                        PomboColors.Accent, -90f, 360f * fraction, false, topLeft, arcSize,
+                        style = androidx.compose.ui.graphics.drawscope.Stroke(
+                            stroke, cap = androidx.compose.ui.graphics.StrokeCap.Round
+                        )
+                    )
+                }
+            }
+            Icon(
+                Icons.Outlined.SwapVert, contentDescription = "Transfers",
+                tint = PomboColors.TextPrimary, modifier = Modifier.size(24.dp)
+            )
+        }
+        if (count > 0) HeaderBadge(count, Modifier.align(Alignment.TopEnd))
+    }
+}
+
+/** Orange count on a header icon, as on the bell. */
+@Composable
+private fun HeaderBadge(count: Int, modifier: Modifier = Modifier) {
+    Box(
+        modifier.size(16.dp).background(PomboColors.Accent, CircleShape),
+        contentAlignment = Alignment.Center
+    ) {
+        Text(
+            if (count > 9) "9+" else count.toString(),
+            color = Color.White, fontSize = 8.sp, fontWeight = FontWeight.Bold,
+            lineHeight = 8.sp,
+            textAlign = androidx.compose.ui.text.style.TextAlign.Center,
+            // Default line-height metrics push single-digit text a couple px
+            // low in a circle this tight: the classic includeFontPadding offset.
+            style = androidx.compose.ui.text.TextStyle(
+                platformStyle = androidx.compose.ui.text.PlatformTextStyle(includeFontPadding = false)
+            )
+        )
+    }
+}
+
 /**
  * Every download in flight and every file this device is serving, with a way
  * out. Sits under the invites in the same dropdown; the two share nothing but
@@ -453,10 +506,6 @@ private fun ActiveTransfersSection(vm: AppViewModel, channels: List<Channel>) {
         .filter { !it.done && it.failure == null }
     val activeStorageUp = storageUploads.values.filter { it.stage != "done" && it.error == null }
     val activeStorageDown = storageDownloads.values.filter { it.status == "downloading" || it.status == "paused" }
-    androidx.compose.material3.HorizontalDivider(
-        color = Color.White.copy(alpha = 0.08f),
-        modifier = Modifier.padding(vertical = 4.dp)
-    )
     // Inactive = complete on disk but not served (user-stopped,
     // or the channel was not opened this session). Recomputed
     // off activeSeeds plus a manual bump: deleting an INACTIVE
@@ -472,7 +521,7 @@ private fun ActiveTransfersSection(vm: AppViewModel, channels: List<Channel>) {
     ) {
         Text(
             "TRANSFERS",
-            color = Color.White.copy(alpha = 0.35f),
+            color = PomboColors.Overlay35,
             fontSize = 10.sp, fontWeight = FontWeight.SemiBold,
             letterSpacing = 0.1.em,
             modifier = Modifier.weight(1f)
@@ -489,8 +538,8 @@ private fun ActiveTransfersSection(vm: AppViewModel, channels: List<Channel>) {
         inactiveSeeds.isEmpty()
     ) {
         Text(
-            "No active transfers",
-            color = Color.White.copy(alpha = 0.40f), fontSize = 13.sp,
+            if (showInactiveSeeds) "No transfers" else "No active transfers",
+            color = PomboColors.Overlay40, fontSize = 13.sp,
             modifier = Modifier.padding(horizontal = 14.dp)
                 .padding(bottom = 12.dp)
         )
@@ -518,7 +567,7 @@ private fun ActiveTransfersSection(vm: AppViewModel, channels: List<Channel>) {
             val up = transferUploads[seed.fileId]
             val rate = com.pombo.android.ui.formatSpeed(up?.bytesPerSecond)
             TransferRow(
-                icon = Icons.Filled.ArrowUpward, iconTint = Color(0xFF4ADE80).copy(alpha = 0.7f),
+                icon = Icons.Filled.ArrowUpward, iconTint = PomboColors.Success.copy(alpha = 0.7f),
                 badge = "mesh", name = seed.fileName.ifEmpty { seed.fileId.take(8) },
                 sub = com.pombo.android.ui.formatBytes(seed.fileSize) +
                     (if (rate.isEmpty()) "" else " · ↑ $rate") +
@@ -581,7 +630,7 @@ private fun ActiveTransfersSection(vm: AppViewModel, channels: List<Channel>) {
         inactiveSeeds.forEach { seed ->
             val member = channels.any { it.messageStreamId == seed.messageStreamId }
             TransferRow(
-                icon = Icons.Filled.ArrowUpward, iconTint = Color.White.copy(alpha = 0.30f),
+                icon = Icons.Filled.ArrowUpward, iconTint = PomboColors.Overlay30,
                 badge = "mesh", name = seed.fileName.ifEmpty { seed.fileId.take(8) },
                 sub = com.pombo.android.ui.formatBytes(seed.fileSize) + " · Inactive",
                 onCancel = { vm.deleteSeed(seed.fileId); inactiveRefresh++ },
@@ -614,7 +663,7 @@ private fun ChannelInvitesSection(
     ) {
         Text(
             "CHANNEL INVITES",
-            color = Color.White.copy(alpha = 0.35f),
+            color = PomboColors.Overlay35,
             fontSize = 10.sp, fontWeight = FontWeight.SemiBold,
             letterSpacing = 0.1.em,
             modifier = Modifier.weight(1f)
@@ -625,7 +674,7 @@ private fun ChannelInvitesSection(
             fontSize = 10.sp, fontWeight = FontWeight.Medium,
             modifier = Modifier.clickableNoRipple { onShowAll(false) }
         )
-        Text("·", color = Color.White.copy(alpha = 0.20f), fontSize = 10.sp, modifier = Modifier.padding(horizontal = 5.dp))
+        Text("·", color = PomboColors.Overlay20, fontSize = 10.sp, modifier = Modifier.padding(horizontal = 5.dp))
         Text(
             "All",
             color = Color.White.copy(alpha = if (showAll) 0.70f else 0.30f),
@@ -640,7 +689,7 @@ private fun ChannelInvitesSection(
     if (invites.isEmpty() && visibleDismissed.isEmpty()) {
         Text(
             if (showAll) "No invites" else "No pending invites",
-            color = Color.White.copy(alpha = 0.40f), fontSize = 13.sp,
+            color = PomboColors.Overlay40, fontSize = 13.sp,
             modifier = Modifier.padding(horizontal = 14.dp)
                 .padding(bottom = 12.dp)
         )
@@ -676,33 +725,33 @@ private fun InterruptedCreateRow(
         Modifier
             .padding(horizontal = 10.dp, vertical = 4.dp)
             .fillMaxWidth()
-            .background(Color.White.copy(alpha = 0.02f), RoundedCornerShape(12.dp))
-            .border(1.dp, Color.White.copy(alpha = 0.04f), RoundedCornerShape(12.dp))
+            .background(PomboColors.Overlay2, RoundedCornerShape(12.dp))
+            .border(1.dp, PomboColors.Overlay4, RoundedCornerShape(12.dp))
             .padding(horizontal = 12.dp, vertical = 10.dp)
     ) {
         Row(verticalAlignment = Alignment.CenterVertically) {
             Text(
-                pending.name, color = PomboColors.Text, fontSize = 14.sp, fontWeight = FontWeight.Medium,
+                pending.name, color = PomboColors.TextPrimary, fontSize = 14.sp, fontWeight = FontWeight.Medium,
                 maxLines = 1, overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis,
                 modifier = Modifier.weight(1f, fill = false)
             )
-            Text(" · creation interrupted", color = Color.White.copy(alpha = 0.40f), fontSize = 12.sp, maxLines = 1)
+            Text(" · creation interrupted", color = PomboColors.Overlay40, fontSize = 12.sp, maxLines = 1)
         }
         Spacer(Modifier.height(8.dp))
         Row(Modifier.alpha(if (enabled) 1f else 0.4f), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
             Box(
-                Modifier.background(Color.White.copy(alpha = 0.90f), RoundedCornerShape(6.dp))
+                Modifier.background(PomboColors.Overlay90, RoundedCornerShape(6.dp))
                     .clickableNoRipple { if (enabled) onFinish() }
                     .padding(horizontal = 12.dp, vertical = 4.dp)
             ) {
-                Text("Finish", color = Color(0xFF0A0A0A), fontSize = 11.sp, fontWeight = FontWeight.Medium)
+                Text("Finish", color = PomboColors.Surface2, fontSize = 11.sp, fontWeight = FontWeight.Medium)
             }
             Box(
-                Modifier.background(Color.White.copy(alpha = 0.10f), RoundedCornerShape(6.dp))
+                Modifier.background(PomboColors.Overlay10, RoundedCornerShape(6.dp))
                     .clickableNoRipple { if (enabled) onDiscard() }
                     .padding(horizontal = 12.dp, vertical = 4.dp)
             ) {
-                Text("Discard", color = Color.White.copy(alpha = 0.70f), fontSize = 11.sp, fontWeight = FontWeight.Medium)
+                Text("Discard", color = PomboColors.Overlay70, fontSize = 11.sp, fontWeight = FontWeight.Medium)
             }
         }
     }
@@ -718,17 +767,17 @@ private fun DiscardCreateDialog(
         Text(
             "“${pending.name}” will not be created. What already reached the chain stays there, " +
                 "unused, and the POL it cost is not refunded.",
-            color = Color.White.copy(alpha = 0.50f), fontSize = 13.sp
+            color = PomboColors.Overlay50, fontSize = 13.sp
         )
         Spacer(Modifier.height(20.dp))
         Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
             Box(
                 Modifier.weight(1f)
-                    .background(Color.White.copy(alpha = 0.05f), RoundedCornerShape(12.dp))
+                    .background(PomboColors.Overlay5, RoundedCornerShape(12.dp))
                     .clickableNoRipple(onDismiss)
                     .padding(vertical = 10.dp),
                 contentAlignment = Alignment.Center
-            ) { Text("Keep", color = Color.White.copy(alpha = 0.60f), fontSize = 14.sp) }
+            ) { Text("Keep", color = PomboColors.Overlay60, fontSize = 14.sp) }
             Box(
                 Modifier.weight(1f)
                     .background(PomboColors.Danger.copy(alpha = 0.12f), RoundedCornerShape(12.dp))
@@ -759,29 +808,29 @@ private fun InviteRow(
             .padding(horizontal = 14.dp, vertical = 6.dp)
     ) {
         Text(
-            invite.name, color = PomboColors.Text,
+            invite.name, color = PomboColors.TextPrimary,
             fontSize = 13.sp, fontWeight = FontWeight.Medium
         )
         Text(
             "From: ${invite.from.take(6)}…${invite.from.takeLast(4)}",
-            color = Color.White.copy(alpha = 0.40f), fontSize = 11.sp
+            color = PomboColors.Overlay40, fontSize = 11.sp
         )
         Spacer(Modifier.height(6.dp))
         Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
             Box(
-                Modifier.background(Color.White.copy(alpha = 0.90f), RoundedCornerShape(6.dp))
+                Modifier.background(PomboColors.Overlay90, RoundedCornerShape(6.dp))
                     .clickableNoRipple(onAccept)
                     .padding(horizontal = 12.dp, vertical = 4.dp)
             ) {
-                Text("Accept", color = Color(0xFF0A0A0A), fontSize = 11.sp, fontWeight = FontWeight.Medium)
+                Text("Accept", color = PomboColors.Surface2, fontSize = 11.sp, fontWeight = FontWeight.Medium)
             }
             if (onDismiss != null) {
                 Box(
-                    Modifier.background(Color.White.copy(alpha = 0.10f), RoundedCornerShape(6.dp))
+                    Modifier.background(PomboColors.Overlay10, RoundedCornerShape(6.dp))
                         .clickableNoRipple(onDismiss)
                         .padding(horizontal = 12.dp, vertical = 4.dp)
                 ) {
-                    Text("Dismiss", color = Color.White.copy(alpha = 0.70f), fontSize = 11.sp, fontWeight = FontWeight.Medium)
+                    Text("Dismiss", color = PomboColors.Overlay70, fontSize = 11.sp, fontWeight = FontWeight.Medium)
                 }
             }
         }
@@ -827,12 +876,12 @@ private fun TransferRow(
             Row(verticalAlignment = Alignment.CenterVertically) {
                 com.pombo.android.ui.TransportBadge(badge)
                 Text(
-                    name, color = PomboColors.Text, fontSize = 12.sp, maxLines = 1,
+                    name, color = PomboColors.TextPrimary, fontSize = 12.sp, maxLines = 1,
                     overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis
                 )
             }
             Text(
-                sub, color = Color.White.copy(alpha = 0.40f), fontSize = 10.sp, maxLines = 1,
+                sub, color = PomboColors.Overlay40, fontSize = 10.sp, maxLines = 1,
                 overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis
             )
         }
@@ -840,14 +889,14 @@ private fun TransferRow(
             Icon(
                 if (paused) Icons.Filled.PlayArrow else Icons.Filled.Pause,
                 contentDescription = if (paused) "Resume" else "Pause",
-                tint = Color.White.copy(alpha = 0.45f),
+                tint = PomboColors.Overlay45,
                 modifier = Modifier.size(15.dp).clickableNoRipple { onPauseToggle() }
             )
         }
         if (onCancel != null) {
             Icon(
                 Icons.Filled.Close, contentDescription = "Cancel",
-                tint = Color.White.copy(alpha = 0.45f),
+                tint = PomboColors.Overlay45,
                 modifier = Modifier.size(15.dp).clickableNoRipple { onCancel() }
             )
         }
@@ -875,7 +924,7 @@ private fun PillButtonPlaceholder() {
         androidx.compose.material3.CircularProgressIndicator(
             modifier = Modifier.size(18.dp),
             color = Color.White,
-            trackColor = Color.White.copy(alpha = 0.25f),
+            trackColor = PomboColors.Overlay25,
             strokeWidth = 2.dp
         )
     }
@@ -892,9 +941,9 @@ private fun AccentPillButton(label: String, icon: androidx.compose.ui.graphics.v
             .padding(horizontal = 20.dp, vertical = 10.dp),
         verticalAlignment = Alignment.CenterVertically
     ) {
-        Icon(icon, contentDescription = null, tint = PomboColors.Text, modifier = Modifier.size(16.dp))
+        Icon(icon, contentDescription = null, tint = PomboColors.TextPrimary, modifier = Modifier.size(16.dp))
         Spacer(Modifier.width(8.dp))
-        Text(label, color = PomboColors.Text, fontSize = 14.sp, fontWeight = FontWeight.Medium)
+        Text(label, color = PomboColors.TextPrimary, fontSize = 14.sp, fontWeight = FontWeight.Medium)
     }
 }
 
@@ -913,7 +962,7 @@ private fun NewDmDialog(onDismiss: () -> Unit, onStart: (String, String?) -> Uni
         Spacer(Modifier.height(4.dp))
         Text(
             "Stored locally, only visible to you",
-            color = Color.White.copy(alpha = 0.25f), fontSize = 12.sp
+            color = PomboColors.Overlay25, fontSize = 12.sp
         )
 
         Spacer(Modifier.height(20.dp))
@@ -943,7 +992,7 @@ private fun ChannelListItem(
             // white 8.5% border (components.css:2389). The rows were drawn
             // flat, so the list read as loose text on black rather than the
             // stack of cards the web shows.
-            .background(Color.White.copy(alpha = 0.05f), RoundedCornerShape(12.dp))
+            .background(PomboColors.Overlay5, RoundedCornerShape(12.dp))
             .border(1.dp, Color.White.copy(alpha = 0.085f), RoundedCornerShape(12.dp))
             .clickable(onClick = onOpen)
             .padding(horizontal = 12.dp, vertical = 8.dp),
@@ -974,7 +1023,7 @@ private fun ChannelListItem(
         Column(Modifier.weight(1f)) {
             Row(verticalAlignment = Alignment.CenterVertically) {
                 Text(
-                    channel.name, color = PomboColors.Text, fontSize = 15.sp,
+                    channel.name, color = PomboColors.TextPrimary, fontSize = 15.sp,
                     fontWeight = FontWeight.SemiBold, maxLines = 1,
                     modifier = Modifier.weight(1f, fill = false)
                 )
@@ -985,7 +1034,7 @@ private fun ChannelListItem(
                     Spacer(Modifier.width(6.dp))
                     Icon(
                         Icons.Outlined.Campaign, contentDescription = null,
-                        tint = Color.White.copy(alpha = 0.40f), modifier = Modifier.size(14.dp)
+                        tint = PomboColors.Overlay40, modifier = Modifier.size(14.dp)
                     )
                 }
             }
@@ -999,7 +1048,7 @@ private fun ChannelListItem(
                 val body = collapseWhitespace(p.text)
                 Text(
                     if (channel.type == "dm") body else "${ensLabel ?: p.sender}: $body",
-                    color = PomboColors.TextDim, fontSize = 11.sp, maxLines = 1,
+                    color = PomboColors.TextSecondary, fontSize = 11.sp, maxLines = 1,
                     overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis
                 )
             }

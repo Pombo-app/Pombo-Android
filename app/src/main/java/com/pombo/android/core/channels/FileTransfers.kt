@@ -361,7 +361,8 @@ internal class FileTransfers(private val manager: ChannelManager) {
      * timeline. Progress is observed via [storageMedia].uploads, keyed by the
      * bubble's transferId.
      */
-    suspend fun sendStorageFile(source: com.pombo.android.core.StorageMedia.Source) {
+    /** @return the message id and the announced metadata */
+    suspend fun sendStorageFile(source: com.pombo.android.core.StorageMedia.Source): Pair<String, com.pombo.android.core.StorageMedia.StorageFileMetadata?> {
         val channel = _current.value ?: throw IllegalStateException("No channel open")
         if (source.size <= 0) throw IllegalArgumentException("File is empty")
         val sender = myAddress() ?: throw IllegalStateException("No identity")
@@ -394,6 +395,7 @@ internal class FileTransfers(private val manager: ChannelManager) {
             ensName = ensStore.cachedName(sender), ensAvatar = ensStore.cachedAvatar(sender)
         )
         storageTransferChannel[tid] = StorageTransferInfo(source.fileName, channelDisplayName(channel), channel.messageStreamId, bubble)
+        source.original?.let { storageMedia.recordSentOriginal(tid, it.toString()) }
         mergeMessages(listOf(bubble))
         try {
             // Gated channels: capture the CURRENT key for the whole transfer
@@ -445,7 +447,10 @@ internal class FileTransfers(private val manager: ChannelManager) {
                 sentDmStore.add(channel.messageStreamId, result.announce)
                 manager.rememberDmFileRows(id, result.chunkRows)
                 onLocalStateChanged()
+            } else {
+                manager.rememberChannelFileRows(id, result.chunkRows)
             }
+            return id to finalMeta
         } catch (e: Exception) {
             _messages.value = _messages.value.filterNot { it.id == id }
             throw e
@@ -636,6 +641,13 @@ internal class FileTransfers(private val manager: ChannelManager) {
 
     /** The completed storage download's file on disk, or null (for saving). */
     fun storageCompletedFile(transferId: String): java.io.File? = storageMedia.completedFile(transferId)
+
+    /** The file this device sent as [transferId], or null. */
+    fun storageOriginal(transferId: String): android.net.Uri? =
+        storageMedia.sentOriginal(transferId)?.let(android.net.Uri::parse)
+
+    /** See [com.pombo.android.core.StorageMedia.sweepLocalFiles]. */
+    fun sweepStorageLocalFiles(): List<String> = storageMedia.sweepLocalFiles()
 
     /**
      * Starts fetching the file announced by [messageId] in the open channel.

@@ -7,6 +7,8 @@
         <item name="android:statusBarColor">@color/pombo_background</item>
         <item name="android:navigationBarColor">@color/pombo_background</item>
         <item name="android:windowLightStatusBar">false</item>
+        <!-- OEM force-dark (MIUI) recolours dark-on-light controls into light-on-light. -->
+        <item name="android:forceDarkAllowed" tools:targetApi="q">false</item>
     </style>
 
     <!-- Launch theme: Android 12+ draws the system splash from these; older

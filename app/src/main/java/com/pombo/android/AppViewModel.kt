@@ -46,6 +46,10 @@ class AppViewModel(app: Application) : AndroidViewModel(app), PomboBridge.Listen
     private val failedOutbox = com.pombo.android.data.FailedOutboxStore(app)
     private val pendingCreateStore = com.pombo.android.data.PendingCreateStore(app)
     private val sentReactionsStore = com.pombo.android.data.SentReactionsStore(app)
+    private val pinsHiddenStore = com.pombo.android.data.PinsHiddenStore(app)
+    val pinsHidden get() = pinsHiddenStore.hidden
+    fun hidePins(streamId: String, newestTargetId: String) = pinsHiddenStore.hide(streamId, newestTargetId)
+    fun showPins(streamId: String) = pinsHiddenStore.show(streamId)
     private val epochKeyStore = com.pombo.android.data.EpochKeyStore(app)
     private val adminFloorStore = com.pombo.android.core.AdminFloorStore(app)
     private val notifier = com.pombo.android.core.Notifier(app)
@@ -111,6 +115,9 @@ class AppViewModel(app: Application) : AndroidViewModel(app), PomboBridge.Listen
         // are normally started FROM the foreground by ensureTransferService().
         if (transferBusy()) ensureTransferService()
     }
+
+    /** transferId -> whether our upload's original can still be read; see [storageOriginal]. */
+    private val originalReadable = java.util.concurrent.ConcurrentHashMap<String, Boolean>()
 
     val manager = ChannelManager(
         bridge = bridge,
@@ -235,6 +242,7 @@ class AppViewModel(app: Application) : AndroidViewModel(app), PomboBridge.Listen
             inviteStore.clearAccount()
             sentDmStore.clearAccount()
             sentReactionsStore.clearAccount()
+            pinsHiddenStore.clearAccount()
             failedOutbox.clearAccount()
             pendingCreateStore.clearAccount()
             epochKeyStore.clearAccount()
@@ -1527,14 +1535,29 @@ class AppViewModel(app: Application) : AndroidViewModel(app), PomboBridge.Listen
         }
     )
 
+    private val connection = com.pombo.android.core.ConnectionMonitor(
+        viewModelScope,
+        probe = {
+            manager.storageEndpoints.latestKnownUrl()?.let { com.pombo.android.core.StorageHttp.answers(it) }
+        },
+        sleep = { delay(it) }
+    )
+
+    /** True once the app has failed to reach anything for a minute; drives the offline banner. */
+    val offline: StateFlow<Boolean> = connection.offline
+
     private val networkCallback = object : android.net.ConnectivityManager.NetworkCallback() {
         override fun onCapabilitiesChanged(network: android.net.Network, caps: android.net.NetworkCapabilities) {
             val up = caps.hasCapability(android.net.NetworkCapabilities.NET_CAPABILITY_VALIDATED)
             val cameUp = up && !networkValidated
             networkValidated = up
+            connection.setNetworkUp(up)
             if (cameUp) viewModelScope.launch { nodeRevival.kick() }
         }
-        override fun onLost(network: android.net.Network) { networkValidated = false }
+        override fun onLost(network: android.net.Network) {
+            networkValidated = false
+            connection.setNetworkUp(false)
+        }
     }
 
     private val _address = MutableStateFlow(store.address)
@@ -1659,6 +1682,8 @@ class AppViewModel(app: Application) : AndroidViewModel(app), PomboBridge.Listen
         viewModelScope.launch { previewStore.warmUp() }
         sentReactionsStore.scopeAddress = address
         sentReactionsStore.memoryOnly = guest
+        pinsHiddenStore.memoryOnly = guest
+        pinsHiddenStore.scopeAddress = address
         pushRegistry.scopeAddress = address
         contactsStore.memoryOnly = guest
         settingsStore.scopeAddress = address
@@ -1710,6 +1735,7 @@ class AppViewModel(app: Application) : AndroidViewModel(app), PomboBridge.Listen
         blobStore.scopeAddress = store.address
         previewStore.scopeAddress = store.address
         sentReactionsStore.scopeAddress = store.address
+        pinsHiddenStore.scopeAddress = store.address
         pushRegistry.scopeAddress = store.address
         settingsStore.scopeAddress = store.address
         syncStore.scopeAddress = store.address
@@ -1853,9 +1879,7 @@ class AppViewModel(app: Application) : AndroidViewModel(app), PomboBridge.Listen
             // user already joined (web does this right after the initial render).
             runCatching { manager.refreshChannelMetadataFromGraph() }
         }
-        viewModelScope.launch(kotlinx.coroutines.Dispatchers.IO) {
-            com.pombo.android.core.TransferDirs.sweep(app, manager.transferDir)
-        }
+        sweepTransfers(manager.transferDir)
         // A Keystore invalidation (lock screen removed, backup restore) forces
         // SecurePrefs to reset the affected files so the app can boot at all —
         // a silent reset of the wallet file would otherwise look like account loss.
@@ -1872,8 +1896,13 @@ class AppViewModel(app: Application) : AndroidViewModel(app), PomboBridge.Listen
             )
         }
         runCatching {
-            app.getSystemService(android.net.ConnectivityManager::class.java)
-                ?.registerDefaultNetworkCallback(networkCallback)
+            val cm = app.getSystemService(android.net.ConnectivityManager::class.java)
+            // No callback fires at all when there is no network at start.
+            if (cm?.activeNetwork == null) {
+                networkValidated = false
+                connection.setNetworkUp(false)
+            }
+            cm?.registerDefaultNetworkCallback(networkCallback)
         }
     }
 
@@ -1965,6 +1994,18 @@ class AppViewModel(app: Application) : AndroidViewModel(app), PomboBridge.Listen
 
     /** Whether a storage download has landed on disk, ready to save. */
     fun storageFileReady(transferId: String) = manager.storageCompletedFile(transferId) != null
+    fun storageCompletedFile(transferId: String) = manager.storageCompletedFile(transferId)
+    /** The original of our upload, while it is still on the device and readable. */
+    fun storageOriginal(transferId: String): android.net.Uri? {
+        val uri = manager.storageOriginal(transferId) ?: return null
+        val readable = originalReadable.getOrPut(transferId) {
+            runCatching {
+                getApplication<Application>().contentResolver.openFileDescriptor(uri, "r")?.close() != null
+            }.getOrDefault(false)
+        }
+        return uri.takeIf { readable }
+    }
+    fun localMeshFile(fileId: String) = manager.media.localFile(fileId)
 
     // Auto-save bookkeeping: which completed transfers already had saveFile/
     // saveStorageFile run for them, so a bubble doesn't re-trigger the
@@ -2176,6 +2217,8 @@ class AppViewModel(app: Application) : AndroidViewModel(app), PomboBridge.Listen
     val explore: StateFlow<List<ExploreChannel>> = _explore.asStateFlow()
     private val _exploreLoading = MutableStateFlow(false)
     val exploreLoading: StateFlow<Boolean> = _exploreLoading.asStateFlow()
+    private val _exploreDirectoryFailed = MutableStateFlow(false)
+    val exploreDirectoryFailed: StateFlow<Boolean> = _exploreDirectoryFailed.asStateFlow()
 
     // ==================== identity ====================
 
@@ -3186,7 +3229,9 @@ class AppViewModel(app: Application) : AndroidViewModel(app), PomboBridge.Listen
                 val (pinned, hidden) = loadCurationManifest()
 
                 // 1. Public Pombo channels indexed by The Graph.
-                val discovered = com.pombo.android.core.GraphApi.getPublicPomboChannels()
+                val fetched = com.pombo.android.core.GraphApi.getPublicPomboChannels()
+                _exploreDirectoryFailed.value = fetched == null
+                val discovered = (fetched ?: emptyList())
                     .associateBy { it.streamId.lowercase() }
                     .toMutableMap()
 
@@ -3643,6 +3688,8 @@ class AppViewModel(app: Application) : AndroidViewModel(app), PomboBridge.Listen
         manager.openChannel(messageStreamId)
     }
     fun closeChannel() = manager.closeCurrent()
+    /** Open the current channel again from scratch, as leaving and coming back would. */
+    fun reopenCurrent() { current.value?.let { manager.openChannel(it.messageStreamId) } }
     fun removeChannel(messageStreamId: String) {
         val name = channels.value.find { it.messageStreamId == messageStreamId }?.name
         manager.removeChannel(messageStreamId)
@@ -3727,8 +3774,17 @@ class AppViewModel(app: Application) : AndroidViewModel(app), PomboBridge.Listen
         transferSends.toList().forEach { it.cancel() }
         val next = com.pombo.android.core.TransferDirs.forScope(getApplication(), address, guest, _address.value)
         manager.transferDir = next
+        originalReadable.clear()
+        sweepTransfers(next)
+    }
+
+    private fun sweepTransfers(dir: java.io.File) {
         viewModelScope.launch(kotlinx.coroutines.Dispatchers.IO) {
-            com.pombo.android.core.TransferDirs.sweep(getApplication(), next)
+            com.pombo.android.core.TransferDirs.sweep(getApplication(), dir)
+            val resolver = getApplication<Application>().contentResolver
+            for (uri in manager.sweepStorageLocalFiles()) runCatching {
+                resolver.releasePersistableUriPermission(android.net.Uri.parse(uri), android.content.Intent.FLAG_GRANT_READ_URI_PERMISSION)
+            }
         }
     }
 
@@ -3774,16 +3830,44 @@ class AppViewModel(app: Application) : AndroidViewModel(app), PomboBridge.Listen
      * the source (chunk i = bytes i*upc..), so the slicer opens a SEEKABLE file
      * descriptor; compression reads it sequentially via [openStream].
      */
-    fun sendStorageFile(uri: android.net.Uri) = trackSend(viewModelScope.launch {
+    /** An upload this session announced with gaps: what a retry sends again (memory only). */
+    private data class StorageRetry(val uri: android.net.Uri, val channelStreamId: String, val messageId: String)
+    private val storageRetries = java.util.concurrent.ConcurrentHashMap<String, StorageRetry>()
+    private val _retryableTransfers = MutableStateFlow<Set<String>>(emptySet())
+    val retryableTransfers: StateFlow<Set<String>> = _retryableTransfers.asStateFlow()
+
+    private fun publishRetries() { _retryableTransfers.value = storageRetries.keys.toSet() }
+
+    /**
+     * Sends an upload announced with gaps again, then deletes the incomplete
+     * copy (erasing it from storage with this session's keys). The old copy
+     * stays until the new one is out, so a failed retry loses nothing.
+     */
+    fun retryStorageUpload(transferId: String) {
+        val retry = storageRetries[transferId] ?: return
+        if (manager.current.value?.messageStreamId != retry.channelStreamId) return
+        storageRetries.remove(transferId); publishRetries()
+        trackSend(viewModelScope.launch { shareStorage(retry.uri, replaces = retry, retriedId = transferId) })
+    }
+
+    fun sendStorageFile(uri: android.net.Uri) = trackSend(viewModelScope.launch { shareStorage(uri, replaces = null, retriedId = null) })
+
+    private suspend fun shareStorage(uri: android.net.Uri, replaces: StorageRetry?, retriedId: String?) {
         try {
             val (name, size, mime) = documentInfo(uri)
-                ?: run { _lastError.value = "Could not read the file size"; return@launch }
+                ?: run { _lastError.value = "Could not read the file size"; return }
             val resolver = getApplication<Application>().contentResolver
             val fName = name; val fMime = mime; val fSize = size
+            val isVideo = fMime.startsWith("video/")
+            if (isVideo) runCatching {
+                resolver.takePersistableUriPermission(uri, android.content.Intent.FLAG_GRANT_READ_URI_PERMISSION)
+            }
             val source = object : com.pombo.android.core.StorageMedia.Source {
                 override val fileName = fName
                 override val fileType = fMime
                 override val size = fSize
+                override val original = if (isVideo) uri else null
+                override fun thumbnail() = if (isVideo) com.pombo.android.core.VideoThumbnail.make(getApplication(), uri) else null
                 override fun openStream() = resolver.openInputStream(uri)
                     ?: throw java.io.IOException("cannot open the selected file")
                 override fun openSlicer(): com.pombo.android.core.StorageMedia.Source.Slicer {
@@ -3809,11 +3893,22 @@ class AppViewModel(app: Application) : AndroidViewModel(app), PomboBridge.Listen
                 }
             }
             ensureTransferService()
-            manager.sendStorageFile(source)
+            val channelStreamId = manager.current.value?.messageStreamId
+            val (messageId, meta) = manager.sendStorageFile(source)
+            if (replaces != null) runCatching { manager.deleteMessage(replaces.messageId) }
+            val stored = meta?.storedChunks
+            val total = meta?.totalChunks
+            if (meta != null && stored != null && total != null && stored < total && channelStreamId != null) {
+                storageRetries[meta.transferId] = StorageRetry(uri, channelStreamId, messageId); publishRetries()
+                toast("Stored with gaps ($stored/$total)", com.pombo.android.ui.ToastKind.WARNING, subtitle = "Retry sends it again")
+            } else if (replaces != null) {
+                toast("Sent again", com.pombo.android.ui.ToastKind.SUCCESS)
+            }
         } catch (e: Exception) {
+            if (replaces != null && retriedId != null) { storageRetries[retriedId] = replaces; publishRetries() }
             _lastError.value = "Storage share failed: ${e.message}"
         }
-    })
+    }
 
     fun toggleReaction(messageId: String, emoji: String, add: Boolean) = viewModelScope.launch {
         // Web wording: a raw exception string means nothing to the user.
@@ -3855,6 +3950,7 @@ class AppViewModel(app: Application) : AndroidViewModel(app), PomboBridge.Listen
             "connecting" -> _status.value = NetStatus.CONNECTING
             "node-up" -> {
                 nodeRevival.onAlive()
+                connection.setNodeAlive(true)
                 if (_status.value == NetStatus.CONNECTING) _status.value = NetStatus.CONNECTED
                 manager.kickOpenReadRetry()
             }
@@ -3865,6 +3961,7 @@ class AppViewModel(app: Application) : AndroidViewModel(app), PomboBridge.Listen
         android.util.Log.w("PomboBridge", "Streamr node failed to start: $message")
         _status.value = NetStatus.CONNECTING
         nodeRevival.onDead()
+        connection.setNodeAlive(false)
     }
 
     override fun onBridgeConnected(address: String) {

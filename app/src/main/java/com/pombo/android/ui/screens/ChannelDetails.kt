@@ -116,7 +116,7 @@ internal fun ChannelSettingsSheet(vm: AppViewModel, channel: Channel, canModerat
         Column(
             Modifier
                 .fillMaxSize()
-                .background(PomboColors.Background)
+                .background(PomboColors.Bg)
                 .safeDrawingPadding()
                 .padding(bottom = (12.dp - bottomInset).coerceAtLeast(0.dp))
         ) {
@@ -132,18 +132,18 @@ internal fun ChannelSettingsSheet(vm: AppViewModel, channel: Channel, canModerat
                 Icon(
                     Icons.AutoMirrored.Filled.ArrowBack,
                     contentDescription = "Back",
-                    tint = Color.White.copy(alpha = 0.40f),
+                    tint = PomboColors.Overlay40,
                     modifier = Modifier.size(20.dp).clickableNoRipple {
                         if (sub != null) sub = null else onDismiss()
                     }
                 )
                 Text(
                     sub?.label ?: "Channel Details",
-                    color = Color.White.copy(alpha = 0.90f),
+                    color = PomboColors.Overlay90,
                     fontSize = 18.sp, fontWeight = FontWeight.Medium
                 )
             }
-            Box(Modifier.fillMaxWidth().height(1.dp).background(Color.White.copy(alpha = 0.05f)))
+            Box(Modifier.fillMaxWidth().height(1.dp).background(PomboColors.Overlay5))
 
             Column(
                 Modifier
@@ -156,7 +156,6 @@ internal fun ChannelSettingsSheet(vm: AppViewModel, channel: Channel, canModerat
                     ChannelSubPanel.MEMBERS -> ChannelMembersPanel(vm, channel, canModerate)
                     ChannelSubPanel.MODERATION -> ChannelModerationPanel(vm, channel, canModerate)
                     ChannelSubPanel.STORAGE -> ChannelStoragePanel(vm, channel, canModerate)
-                    ChannelSubPanel.DELETE -> ChannelDeletePanel(vm, channel, onDismiss)
                     ChannelSubPanel.DESTROY -> ChannelDestroyPanel(vm, channel, onDismiss)
                 }
             }
@@ -183,8 +182,6 @@ private enum class ChannelSubPanel(val label: String) {
     MEMBERS("Members"),
     MODERATION("Moderation"),
     STORAGE("Storage"),
-    /** Local leave — the streams stay on-chain. */
-    DELETE("Leave Channel"),
     /** On-chain delete of all three streams — irreversible for everyone. */
     DESTROY("Delete Channel")
 }
@@ -250,7 +247,7 @@ private fun ChannelDetailsMain(
                 Avatar(
                     dmPeer, size = 88.dp, cornerRadiusFraction = 0.5,
                     ensAvatarUrl = ensAvatars[dmPeer.lowercase()],
-                    modifier = Modifier.border(1.dp, Color.White.copy(alpha = 0.08f), CircleShape)
+                    modifier = Modifier.border(1.dp, PomboColors.Overlay8, CircleShape)
                 )
             } else if (image != null) {
                 androidx.compose.foundation.Image(
@@ -260,12 +257,12 @@ private fun ChannelDetailsMain(
                     contentDescription = null,
                     contentScale = androidx.compose.ui.layout.ContentScale.Crop,
                     modifier = Modifier.size(88.dp).clip(CircleShape)
-                        .border(1.dp, Color.White.copy(alpha = 0.08f), CircleShape)
+                        .border(1.dp, PomboColors.Overlay8, CircleShape)
                 )
             } else {
                 Avatar(
                     channel.messageStreamId, size = 88.dp, cornerRadiusFraction = 0.5,
-                    modifier = Modifier.border(1.dp, Color.White.copy(alpha = 0.08f), CircleShape)
+                    modifier = Modifier.border(1.dp, PomboColors.Overlay8, CircleShape)
                 )
             }
             if (canModerate) {
@@ -274,8 +271,8 @@ private fun ChannelDetailsMain(
                     Modifier
                         .align(Alignment.BottomEnd)
                         .size(28.dp)
-                        .background(Color(0xFF16161B), CircleShape)
-                        .border(1.dp, Color.White.copy(alpha = 0.20f), CircleShape)
+                        .background(PomboColors.SurfaceRaised, CircleShape)
+                        .border(1.dp, PomboColors.Overlay20, CircleShape)
                         .clickableNoRipple {
                             picker.launch(androidx.activity.result.PickVisualMediaRequest(
                                 androidx.activity.result.contract.ActivityResultContracts.PickVisualMedia.ImageOnly
@@ -285,7 +282,7 @@ private fun ChannelDetailsMain(
                 ) {
                     Icon(
                         Icons.Outlined.FileUpload, contentDescription = "Upload image",
-                        tint = Color.White.copy(alpha = 0.60f), modifier = Modifier.size(14.dp)
+                        tint = PomboColors.Overlay60, modifier = Modifier.size(14.dp)
                     )
                 }
             }
@@ -294,7 +291,7 @@ private fun ChannelDetailsMain(
         Column(Modifier.weight(1f)) {
             Row(verticalAlignment = Alignment.CenterVertically) {
                 Text(
-                    channel.name, color = Color.White.copy(alpha = 0.90f),
+                    channel.name, color = PomboColors.Overlay90,
                     fontSize = 20.sp, fontWeight = FontWeight.SemiBold, maxLines = 1
                 )
                 // Web canEditName = (type === 'dm' || canDelete || no
@@ -306,7 +303,7 @@ private fun ChannelDetailsMain(
                     Spacer(Modifier.width(8.dp))
                     Icon(
                         Icons.Filled.Edit, contentDescription = "Edit channel info",
-                        tint = Color.White.copy(alpha = 0.40f),
+                        tint = PomboColors.Overlay40,
                         modifier = Modifier.size(16.dp).clickableNoRipple { editing = !editing }
                     )
                 }
@@ -320,9 +317,9 @@ private fun ChannelDetailsMain(
         Spacer(Modifier.height(8.dp))
         OutlinedTextField(
             value = editName, onValueChange = { editName = it },
-            placeholder = { Text("Enter name", color = Color.White.copy(alpha = 0.25f), fontSize = 14.sp) },
+            placeholder = { Text("Enter name", color = PomboColors.Overlay25, fontSize = 14.sp) },
             singleLine = true, shape = RoundedCornerShape(8.dp),
-            textStyle = androidx.compose.ui.text.TextStyle(fontSize = 14.sp, color = PomboColors.Text),
+            textStyle = androidx.compose.ui.text.TextStyle(fontSize = 14.sp, color = PomboColors.TextPrimary),
             colors = pomboFieldColors(), modifier = Modifier.fillMaxWidth()
         )
     }
@@ -340,16 +337,16 @@ private fun ChannelDetailsMain(
             Spacer(Modifier.height(6.dp))
             Text(
                 "This name is stored locally only",
-                color = Color.White.copy(alpha = 0.30f), fontSize = 12.sp
+                color = PomboColors.Overlay30, fontSize = 12.sp
             )
         }
         if (channel.type != "dm" && !memberLocalRename) {
             Spacer(Modifier.height(8.dp))
             OutlinedTextField(
                 value = editDesc, onValueChange = { editDesc = it },
-                placeholder = { Text("Enter description", color = Color.White.copy(alpha = 0.25f), fontSize = 14.sp) },
+                placeholder = { Text("Enter description", color = PomboColors.Overlay25, fontSize = 14.sp) },
                 shape = RoundedCornerShape(8.dp), maxLines = 3,
-                textStyle = androidx.compose.ui.text.TextStyle(fontSize = 14.sp, color = PomboColors.Text),
+                textStyle = androidx.compose.ui.text.TextStyle(fontSize = 14.sp, color = PomboColors.TextPrimary),
                 colors = pomboFieldColors(), modifier = Modifier.fillMaxWidth()
             )
             // Gas warning — the web shows the same caveat before an on-chain
@@ -380,12 +377,12 @@ private fun ChannelDetailsMain(
             Spacer(Modifier.width(8.dp))
             Box(
                 Modifier
-                    .background(Color.White.copy(alpha = 0.10f), RoundedCornerShape(8.dp))
+                    .background(PomboColors.Overlay10, RoundedCornerShape(8.dp))
                     .clickableNoRipple {
                         editName = channel.name; editDesc = channel.description; editing = false
                     }
                     .padding(horizontal = 16.dp, vertical = 8.dp)
-            ) { Text("Cancel", color = Color.White.copy(alpha = 0.70f), fontSize = 13.sp) }
+            ) { Text("Cancel", color = PomboColors.Overlay70, fontSize = 13.sp) }
         }
     } else if (channel.description.isNotEmpty()) {
         Spacer(Modifier.height(20.dp))
@@ -401,8 +398,8 @@ private fun ChannelDetailsMain(
     Spacer(Modifier.height(20.dp))
     Column(
         Modifier.fillMaxWidth()
-            .background(Color.White.copy(alpha = 0.03f), RoundedCornerShape(12.dp))
-            .border(1.dp, Color.White.copy(alpha = 0.05f), RoundedCornerShape(12.dp))
+            .background(PomboColors.Overlay3, RoundedCornerShape(12.dp))
+            .border(1.dp, PomboColors.Overlay5, RoundedCornerShape(12.dp))
             .padding(horizontal = 14.dp, vertical = 12.dp)
     ) {
         // A DM's stream id is the peer's address with the inbox suffix, so the
@@ -435,9 +432,9 @@ private fun ChannelDetailsMain(
                         .format(java.util.Date(ps.paidUntil * 1000L))
                 },
                 valueColor = when {
-                    ps.state != ChannelManager.SubscriptionState.ACTIVE -> Color(0xFFF87171).copy(alpha = 0.80f)
+                    ps.state != ChannelManager.SubscriptionState.ACTIVE -> PomboColors.Danger.copy(alpha = 0.80f)
                     msLeft < com.pombo.android.core.GateFormat.WARNING_MS -> Color(0xFFFBBF24)
-                    else -> Color.White.copy(alpha = 0.70f)
+                    else -> PomboColors.Overlay70
                 }
             )
         }
@@ -457,7 +454,7 @@ private fun ChannelDetailsMain(
     // section that failed to load.
     if (isGated || canModerate || channel.type != "dm") {
         Spacer(Modifier.height(20.dp))
-        Box(Modifier.fillMaxWidth().height(1.dp).background(Color.White.copy(alpha = 0.05f)))
+        Box(Modifier.fillMaxWidth().height(1.dp).background(PomboColors.Overlay5))
         Spacer(Modifier.height(20.dp))
     }
     if (isGated) {
@@ -479,25 +476,25 @@ private fun ChannelDetailsMain(
         val responderOn = remember(responderRev, channel.messageStreamId) { vm.isKeyResponder(channel) }
         Row(
             Modifier.fillMaxWidth()
-                .background(Color.White.copy(alpha = 0.03f), RoundedCornerShape(12.dp))
-                .border(1.dp, Color.White.copy(alpha = 0.05f), RoundedCornerShape(12.dp))
+                .background(PomboColors.Overlay3, RoundedCornerShape(12.dp))
+                .border(1.dp, PomboColors.Overlay5, RoundedCornerShape(12.dp))
                 .clickableNoRipple { vm.setKeyResponder(channel, !responderOn) }
                 .padding(horizontal = 16.dp, vertical = 16.dp),
             verticalAlignment = Alignment.CenterVertically
         ) {
             Icon(
                 Icons.Outlined.Key, contentDescription = null,
-                tint = Color.White.copy(alpha = 0.40f), modifier = Modifier.size(18.dp)
+                tint = PomboColors.Overlay40, modifier = Modifier.size(18.dp)
             )
             Spacer(Modifier.width(12.dp))
             Text(
-                "Background Key Responder", color = Color.White.copy(alpha = 0.70f),
+                "Background Key Responder", color = PomboColors.Overlay70,
                 fontSize = 14.sp, modifier = Modifier.weight(1f)
             )
             Spacer(Modifier.width(12.dp))
             Text(
                 if (responderOn) "ON" else "OFF",
-                color = if (responderOn) Color(0xFF34D399) else Color.White.copy(alpha = 0.30f),
+                color = if (responderOn) Color(0xFF34D399) else PomboColors.Overlay30,
                 fontSize = 12.sp, fontWeight = FontWeight.Medium
             )
         }
@@ -526,7 +523,7 @@ private fun FactRow(
     label: String,
     value: String,
     mono: Boolean = false,
-    valueColor: Color = Color.White.copy(alpha = 0.70f),
+    valueColor: Color = PomboColors.Overlay70,
     trailing: androidx.compose.ui.graphics.vector.ImageVector? = null,
     onClick: (() -> Unit)? = null
 ) {
@@ -534,7 +531,7 @@ private fun FactRow(
         Modifier.fillMaxWidth().let { if (onClick != null) it.clickableNoRipple(onClick) else it },
         verticalAlignment = Alignment.CenterVertically
     ) {
-        Text(label, color = Color.White.copy(alpha = 0.35f), fontSize = 12.sp)
+        Text(label, color = PomboColors.Overlay35, fontSize = 12.sp)
         Spacer(Modifier.width(12.dp))
         Text(
             value, color = valueColor, fontSize = 12.sp,
@@ -548,7 +545,7 @@ private fun FactRow(
             Spacer(Modifier.width(8.dp))
             Icon(
                 trailing, contentDescription = null,
-                tint = Color.White.copy(alpha = 0.30f), modifier = Modifier.size(14.dp)
+                tint = PomboColors.Overlay30, modifier = Modifier.size(14.dp)
             )
         }
     }
@@ -566,7 +563,7 @@ private fun ChannelAttributeChips(channel: Channel, gateAccess: String?) {
         horizontalArrangement = Arrangement.spacedBy(6.dp),
         verticalArrangement = Arrangement.spacedBy(6.dp)
     ) {
-        val tint = Color.White.copy(alpha = 0.55f)
+        val tint = PomboColors.Overlay55
         if (channel.type == "gated") {
             // "Gated" until the gate itself is read: naming a mode here would
             // state one of the four as fact whenever the read fails.
@@ -613,14 +610,14 @@ private fun ChannelAttributeChips(channel: Channel, gateAccess: String?) {
 private fun AttributeChip(label: String, icon: @Composable () -> Unit) {
     Row(
         Modifier
-            .background(Color.White.copy(alpha = 0.05f), RoundedCornerShape(999.dp))
-            .border(1.dp, Color.White.copy(alpha = 0.08f), RoundedCornerShape(999.dp))
+            .background(PomboColors.Overlay5, RoundedCornerShape(999.dp))
+            .border(1.dp, PomboColors.Overlay8, RoundedCornerShape(999.dp))
             .padding(horizontal = 8.dp, vertical = 4.dp),
         verticalAlignment = Alignment.CenterVertically
     ) {
         icon()
         Spacer(Modifier.width(5.dp))
-        Text(label, color = Color.White.copy(alpha = 0.55f), fontSize = 12.sp)
+        Text(label, color = PomboColors.Overlay55, fontSize = 12.sp)
     }
 }
 
@@ -637,12 +634,12 @@ private fun NotificationPill(vm: AppViewModel, channel: Channel) {
     Row(
         Modifier
             .background(
-                if (notified) PomboColors.Accent.copy(alpha = 0.10f) else Color.White.copy(alpha = 0.05f),
+                if (notified) PomboColors.Accent.copy(alpha = 0.10f) else PomboColors.Overlay5,
                 RoundedCornerShape(999.dp)
             )
             .border(
                 1.dp,
-                if (notified) PomboColors.Accent.copy(alpha = 0.30f) else Color.White.copy(alpha = 0.10f),
+                if (notified) PomboColors.Accent.copy(alpha = 0.30f) else PomboColors.Overlay10,
                 RoundedCornerShape(999.dp)
             )
             .clickableNoRipple { vm.setChannelNotifications(channel, !notified) }
@@ -652,13 +649,13 @@ private fun NotificationPill(vm: AppViewModel, channel: Channel) {
         Icon(
             if (notified) Icons.Filled.Notifications else Icons.Outlined.Notifications,
             contentDescription = null,
-            tint = if (notified) PomboColors.Accent else Color.White.copy(alpha = 0.40f),
+            tint = if (notified) PomboColors.Accent else PomboColors.Overlay40,
             modifier = Modifier.size(16.dp)
         )
         Spacer(Modifier.width(8.dp))
         Text(
             if (notified) "Notifications On" else "Notifications Off",
-            color = if (notified) Color.White else Color.White.copy(alpha = 0.40f),
+            color = if (notified) Color.White else PomboColors.Overlay40,
             fontSize = 14.sp, fontWeight = FontWeight.Medium
         )
     }
@@ -669,7 +666,7 @@ private fun NotificationPill(vm: AppViewModel, channel: Channel) {
 internal fun SectionLabel(text: String) {
     Text(
         text.uppercase(),
-        color = Color.White.copy(alpha = 0.80f),
+        color = PomboColors.Overlay80,
         fontSize = 12.sp, fontWeight = FontWeight.Medium, letterSpacing = 0.8.sp,
         modifier = Modifier.padding(bottom = 6.dp)
     )
@@ -698,7 +695,7 @@ private fun HintIcon(open: Boolean, onToggle: () -> Unit) {
 private fun HintBody(text: String) {
     Text(
         text,
-        color = Color.White.copy(alpha = 0.40f), fontSize = 12.sp, lineHeight = 16.sp
+        color = PomboColors.Overlay40, fontSize = 12.sp, lineHeight = 16.sp
     )
 }
 
@@ -707,9 +704,9 @@ private fun HintBody(text: String) {
 private fun ValueBox(text: String) {
     Text(
         text,
-        color = Color.White.copy(alpha = 0.70f), fontSize = 14.sp, lineHeight = 20.sp,
+        color = PomboColors.Overlay70, fontSize = 14.sp, lineHeight = 20.sp,
         modifier = Modifier.fillMaxWidth()
-            .background(Color.White.copy(alpha = 0.05f), RoundedCornerShape(8.dp))
+            .background(PomboColors.Overlay5, RoundedCornerShape(8.dp))
             .padding(horizontal = 12.dp, vertical = 10.dp)
     )
 }
@@ -753,16 +750,16 @@ private fun ChannelNavRow(
     destructive: Boolean = false,
     onClick: () -> Unit
 ) {
-    val danger = Color(0xFFF87171)
+    val danger = PomboColors.Danger
     Row(
         Modifier.fillMaxWidth()
             .background(
-                if (destructive) danger.copy(alpha = 0.06f) else Color.White.copy(alpha = 0.03f),
+                if (destructive) danger.copy(alpha = 0.06f) else PomboColors.Overlay3,
                 RoundedCornerShape(12.dp)
             )
             .border(
                 1.dp,
-                if (destructive) danger.copy(alpha = 0.20f) else Color.White.copy(alpha = 0.05f),
+                if (destructive) danger.copy(alpha = 0.20f) else PomboColors.Overlay5,
                 RoundedCornerShape(12.dp)
             )
             .clickableNoRipple(onClick)
@@ -772,19 +769,19 @@ private fun ChannelNavRow(
         if (leadingIcon != null) {
             Icon(
                 leadingIcon, contentDescription = null,
-                tint = if (destructive) danger.copy(alpha = 0.80f) else Color.White.copy(alpha = 0.40f),
+                tint = if (destructive) danger.copy(alpha = 0.80f) else PomboColors.Overlay40,
                 modifier = Modifier.size(18.dp)
             )
             Spacer(Modifier.width(12.dp))
         }
         Text(
             label,
-            color = if (destructive) danger.copy(alpha = 0.90f) else Color.White.copy(alpha = 0.70f),
+            color = if (destructive) danger.copy(alpha = 0.90f) else PomboColors.Overlay70,
             fontSize = 14.sp, modifier = Modifier.weight(1f)
         )
         Icon(
             Icons.AutoMirrored.Filled.KeyboardArrowRight, contentDescription = null,
-            tint = if (destructive) danger.copy(alpha = 0.35f) else Color.White.copy(alpha = 0.20f),
+            tint = if (destructive) danger.copy(alpha = 0.35f) else PomboColors.Overlay20,
             modifier = Modifier.size(18.dp)
         )
     }
@@ -846,7 +843,7 @@ private fun ChannelMembersPanel(vm: AppViewModel, channel: Channel, canModerate:
     // ── CURRENT MEMBERS ─────────────────────────────────────────────
     Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
         Text(
-            "CURRENT MEMBERS", color = Color.White.copy(alpha = 0.40f),
+            "CURRENT MEMBERS", color = PomboColors.Overlay40,
             fontSize = 12.sp, fontWeight = FontWeight.Medium, letterSpacing = 0.8.sp,
             modifier = Modifier.weight(1f)
         )
@@ -855,10 +852,10 @@ private fun ChannelMembersPanel(vm: AppViewModel, channel: Channel, canModerate:
     Spacer(Modifier.height(12.dp))
 
     when {
-        members == null -> Text("Loading...", color = Color.White.copy(alpha = 0.30f), fontSize = 13.sp)
+        members == null -> Text("Loading...", color = PomboColors.Overlay30, fontSize = 13.sp)
         members!!.isEmpty() -> Text(
             "No members found",
-            color = Color.White.copy(alpha = 0.30f), fontSize = 13.sp
+            color = PomboColors.Overlay30, fontSize = 13.sp
         )
         else -> members!!.forEach { row ->
             val addr = row.address
@@ -874,8 +871,8 @@ private fun ChannelMembersPanel(vm: AppViewModel, channel: Channel, canModerate:
 
             Row(
                 Modifier.fillMaxWidth().padding(bottom = 8.dp)
-                    .background(Color.White.copy(alpha = 0.05f), RoundedCornerShape(12.dp))
-                    .border(1.dp, Color.White.copy(alpha = 0.05f), RoundedCornerShape(12.dp))
+                    .background(PomboColors.Overlay5, RoundedCornerShape(12.dp))
+                    .border(1.dp, PomboColors.Overlay5, RoundedCornerShape(12.dp))
                     .padding(horizontal = 10.dp, vertical = 10.dp),
                 verticalAlignment = Alignment.CenterVertically
             ) {
@@ -903,19 +900,19 @@ private fun ChannelMembersPanel(vm: AppViewModel, channel: Channel, canModerate:
                                 (if (expired) "expired " else "until ") + java.text.SimpleDateFormat(
                                     "d MMM yyyy", java.util.Locale.getDefault()
                                 ).format(java.util.Date(row.paidUntil * 1000L)),
-                                color = if (expired) Color(0xFFF87171).copy(alpha = 0.80f)
-                                    else Color.White.copy(alpha = 0.40f),
+                                color = if (expired) PomboColors.Danger.copy(alpha = 0.80f)
+                                    else PomboColors.Overlay40,
                                 fontSize = 11.sp, modifier = Modifier.padding(start = 4.dp)
                             )
                         }
-                        if (isMe) Text("(you)", color = Color.White.copy(alpha = 0.60f), fontSize = 11.sp, modifier = Modifier.padding(start = 4.dp))
+                        if (isMe) Text("(you)", color = PomboColors.Overlay60, fontSize = 11.sp, modifier = Modifier.padding(start = 4.dp))
                     }
                 }
                 if (canManage) {
                     Box {
                         Icon(
                             Icons.Filled.MoreVert, contentDescription = "Manage member",
-                            tint = Color.White.copy(alpha = 0.30f),
+                            tint = PomboColors.Overlay30,
                             modifier = Modifier.size(18.dp).clickableNoRipple { kebabFor = addr }
                         )
                         MemberKebab(
@@ -942,10 +939,10 @@ private fun ChannelMembersPanel(vm: AppViewModel, channel: Channel, canModerate:
     // WrongMode on TOKEN/NFT/PAID, whose members hold or pay() themselves) ──
     if (canManageMembers && channel.type == "gated" && manualAddAllowed) {
         Spacer(Modifier.height(16.dp))
-        Box(Modifier.fillMaxWidth().height(1.dp).background(Color.White.copy(alpha = 0.05f)))
+        Box(Modifier.fillMaxWidth().height(1.dp).background(PomboColors.Overlay5))
         Spacer(Modifier.height(16.dp))
         Text(
-            "ADD MEMBERS", color = Color.White.copy(alpha = 0.40f),
+            "ADD MEMBERS", color = PomboColors.Overlay40,
             fontSize = 12.sp, fontWeight = FontWeight.Medium, letterSpacing = 0.8.sp
         )
         Spacer(Modifier.height(12.dp))
@@ -956,28 +953,28 @@ private fun ChannelMembersPanel(vm: AppViewModel, channel: Channel, canModerate:
             androidx.compose.foundation.text.BasicTextField(
                 value = newMember, onValueChange = { newMember = it },
                 singleLine = true,
-                textStyle = androidx.compose.ui.text.TextStyle(fontSize = 14.sp, color = PomboColors.Text),
+                textStyle = androidx.compose.ui.text.TextStyle(fontSize = 14.sp, color = PomboColors.TextPrimary),
                 cursorBrush = androidx.compose.ui.graphics.SolidColor(PomboColors.Accent),
                 modifier = Modifier.weight(1f)
-                    .background(Color.White.copy(alpha = 0.05f), RoundedCornerShape(12.dp))
-                    .border(1.dp, Color.White.copy(alpha = 0.10f), RoundedCornerShape(12.dp))
+                    .background(PomboColors.Overlay5, RoundedCornerShape(12.dp))
+                    .border(1.dp, PomboColors.Overlay10, RoundedCornerShape(12.dp))
                     .padding(horizontal = 16.dp, vertical = 12.dp),
                 decorationBox = { inner ->
-                    if (newMember.isEmpty()) Text("0x… or name.eth", color = Color.White.copy(alpha = 0.20f), fontSize = 14.sp)
+                    if (newMember.isEmpty()) Text("0x… or name.eth", color = PomboColors.Overlay20, fontSize = 14.sp)
                     inner()
                 }
             )
             Spacer(Modifier.width(8.dp))
             Box(
                 Modifier
-                    .background(Color.White.copy(alpha = 0.10f), RoundedCornerShape(12.dp))
-                    .border(1.dp, Color.White.copy(alpha = 0.20f), RoundedCornerShape(12.dp))
+                    .background(PomboColors.Overlay10, RoundedCornerShape(12.dp))
+                    .border(1.dp, PomboColors.Overlay20, RoundedCornerShape(12.dp))
                     .clickableNoRipple {
                         if (valid && !busy) { vm.addMember(newMember.trim()) { reloadKey++ }; newMember = "" }
                     }
                     .padding(horizontal = 16.dp, vertical = 12.dp)
             ) {
-                Text("Add", color = if (valid && !busy) Color.White else Color.White.copy(alpha = 0.30f), fontSize = 14.sp)
+                Text("Add", color = if (valid && !busy) Color.White else PomboColors.Overlay30, fontSize = 14.sp)
             }
         }
         Spacer(Modifier.height(12.dp))
@@ -988,7 +985,7 @@ private fun ChannelMembersPanel(vm: AppViewModel, channel: Channel, canModerate:
         ) {
             Text(
                 if (batchOpen) "▾ Batch add multiple addresses" else "▸ Batch add multiple addresses",
-                color = Color.White.copy(alpha = 0.40f), fontSize = 13.sp
+                color = PomboColors.Overlay40, fontSize = 13.sp
             )
         }
         if (batchOpen) {
@@ -996,18 +993,18 @@ private fun ChannelMembersPanel(vm: AppViewModel, channel: Channel, canModerate:
             androidx.compose.foundation.text.BasicTextField(
                 value = batchText, onValueChange = { batchText = it },
                 textStyle = androidx.compose.ui.text.TextStyle(
-                    fontSize = 13.sp, color = PomboColors.Text,
+                    fontSize = 13.sp, color = PomboColors.TextPrimary,
                     fontFamily = androidx.compose.ui.text.font.FontFamily.Monospace
                 ),
                 cursorBrush = androidx.compose.ui.graphics.SolidColor(PomboColors.Accent),
                 modifier = Modifier.fillMaxWidth().heightIn(min = 96.dp)
-                    .background(Color.White.copy(alpha = 0.05f), RoundedCornerShape(12.dp))
-                    .border(1.dp, Color.White.copy(alpha = 0.10f), RoundedCornerShape(12.dp))
+                    .background(PomboColors.Overlay5, RoundedCornerShape(12.dp))
+                    .border(1.dp, PomboColors.Overlay10, RoundedCornerShape(12.dp))
                     .padding(horizontal = 16.dp, vertical = 12.dp),
                 decorationBox = { inner ->
                     if (batchText.isEmpty()) Text(
                         "Paste addresses (one per line)\n0x...\n0x...",
-                        color = Color.White.copy(alpha = 0.20f), fontSize = 13.sp,
+                        color = PomboColors.Overlay20, fontSize = 13.sp,
                         fontFamily = androidx.compose.ui.text.font.FontFamily.Monospace
                     )
                     inner()
@@ -1016,8 +1013,8 @@ private fun ChannelMembersPanel(vm: AppViewModel, channel: Channel, canModerate:
             Spacer(Modifier.height(8.dp))
             Box(
                 Modifier.fillMaxWidth()
-                    .background(Color.White.copy(alpha = 0.10f), RoundedCornerShape(12.dp))
-                    .border(1.dp, Color.White.copy(alpha = 0.20f), RoundedCornerShape(12.dp))
+                    .background(PomboColors.Overlay10, RoundedCornerShape(12.dp))
+                    .border(1.dp, PomboColors.Overlay20, RoundedCornerShape(12.dp))
                     .clickableNoRipple {
                         if (!busy) {
                             val addrs = batchText.split('\n').map { it.trim() }.filter { it.isNotEmpty() }
@@ -1037,8 +1034,8 @@ private fun ChannelMembersPanel(vm: AppViewModel, channel: Channel, canModerate:
         androidx.compose.ui.window.Dialog(onDismissRequest = { confirmRemove = null }) {
             Column(
                 Modifier.width(320.dp)
-                    .background(Color(0xFF111113), RoundedCornerShape(16.dp))
-                    .border(1.dp, Color.White.copy(alpha = 0.06f), RoundedCornerShape(16.dp))
+                    .background(PomboColors.Surface, RoundedCornerShape(16.dp))
+                    .border(1.dp, PomboColors.Overlay6, RoundedCornerShape(16.dp))
                     .padding(20.dp)
             ) {
                 Text("Remove member", color = Color.White, fontSize = 16.sp, fontWeight = FontWeight.Medium)
@@ -1046,17 +1043,17 @@ private fun ChannelMembersPanel(vm: AppViewModel, channel: Channel, canModerate:
                 Text(
                     "${shortAddress(addr)} comes off the allowlist and stops receiving channel " +
                         "keys. No ban mark, so you can add them back later. One transaction.",
-                    color = Color.White.copy(alpha = 0.50f), fontSize = 13.sp
+                    color = PomboColors.Overlay50, fontSize = 13.sp
                 )
                 Spacer(Modifier.height(20.dp))
                 Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                     Box(
                         Modifier.weight(1f)
-                            .background(Color.White.copy(alpha = 0.05f), RoundedCornerShape(12.dp))
+                            .background(PomboColors.Overlay5, RoundedCornerShape(12.dp))
                             .clickableNoRipple { confirmRemove = null }
                             .padding(vertical = 10.dp),
                         contentAlignment = Alignment.Center
-                    ) { Text("Cancel", color = Color.White.copy(alpha = 0.60f), fontSize = 14.sp) }
+                    ) { Text("Cancel", color = PomboColors.Overlay60, fontSize = 14.sp) }
                     Box(
                         Modifier.weight(1f)
                             .background(PomboColors.Danger.copy(alpha = 0.15f), RoundedCornerShape(12.dp))
@@ -1094,7 +1091,7 @@ private fun ChannelMembersPanel(vm: AppViewModel, channel: Channel, canModerate:
 @Composable
 private fun RefreshButton(onClick: () -> Unit) {
     Text(
-        "↻ Refresh", color = Color.White.copy(alpha = 0.60f), fontSize = 13.sp,
+        "↻ Refresh", color = PomboColors.Overlay60, fontSize = 13.sp,
         modifier = Modifier.clickableNoRipple(onClick)
     )
 }
@@ -1128,11 +1125,11 @@ internal fun MemberLabel(
     }
     val name = ensName ?: nickname ?: announced
     if (name != null) {
-        Text(name, color = Color.White.copy(alpha = 0.85f), fontSize = 13.sp, maxLines = 1)
+        Text(name, color = PomboColors.Overlay85, fontSize = 13.sp, maxLines = 1)
     } else {
         Text(
             address,
-            color = Color.White.copy(alpha = 0.70f), fontSize = 10.sp,
+            color = PomboColors.Overlay70, fontSize = 10.sp,
             fontFamily = androidx.compose.ui.text.font.FontFamily.Monospace
         )
     }
@@ -1240,7 +1237,7 @@ private fun BanLevelRow(
 ) {
     Row(
         Modifier.fillMaxWidth()
-            .background(Color.White.copy(alpha = 0.04f), RoundedCornerShape(12.dp))
+            .background(PomboColors.Overlay4, RoundedCornerShape(12.dp))
             .clickableNoRipple { if (enabled) onCheckedChange(!checked) }
             .padding(horizontal = 12.dp, vertical = 10.dp)
     ) {
@@ -1250,7 +1247,7 @@ private fun BanLevelRow(
             enabled = enabled,
             colors = androidx.compose.material3.CheckboxDefaults.colors(
                 checkedColor = PomboColors.Accent,
-                uncheckedColor = Color.White.copy(alpha = 0.30f),
+                uncheckedColor = PomboColors.Overlay30,
                 checkmarkColor = Color.White
             ),
             modifier = Modifier.size(20.dp)
@@ -1290,13 +1287,13 @@ private fun MemberKebab(
         // Shape/color/border on the menu's own surface — a rounded background
         // on the content leaves the surface's square corners showing behind.
         shape = RoundedCornerShape(12.dp),
-        containerColor = Color(0xFF16161B),
-        border = androidx.compose.foundation.BorderStroke(1.dp, Color.White.copy(alpha = 0.10f)),
+        containerColor = PomboColors.SurfaceRaised,
+        border = androidx.compose.foundation.BorderStroke(1.dp, PomboColors.Overlay10),
         modifier = Modifier.width(230.dp)
     ) {
         Column(Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 8.dp)) {
-            Text("Member", color = Color.White.copy(alpha = 0.40f), fontSize = 11.sp)
-            Text(shortAddr, color = Color.White.copy(alpha = 0.80f), fontSize = 13.sp, fontFamily = androidx.compose.ui.text.font.FontFamily.Monospace)
+            Text("Member", color = PomboColors.Overlay40, fontSize = 11.sp)
+            Text(shortAddr, color = PomboColors.Overlay80, fontSize = 13.sp, fontFamily = androidx.compose.ui.text.font.FontFamily.Monospace)
         }
         com.pombo.android.ui.ContextMenuDivider()
         if (isOwner) {
@@ -1305,11 +1302,11 @@ private fun MemberKebab(
                 Modifier.fillMaxWidth().clickableNoRipple(onToggleGrant).padding(horizontal = 16.dp, vertical = 10.dp),
                 verticalAlignment = Alignment.CenterVertically
             ) {
-                Icon(Icons.Filled.VpnKey, contentDescription = null, tint = if (canGrant) purple else Color.White.copy(alpha = 0.70f), modifier = Modifier.size(16.dp))
+                Icon(Icons.Filled.VpnKey, contentDescription = null, tint = if (canGrant) purple else PomboColors.Overlay70, modifier = Modifier.size(16.dp))
                 Spacer(Modifier.width(8.dp))
-                Text("Moderator", color = if (canGrant) purple else Color.White.copy(alpha = 0.70f), fontSize = 14.sp, modifier = Modifier.weight(1f))
+                Text("Moderator", color = if (canGrant) purple else PomboColors.Overlay70, fontSize = 14.sp, modifier = Modifier.weight(1f))
                 Spacer(Modifier.width(8.dp))
-                Text(if (canGrant) "ON" else "OFF", color = if (canGrant) purple else Color.White.copy(alpha = 0.30f), fontSize = 12.sp)
+                Text(if (canGrant) "ON" else "OFF", color = if (canGrant) purple else PomboColors.Overlay30, fontSize = 12.sp)
             }
             com.pombo.android.ui.ContextMenuDivider()
         }
@@ -1319,9 +1316,9 @@ private fun MemberKebab(
             Modifier.fillMaxWidth().clickableNoRipple(onRemove).padding(horizontal = 16.dp, vertical = 10.dp),
             verticalAlignment = Alignment.CenterVertically
         ) {
-            Icon(Icons.Outlined.PersonRemove, contentDescription = null, tint = Color.White.copy(alpha = 0.50f), modifier = Modifier.size(16.dp))
+            Icon(Icons.Outlined.PersonRemove, contentDescription = null, tint = PomboColors.Overlay50, modifier = Modifier.size(16.dp))
             Spacer(Modifier.width(8.dp))
-            Text("Remove from channel", color = Color.White.copy(alpha = 0.50f), fontSize = 14.sp)
+            Text("Remove from channel", color = PomboColors.Overlay50, fontSize = 14.sp)
         }
         Row(
             Modifier.fillMaxWidth().clickableNoRipple(onBan).padding(horizontal = 16.dp, vertical = 10.dp),
@@ -1343,12 +1340,12 @@ private fun StreamPermissionRow(
 ) {
     Row(
         Modifier.fillMaxWidth().padding(bottom = 4.dp)
-            .background(Color.White.copy(alpha = 0.05f), RoundedCornerShape(8.dp))
+            .background(PomboColors.Overlay5, RoundedCornerShape(8.dp))
             .padding(horizontal = 10.dp, vertical = 6.dp),
         verticalAlignment = Alignment.CenterVertically
     ) {
         val gold = Color(0xFFEAB308).copy(alpha = 0.80f)
-        val dim = Color.White.copy(alpha = 0.40f)
+        val dim = PomboColors.Overlay40
         if (p.isPublic) {
             Icon(Icons.Outlined.Public, contentDescription = null, tint = gold, modifier = Modifier.size(14.dp))
             Spacer(Modifier.width(4.dp))
@@ -1356,11 +1353,11 @@ private fun StreamPermissionRow(
         } else {
             val ensName = ensNames[p.userAddress.lowercase()]
             if (ensName != null) {
-                Text(ensName, color = Color.White.copy(alpha = 0.70f), fontSize = 12.sp, maxLines = 1)
+                Text(ensName, color = PomboColors.Overlay70, fontSize = 12.sp, maxLines = 1)
             } else {
                 Text(
                     "${p.userAddress.take(8)}...${p.userAddress.takeLast(4)}",
-                    color = Color.White.copy(alpha = 0.60f), fontSize = 12.sp,
+                    color = PomboColors.Overlay60, fontSize = 12.sp,
                     fontFamily = androidx.compose.ui.text.font.FontFamily.Monospace
                 )
             }
@@ -1388,7 +1385,7 @@ private fun PermIcon(icon: androidx.compose.ui.graphics.vector.ImageVector, tint
 /** The sub/pub/edit/del/grant legend under the permission list. */
 @Composable
 private fun PermissionLegend() {
-    val dim = Color.White.copy(alpha = 0.20f)
+    val dim = PomboColors.Overlay20
     Row(
         horizontalArrangement = Arrangement.spacedBy(10.dp),
         modifier = Modifier.fillMaxWidth().padding(top = 6.dp)
@@ -1455,21 +1452,21 @@ private fun ChannelStoragePanel(vm: AppViewModel, channel: Channel, canModerate:
                 keyboardOptions = androidx.compose.foundation.text.KeyboardOptions(
                     keyboardType = androidx.compose.ui.text.input.KeyboardType.Number
                 ),
-                textStyle = androidx.compose.ui.text.TextStyle(fontSize = 14.sp, color = PomboColors.Text),
+                textStyle = androidx.compose.ui.text.TextStyle(fontSize = 14.sp, color = PomboColors.TextPrimary),
                 cursorBrush = androidx.compose.ui.graphics.SolidColor(PomboColors.Accent),
                 modifier = Modifier.width(96.dp)
-                    .background(Color.White.copy(alpha = 0.05f), RoundedCornerShape(8.dp))
-                    .border(1.dp, Color.White.copy(alpha = 0.10f), RoundedCornerShape(8.dp))
+                    .background(PomboColors.Overlay5, RoundedCornerShape(8.dp))
+                    .border(1.dp, PomboColors.Overlay10, RoundedCornerShape(8.dp))
                     .padding(horizontal = 12.dp, vertical = 8.dp),
                 decorationBox = { inner ->
                     if (daysText.isEmpty()) {
-                        Text("Days", color = Color.White.copy(alpha = 0.20f), fontSize = 14.sp)
+                        Text("Days", color = PomboColors.Overlay20, fontSize = 14.sp)
                     }
                     inner()
                 }
             )
             Spacer(Modifier.width(10.dp))
-            Text("days", color = Color.White.copy(alpha = 0.50f), fontSize = 14.sp)
+            Text("days", color = PomboColors.Overlay50, fontSize = 14.sp)
             Spacer(Modifier.width(10.dp))
             val days = daysText.toIntOrNull() ?: 0
             val valid = com.pombo.android.ChannelManager.canSaveRetention(
@@ -1477,16 +1474,16 @@ private fun ChannelStoragePanel(vm: AppViewModel, channel: Channel, canModerate:
             Box(
                 Modifier
                     .background(
-                        if (valid) Color.White.copy(alpha = 0.10f) else Color.White.copy(alpha = 0.04f),
+                        if (valid) PomboColors.Overlay10 else PomboColors.Overlay4,
                         RoundedCornerShape(8.dp)
                     )
-                    .border(1.dp, Color.White.copy(alpha = 0.10f), RoundedCornerShape(8.dp))
+                    .border(1.dp, PomboColors.Overlay10, RoundedCornerShape(8.dp))
                     .clickableNoRipple { if (valid) vm.setStorageDays(days) { reloadKey++ } }
                     .padding(horizontal = 12.dp, vertical = 6.dp)
             ) {
                 Text(
                     "Save",
-                    color = if (valid) Color.White.copy(alpha = 0.80f) else Color.White.copy(alpha = 0.25f),
+                    color = if (valid) PomboColors.Overlay80 else PomboColors.Overlay25,
                     fontSize = 12.sp
                 )
             }
@@ -1495,7 +1492,7 @@ private fun ChannelStoragePanel(vm: AppViewModel, channel: Channel, canModerate:
         Text(
             info?.storageDays?.let { "$it ${if (it == 1) "day" else "days"}" }
                 ?: if (info?.enabled == true) "Not set" else "-",
-            color = Color.White.copy(alpha = 0.70f), fontSize = 14.sp
+            color = PomboColors.Overlay70, fontSize = 14.sp
         )
     }
 
@@ -1535,13 +1532,13 @@ private fun ChannelStoragePanel(vm: AppViewModel, channel: Channel, canModerate:
     SectionLabel("Storage Provider")
     val nodes = info?.nodes ?: emptyList()
     if (info != null && nodes.isEmpty()) {
-        Text("No storage provider", color = Color.White.copy(alpha = 0.40f), fontSize = 14.sp)
+        Text("No storage provider", color = PomboColors.Overlay40, fontSize = 14.sp)
     }
     nodes.forEach { node ->
         Row(
             Modifier.fillMaxWidth().padding(bottom = 8.dp)
-                .background(Color.White.copy(alpha = 0.03f), RoundedCornerShape(12.dp))
-                .border(1.dp, Color.White.copy(alpha = 0.05f), RoundedCornerShape(12.dp))
+                .background(PomboColors.Overlay3, RoundedCornerShape(12.dp))
+                .border(1.dp, PomboColors.Overlay5, RoundedCornerShape(12.dp))
                 .padding(horizontal = 12.dp, vertical = 10.dp),
             verticalAlignment = Alignment.CenterVertically
         ) {
@@ -1549,7 +1546,7 @@ private fun ChannelStoragePanel(vm: AppViewModel, channel: Channel, canModerate:
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     Text(
                         if (node.address.equals(vm.pomboStorageNode, ignoreCase = true)) "Pombo" else "Custom",
-                        color = Color.White.copy(alpha = 0.50f), fontSize = 12.sp
+                        color = PomboColors.Overlay50, fontSize = 12.sp
                     )
                     // The two streams disagree — a previous add/remove only half
                     // applied. Removing and re-adding heals it.
@@ -1560,7 +1557,7 @@ private fun ChannelStoragePanel(vm: AppViewModel, channel: Channel, canModerate:
                 }
                 Text(
                     node.address,
-                    color = Color.White.copy(alpha = 0.70f), fontSize = 12.sp,
+                    color = PomboColors.Overlay70, fontSize = 12.sp,
                     fontFamily = androidx.compose.ui.text.font.FontFamily.Monospace,
                     maxLines = 1, overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis
                 )
@@ -1570,7 +1567,7 @@ private fun ChannelStoragePanel(vm: AppViewModel, channel: Channel, canModerate:
                 // Web: a trash-can icon button, white/40 — not a "Remove" label.
                 Icon(
                     Icons.Outlined.Delete, contentDescription = "Remove storage provider",
-                    tint = Color.White.copy(alpha = 0.40f),
+                    tint = PomboColors.Overlay40,
                     modifier = Modifier.size(18.dp).clickableNoRipple { confirmRemove = node.address }
                 )
             }
@@ -1587,10 +1584,10 @@ private fun ChannelStoragePanel(vm: AppViewModel, channel: Channel, canModerate:
             ) {
                 Icon(
                     Icons.Filled.Add, contentDescription = null,
-                    tint = Color.White.copy(alpha = 0.60f), modifier = Modifier.size(14.dp)
+                    tint = PomboColors.Overlay60, modifier = Modifier.size(14.dp)
                 )
                 Spacer(Modifier.width(6.dp))
-                Text("Add Storage Provider", color = Color.White.copy(alpha = 0.60f), fontSize = 13.sp)
+                Text("Add Storage Provider", color = PomboColors.Overlay60, fontSize = 13.sp)
             }
         } else {
             // No label of its own: the section above it already says what
@@ -1606,7 +1603,7 @@ private fun ChannelStoragePanel(vm: AppViewModel, channel: Channel, canModerate:
                         Modifier.size(18.dp)
                             .border(
                                 1.5.dp,
-                                if (customProvider == custom) PomboColors.Accent else Color.White.copy(alpha = 0.25f),
+                                if (customProvider == custom) PomboColors.Accent else PomboColors.Overlay25,
                                 androidx.compose.foundation.shape.CircleShape
                             ),
                         contentAlignment = Alignment.Center
@@ -1619,7 +1616,7 @@ private fun ChannelStoragePanel(vm: AppViewModel, channel: Channel, canModerate:
                         }
                     }
                     Spacer(Modifier.width(10.dp))
-                    Text(label, color = Color.White.copy(alpha = 0.85f), fontSize = 14.sp)
+                    Text(label, color = PomboColors.Overlay85, fontSize = 14.sp)
                 }
             }
             if (customProvider) {
@@ -1628,11 +1625,11 @@ private fun ChannelStoragePanel(vm: AppViewModel, channel: Channel, canModerate:
                     value = customAddress,
                     onValueChange = { customAddress = it.trim() },
                     placeholder = {
-                        Text("0x… node address", color = Color.White.copy(alpha = 0.20f), fontSize = 13.sp)
+                        Text("0x… node address", color = PomboColors.Overlay20, fontSize = 13.sp)
                     },
                     singleLine = true, shape = RoundedCornerShape(12.dp),
                     textStyle = androidx.compose.ui.text.TextStyle(
-                        fontSize = 13.sp, color = PomboColors.Text,
+                        fontSize = 13.sp, color = PomboColors.TextPrimary,
                         fontFamily = androidx.compose.ui.text.font.FontFamily.Monospace
                     ),
                     colors = pomboFieldColors(), modifier = Modifier.fillMaxWidth()
@@ -1644,21 +1641,21 @@ private fun ChannelStoragePanel(vm: AppViewModel, channel: Channel, canModerate:
             Row {
                 Box(
                     Modifier.weight(1f)
-                        .background(Color.White.copy(alpha = 0.05f), RoundedCornerShape(12.dp))
+                        .background(PomboColors.Overlay5, RoundedCornerShape(12.dp))
                         .clickableNoRipple { addOpen = false; customAddress = "" }
                         .padding(vertical = 10.dp),
                     contentAlignment = Alignment.Center
-                ) { Text("Cancel", color = Color.White.copy(alpha = 0.60f), fontSize = 14.sp) }
+                ) { Text("Cancel", color = PomboColors.Overlay60, fontSize = 14.sp) }
                 Spacer(Modifier.width(10.dp))
                 Box(
                     Modifier.weight(1f)
                         .background(
-                            if (canAdd) PomboColors.Accent.copy(alpha = 0.15f) else Color.White.copy(alpha = 0.04f),
+                            if (canAdd) PomboColors.Accent.copy(alpha = 0.15f) else PomboColors.Overlay4,
                             RoundedCornerShape(12.dp)
                         )
                         .border(
                             1.dp,
-                            if (canAdd) PomboColors.Accent.copy(alpha = 0.40f) else Color.White.copy(alpha = 0.06f),
+                            if (canAdd) PomboColors.Accent.copy(alpha = 0.40f) else PomboColors.Overlay6,
                             RoundedCornerShape(12.dp)
                         )
                         .clickableNoRipple {
@@ -1672,7 +1669,7 @@ private fun ChannelStoragePanel(vm: AppViewModel, channel: Channel, canModerate:
                 ) {
                     Text(
                         "Add",
-                        color = if (canAdd) PomboColors.Accent else Color.White.copy(alpha = 0.25f),
+                        color = if (canAdd) PomboColors.Accent else PomboColors.Overlay25,
                         fontSize = 14.sp, fontWeight = FontWeight.Medium
                     )
                 }
@@ -1684,8 +1681,8 @@ private fun ChannelStoragePanel(vm: AppViewModel, channel: Channel, canModerate:
         androidx.compose.ui.window.Dialog(onDismissRequest = { confirmRemove = null }) {
             Column(
                 Modifier.fillMaxWidth()
-                    .background(Color(0xFF16161B), RoundedCornerShape(20.dp))
-                    .border(1.dp, Color.White.copy(alpha = 0.08f), RoundedCornerShape(20.dp))
+                    .background(PomboColors.SurfaceRaised, RoundedCornerShape(20.dp))
+                    .border(1.dp, PomboColors.Overlay8, RoundedCornerShape(20.dp))
                     .padding(20.dp)
             ) {
                 Text("Remove storage provider", color = Color.White, fontSize = 17.sp, fontWeight = FontWeight.SemiBold)
@@ -1693,17 +1690,17 @@ private fun ChannelStoragePanel(vm: AppViewModel, channel: Channel, canModerate:
                 Text(
                     "${addr.take(6)}…${addr.takeLast(4)} stops serving this channel's history. " +
                         "This is an on-chain transaction and costs gas.",
-                    color = Color.White.copy(alpha = 0.60f), fontSize = 14.sp, lineHeight = 20.sp
+                    color = PomboColors.Overlay60, fontSize = 14.sp, lineHeight = 20.sp
                 )
                 Spacer(Modifier.height(18.dp))
                 Row {
                     Box(
                         Modifier.weight(1f)
-                            .background(Color.White.copy(alpha = 0.05f), RoundedCornerShape(12.dp))
+                            .background(PomboColors.Overlay5, RoundedCornerShape(12.dp))
                             .clickableNoRipple { confirmRemove = null }
                             .padding(vertical = 10.dp),
                         contentAlignment = Alignment.Center
-                    ) { Text("Cancel", color = Color.White.copy(alpha = 0.60f), fontSize = 14.sp) }
+                    ) { Text("Cancel", color = PomboColors.Overlay60, fontSize = 14.sp) }
                     Spacer(Modifier.width(10.dp))
                     Box(
                         Modifier.weight(1f)
@@ -1760,13 +1757,13 @@ private fun ChannelModerationPanel(vm: AppViewModel, channel: Channel, canModera
     var banHint by remember { mutableStateOf(false) }
     Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
         Text(
-            "BANNED MEMBERS", color = Color.White.copy(alpha = 0.40f),
+            "BANNED MEMBERS", color = PomboColors.Overlay40,
             fontSize = 12.sp, fontWeight = FontWeight.Medium, letterSpacing = 0.8.sp
         )
         Spacer(Modifier.width(6.dp))
         HintIcon(banHint) { banHint = !banHint }
         Spacer(Modifier.weight(1f))
-        Text("${allBanned.size}", color = Color.White.copy(alpha = 0.40f), fontSize = 12.sp)
+        Text("${allBanned.size}", color = PomboColors.Overlay40, fontSize = 12.sp)
     }
     if (banHint) {
         Spacer(Modifier.height(8.dp))
@@ -1779,7 +1776,7 @@ private fun ChannelModerationPanel(vm: AppViewModel, channel: Channel, canModera
     Spacer(Modifier.height(10.dp))
 
     if (allBanned.isEmpty()) {
-        Text("No banned members", color = Color.White.copy(alpha = 0.30f), fontSize = 13.sp)
+        Text("No banned members", color = PomboColors.Overlay30, fontSize = 13.sp)
     } else {
         allBanned.forEach { addr ->
             LaunchedEffect(addr) { vm.ensureEns(addr) }
@@ -1796,7 +1793,7 @@ private fun ChannelModerationPanel(vm: AppViewModel, channel: Channel, canModera
                         addr, ensNames[addr], nicknames[addr], declaredNames[addr]?.first,
                         rosterNames[addr], declaredNames[addr]?.second ?: 0L)
                     Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.padding(top = 2.dp)) {
-                        if (onChain) MemberBadge("Protocol", Color(0xFFF87171))
+                        if (onChain) MemberBadge("Protocol", PomboColors.Danger)
                         if (onChain && onClient) Spacer(Modifier.width(4.dp))
                         if (onClient) MemberBadge("Client", Color(0xFFA855F7))
                     }
@@ -1808,10 +1805,10 @@ private fun ChannelModerationPanel(vm: AppViewModel, channel: Channel, canModera
                     Spacer(Modifier.width(8.dp))
                     Box(
                         Modifier
-                            .background(Color.White.copy(alpha = 0.06f), RoundedCornerShape(8.dp))
+                            .background(PomboColors.Overlay6, RoundedCornerShape(8.dp))
                             .clickableNoRipple { confirmUnban = addr }
                             .padding(horizontal = 12.dp, vertical = 6.dp)
-                    ) { Text("Unban", color = Color.White.copy(alpha = 0.80f), fontSize = 12.sp) }
+                    ) { Text("Unban", color = PomboColors.Overlay80, fontSize = 12.sp) }
                 }
             }
         }
@@ -1820,22 +1817,22 @@ private fun ChannelModerationPanel(vm: AppViewModel, channel: Channel, canModera
     // Pins/hidden counts kept as a small summary below the banned list — not in
     // the web, but a harmless at-a-glance of the rest of the moderation state.
     Spacer(Modifier.height(20.dp))
-    Box(Modifier.fillMaxWidth().height(1.dp).background(Color.White.copy(alpha = 0.05f)))
+    Box(Modifier.fillMaxWidth().height(1.dp).background(PomboColors.Overlay5))
     Spacer(Modifier.height(20.dp))
     Row(Modifier.fillMaxWidth()) {
         Column(Modifier.weight(1f)) {
             SectionLabel("Pinned")
-            Text("${pins.size}", color = Color.White.copy(alpha = 0.70f), fontSize = 14.sp)
+            Text("${pins.size}", color = PomboColors.Overlay70, fontSize = 14.sp)
         }
         Column(Modifier.weight(1f)) {
             SectionLabel("Hidden")
-            Text("${hidden.size}", color = Color.White.copy(alpha = 0.70f), fontSize = 14.sp)
+            Text("${hidden.size}", color = PomboColors.Overlay70, fontSize = 14.sp)
         }
     }
     Spacer(Modifier.height(8.dp))
     Text(
         "Pin and hide from a message's own menu.",
-        color = Color.White.copy(alpha = 0.40f), fontSize = 12.sp
+        color = PomboColors.Overlay40, fontSize = 12.sp
     )
 
     val myAddr by vm.address.collectAsState()
@@ -1848,7 +1845,7 @@ private fun ChannelModerationPanel(vm: AppViewModel, channel: Channel, canModera
     if (isChannelAdmin && channel.type == "gated" && pendingMod > 0) {
         var confirming by remember { mutableStateOf(false) }
         Spacer(Modifier.height(20.dp))
-        Box(Modifier.fillMaxWidth().height(1.dp).background(Color.White.copy(alpha = 0.05f)))
+        Box(Modifier.fillMaxWidth().height(1.dp).background(PomboColors.Overlay5))
         Spacer(Modifier.height(20.dp))
         SectionLabel("Confirm Moderator Actions")
         Spacer(Modifier.height(6.dp))
@@ -1856,12 +1853,12 @@ private fun ChannelModerationPanel(vm: AppViewModel, channel: Channel, canModera
             "$pendingMod action(s) by your moderators are in effect but not yet yours. " +
                 "Confirming makes them permanent, even if you dismiss the moderator later. " +
                 "Free — no transaction.",
-            color = Color.White.copy(alpha = 0.40f), fontSize = 12.sp
+            color = PomboColors.Overlay40, fontSize = 12.sp
         )
         Spacer(Modifier.height(10.dp))
         Box(
             Modifier.fillMaxWidth()
-                .background(Color.White.copy(alpha = 0.06f), RoundedCornerShape(12.dp))
+                .background(PomboColors.Overlay6, RoundedCornerShape(12.dp))
                 .clickableNoRipple {
                     if (!confirming) { confirming = true; vm.absorbModActions(); reloadKey++ }
                 }
@@ -1870,7 +1867,7 @@ private fun ChannelModerationPanel(vm: AppViewModel, channel: Channel, canModera
         ) {
             Text(
                 if (confirming) "Confirming…" else "Confirm Moderator Actions",
-                color = Color.White.copy(alpha = 0.80f), fontSize = 14.sp
+                color = PomboColors.Overlay80, fontSize = 14.sp
             )
         }
     }
@@ -1881,11 +1878,11 @@ private fun ChannelModerationPanel(vm: AppViewModel, channel: Channel, canModera
     if (canModerate && channel.type == "gated") {
         var advancedOpen by remember { mutableStateOf(false) }
         Spacer(Modifier.height(20.dp))
-        Box(Modifier.fillMaxWidth().height(1.dp).background(Color.White.copy(alpha = 0.05f)))
+        Box(Modifier.fillMaxWidth().height(1.dp).background(PomboColors.Overlay5))
         Spacer(Modifier.height(16.dp))
         Text(
             if (advancedOpen) "▾ Advanced" else "▸ Advanced",
-            color = Color.White.copy(alpha = 0.40f), fontSize = 13.sp,
+            color = PomboColors.Overlay40, fontSize = 13.sp,
             modifier = Modifier.fillMaxWidth()
                 .clickableNoRipple { advancedOpen = !advancedOpen }
                 .padding(vertical = 4.dp)
@@ -1898,7 +1895,7 @@ private fun ChannelModerationPanel(vm: AppViewModel, channel: Channel, canModera
             Spacer(Modifier.height(16.dp))
             Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
                 Text(
-                    "STREAM GRANTEES", color = Color.White.copy(alpha = 0.40f),
+                    "STREAM GRANTEES", color = PomboColors.Overlay40,
                     fontSize = 12.sp, fontWeight = FontWeight.Medium, letterSpacing = 0.8.sp,
                     modifier = Modifier.weight(1f)
                 )
@@ -1906,7 +1903,7 @@ private fun ChannelModerationPanel(vm: AppViewModel, channel: Channel, canModera
             }
             Spacer(Modifier.height(10.dp))
             if (permissions.isEmpty()) {
-                Text("Owner only (private)", color = Color.White.copy(alpha = 0.30f), fontSize = 13.sp)
+                Text("Owner only (private)", color = PomboColors.Overlay30, fontSize = 13.sp)
             } else {
                 LaunchedEffect(permissions) {
                     permissions.forEach { if (!it.isPublic) vm.ensureEns(it.userAddress) }
@@ -1924,7 +1921,7 @@ private fun ChannelModerationPanel(vm: AppViewModel, channel: Channel, canModera
                 Spacer(Modifier.height(20.dp))
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     Text(
-                        "ROTATE ENCRYPTION KEY", color = Color.White.copy(alpha = 0.80f),
+                        "ROTATE ENCRYPTION KEY", color = PomboColors.Overlay80,
                         fontSize = 12.sp, fontWeight = FontWeight.Medium, letterSpacing = 0.8.sp
                     )
                     Spacer(Modifier.width(6.dp))
@@ -1943,19 +1940,19 @@ private fun ChannelModerationPanel(vm: AppViewModel, channel: Channel, canModera
                     Text(
                         if (msLeft > 0) "Next auto-rotate: ${com.pombo.android.core.GateFormat.formatRemaining(msLeft)}"
                         else "Next auto-rotate: due",
-                        color = Color.White.copy(alpha = 0.40f), fontSize = 13.sp
+                        color = PomboColors.Overlay40, fontSize = 13.sp
                     )
                 }
                 Spacer(Modifier.height(10.dp))
                 Box(
                     Modifier
                         .fillMaxWidth()
-                        .background(Color.White.copy(alpha = 0.05f), RoundedCornerShape(12.dp))
-                        .border(1.dp, Color.White.copy(alpha = 0.10f), RoundedCornerShape(12.dp))
+                        .background(PomboColors.Overlay5, RoundedCornerShape(12.dp))
+                        .border(1.dp, PomboColors.Overlay10, RoundedCornerShape(12.dp))
                         .clickableNoRipple { vm.rotateEpochNow { reloadKey++ } }
                         .padding(vertical = 12.dp),
                     contentAlignment = Alignment.Center
-                ) { Text("Rotate Now", color = Color.White.copy(alpha = 0.80f), fontSize = 13.sp) }
+                ) { Text("Rotate Now", color = PomboColors.Overlay80, fontSize = 13.sp) }
             }
 
             if (channel.wireIdentity == "sealed") {
@@ -1963,7 +1960,7 @@ private fun ChannelModerationPanel(vm: AppViewModel, channel: Channel, canModera
                 Spacer(Modifier.height(20.dp))
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     Text(
-                        "RESET PUBLISH KEY", color = Color.White.copy(alpha = 0.80f),
+                        "RESET PUBLISH KEY", color = PomboColors.Overlay80,
                         fontSize = 12.sp, fontWeight = FontWeight.Medium, letterSpacing = 0.8.sp
                     )
                     Spacer(Modifier.width(6.dp))
@@ -1995,7 +1992,7 @@ private fun ChannelModerationPanel(vm: AppViewModel, channel: Channel, canModera
                 Spacer(Modifier.height(20.dp))
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     Text(
-                        "RESET INTERACTIONS KEY", color = Color.White.copy(alpha = 0.80f),
+                        "RESET INTERACTIONS KEY", color = PomboColors.Overlay80,
                         fontSize = 12.sp, fontWeight = FontWeight.Medium, letterSpacing = 0.8.sp
                     )
                     Spacer(Modifier.width(6.dp))
@@ -2030,8 +2027,8 @@ private fun ChannelModerationPanel(vm: AppViewModel, channel: Channel, canModera
         androidx.compose.ui.window.Dialog(onDismissRequest = { confirmUnban = null }) {
             Column(
                 Modifier.width(320.dp)
-                    .background(Color(0xFF111113), RoundedCornerShape(16.dp))
-                    .border(1.dp, Color.White.copy(alpha = 0.06f), RoundedCornerShape(16.dp))
+                    .background(PomboColors.Surface, RoundedCornerShape(16.dp))
+                    .border(1.dp, PomboColors.Overlay6, RoundedCornerShape(16.dp))
                     .padding(20.dp)
             ) {
                 Text("Unban member", color = Color.White, fontSize = 16.sp, fontWeight = FontWeight.Medium)
@@ -2041,17 +2038,17 @@ private fun ChannelModerationPanel(vm: AppViewModel, channel: Channel, canModera
                         "channel again. " + if (onChain)
                             "Lifting the gate ban is one transaction; the client ban, if any, goes with it."
                         else "This clears the client ban for everyone, with no transaction.",
-                    color = Color.White.copy(alpha = 0.50f), fontSize = 13.sp
+                    color = PomboColors.Overlay50, fontSize = 13.sp
                 )
                 Spacer(Modifier.height(20.dp))
                 Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                     Box(
                         Modifier.weight(1f)
-                            .background(Color.White.copy(alpha = 0.05f), RoundedCornerShape(12.dp))
+                            .background(PomboColors.Overlay5, RoundedCornerShape(12.dp))
                             .clickableNoRipple { confirmUnban = null }
                             .padding(vertical = 10.dp),
                         contentAlignment = Alignment.Center
-                    ) { Text("Cancel", color = Color.White.copy(alpha = 0.60f), fontSize = 14.sp) }
+                    ) { Text("Cancel", color = PomboColors.Overlay60, fontSize = 14.sp) }
                     Box(
                         Modifier.weight(1f)
                             .background(PomboColors.Accent.copy(alpha = 0.15f), RoundedCornerShape(12.dp))
@@ -2069,36 +2066,9 @@ private fun ChannelModerationPanel(vm: AppViewModel, channel: Channel, canModera
     }
 }
 
-@Composable
-private fun ChannelDeletePanel(vm: AppViewModel, channel: Channel, onDismiss: () -> Unit) {
-    Text("Leave channel", color = PomboColors.Danger, fontSize = 15.sp, fontWeight = FontWeight.SemiBold)
-    Spacer(Modifier.height(6.dp))
-    Text(
-        "Removes it from this device. The streams stay on-chain and you can rejoin with the stream ID.",
-        color = Color.White.copy(alpha = 0.40f), fontSize = 12.sp
-    )
-    Spacer(Modifier.height(12.dp))
-    Box(
-        Modifier.fillMaxWidth()
-            .background(PomboColors.Danger.copy(alpha = 0.12f), RoundedCornerShape(12.dp))
-            .border(1.dp, PomboColors.Danger.copy(alpha = 0.30f), RoundedCornerShape(12.dp))
-            .clickableNoRipple { onDismiss(); vm.removeChannel(channel.messageStreamId) }
-            .padding(vertical = 12.dp),
-        contentAlignment = Alignment.Center
-    ) { Text("Leave channel", color = PomboColors.Danger, fontSize = 14.sp, fontWeight = FontWeight.Medium) }
-}
-
-/**
- * On-chain deletion of the whole channel (web #delete-channel-modal).
- *
- * Behind a typed confirmation rather than a plain button: this destroys the
- * streams for every member, not just this device, and there is no undo.
- */
+/** On-chain deletion of the whole channel: gone for every member, no undo. */
 @Composable
 private fun ChannelDestroyPanel(vm: AppViewModel, channel: Channel, onDismiss: () -> Unit) {
-    var confirmText by remember { mutableStateOf("") }
-    val armed = confirmText.trim().equals(channel.name.trim(), ignoreCase = true)
-
     Text("Delete channel", color = PomboColors.Danger, fontSize = 15.sp, fontWeight = FontWeight.SemiBold)
     Spacer(Modifier.height(10.dp))
     GasWarningBanner(
@@ -2106,44 +2076,9 @@ private fun ChannelDestroyPanel(vm: AppViewModel, channel: Channel, onDismiss: (
             "It cannot be reversed."
     )
     Spacer(Modifier.height(14.dp))
-    Text(
-        "Type the channel name to confirm",
-        color = Color.White.copy(alpha = 0.60f), fontSize = 12.sp
-    )
-    Spacer(Modifier.height(6.dp))
-    OutlinedTextField(
-        value = confirmText, onValueChange = { confirmText = it },
-        placeholder = { Text(channel.name, color = Color.White.copy(alpha = 0.20f), fontSize = 14.sp) },
-        singleLine = true, shape = RoundedCornerShape(12.dp),
-        textStyle = androidx.compose.ui.text.TextStyle(fontSize = 14.sp, color = PomboColors.Text),
-        colors = pomboFieldColors(), modifier = Modifier.fillMaxWidth()
-    )
-    Spacer(Modifier.height(12.dp))
-    Box(
-        Modifier.fillMaxWidth()
-            .background(
-                PomboColors.Danger.copy(alpha = if (armed) 0.12f else 0.04f),
-                RoundedCornerShape(12.dp)
-            )
-            .border(
-                1.dp,
-                PomboColors.Danger.copy(alpha = if (armed) 0.30f else 0.10f),
-                RoundedCornerShape(12.dp)
-            )
-            .then(
-                if (armed) Modifier.clickableNoRipple {
-                    onDismiss()
-                    vm.deleteChannelOnChain(channel.messageStreamId, channel.name)
-                } else Modifier
-            )
-            .padding(vertical = 12.dp),
-        contentAlignment = Alignment.Center
-    ) {
-        Text(
-            "Delete channel permanently",
-            color = PomboColors.Danger.copy(alpha = if (armed) 1f else 0.35f),
-            fontSize = 14.sp, fontWeight = FontWeight.Medium
-        )
+    HoldToConfirmButton("Hold to Delete (2s)") {
+        onDismiss()
+        vm.deleteChannelOnChain(channel.messageStreamId, channel.name)
     }
 }
 

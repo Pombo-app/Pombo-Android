@@ -177,6 +177,13 @@ class StorageEndpoints(
         failures.remove(normalizeUrl(url))
     }
 
+    /** A node URL already resolved this session, preferring one still in rotation; resolves nothing. */
+    suspend fun latestKnownUrl(): String? = lock.withLock {
+        cache.values.maxByOrNull { it.at }?.nodes?.flatMap { it.urls }?.let { urls ->
+            urls.firstOrNull { (failures[it] ?: 0) < failureLimit } ?: urls.firstOrNull()
+        }
+    }
+
     /**
      * Features a node URL announces on `GET /capabilities`. Cached per URL with
      * the endpoint TTL; concurrent probes share one request. A 404 is a vanilla

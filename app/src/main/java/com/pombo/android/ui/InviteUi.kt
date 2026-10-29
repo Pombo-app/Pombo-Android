@@ -28,6 +28,7 @@ import androidx.compose.ui.unit.sp
 import androidx.compose.ui.window.Dialog
 import com.pombo.android.ChannelManager
 import com.pombo.android.core.InviteToken
+import com.pombo.android.ui.theme.PomboColors
 
 /**
  * Invite UI — ported from the web markup, values taken from the compiled
@@ -36,8 +37,8 @@ import com.pombo.android.core.InviteToken
  * the invite toast (`.toast.invite`).
  */
 
-private val CardBg = Color(0xFF111113)
-private val ReadonlyBg = Color(0xFF09090B)
+private val CardBg = PomboColors.Surface
+private val ReadonlyBg = PomboColors.Surface1
 private val InviteCyan = Color(0xFF22D3EE)
 private val AmberBg = Color(0x1AF59E0B)      // amber-500/10
 private val AmberBorder = Color(0x33F59E0B)  // amber-500/20
@@ -360,7 +361,7 @@ fun InviteToastCard(
 
     Box(
         Modifier.fillMaxWidth()
-            .background(Color(0xFF16161B), RoundedCornerShape(12.dp))
+            .background(PomboColors.SurfaceRaised, RoundedCornerShape(12.dp))
             .border(1.dp, Color(0x4D06B6D4), RoundedCornerShape(12.dp))  // cyan-500/30
     ) {
         Row(Modifier.padding(horizontal = 16.dp, vertical = 14.dp)) {
@@ -382,7 +383,7 @@ fun InviteToastCard(
                             .clickableNoRipple(onAccept)
                             .padding(horizontal = 12.dp, vertical = 4.dp)
                     ) {
-                        Text("Accept", color = Color(0xFF0A0A0A), fontSize = 11.sp, fontWeight = FontWeight.Medium)
+                        Text("Accept", color = PomboColors.Surface2, fontSize = 11.sp, fontWeight = FontWeight.Medium)
                     }
                     Box(
                         Modifier.background(w(0.10f), RoundedCornerShape(6.dp))

@@ -38,6 +38,7 @@ import androidx.compose.ui.unit.sp
 import androidx.compose.ui.window.Popup
 import androidx.compose.ui.window.PopupPositionProvider
 import androidx.compose.ui.window.PopupProperties
+import com.pombo.android.ui.theme.PomboColors
 
 /**
  * Message context menu, matching the web's `#message-context-menu`.
@@ -138,36 +139,36 @@ private fun PomboMenuSurface(content: @Composable ColumnScope.() -> Unit) {
             // A Popup hands its content the whole window as the max width, so
             // items that fillMaxWidth would stretch the menu edge to edge.
             .width(IntrinsicSize.Max)
-            .widthIn(min = 180.dp)
+            .widthIn(min = 200.dp)
             .shadow(16.dp, RoundedCornerShape(12.dp))
-            .background(Color(0xFF16161B), RoundedCornerShape(12.dp))
-            .border(1.dp, Color.White.copy(alpha = 0.10f), RoundedCornerShape(12.dp))
+            .background(PomboColors.SurfaceRaised, RoundedCornerShape(12.dp))
+            .border(1.dp, PomboColors.Overlay10, RoundedCornerShape(12.dp))
             .padding(vertical = 4.dp),
         content = content
     )
 }
 
-/** `.context-menu-item`: px-4 py-2, text-sm, 16px icon, gap-2. */
+/** `.context-menu-item` on touch: 40dp row, 15sp label, 18dp icon, gap 12. */
 @Composable
 fun ContextMenuItem(
     label: String,
     icon: ImageVector,
-    /** Icon tint; the web colours it per action (sky, emerald, amber, red). */
-    iconTint: Color = Color.White.copy(alpha = 0.60f),
+    /** Icon tint; the web colours only Pin (amber) and destructive entries (red). */
+    iconTint: Color = PomboColors.Overlay60,
     /** Label colour; destructive entries are red-400. */
-    labelColor: Color = Color.White.copy(alpha = 0.90f),
+    labelColor: Color = PomboColors.Overlay90,
     onClick: () -> Unit
 ) {
     Row(
         Modifier
             .fillMaxWidth()
             .clickableNoRipple(onClick)
-            .padding(horizontal = 16.dp, vertical = 8.dp),
+            .padding(horizontal = 16.dp, vertical = 10.dp),
         verticalAlignment = Alignment.CenterVertically,
-        horizontalArrangement = Arrangement.spacedBy(8.dp)
+        horizontalArrangement = Arrangement.spacedBy(12.dp)
     ) {
-        Icon(icon, contentDescription = null, tint = iconTint, modifier = Modifier.size(16.dp))
-        Text(label, color = labelColor, fontSize = 14.sp)
+        Icon(icon, contentDescription = null, tint = iconTint, modifier = Modifier.size(18.dp))
+        Text(label, color = labelColor, fontSize = 15.sp, lineHeight = 20.sp)
     }
 }
 
@@ -186,6 +187,6 @@ fun ContextMenuDivider() {
             .fillMaxWidth()
             .padding(vertical = 4.dp)
             .height(1.dp)
-            .background(Color.White.copy(alpha = 0.06f))
+            .background(PomboColors.Overlay6)
     )
 }

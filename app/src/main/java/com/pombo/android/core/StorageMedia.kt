@@ -21,6 +21,7 @@ import kotlin.math.pow
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.async
 import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -54,8 +55,7 @@ private typealias Win = StorageWindows.Window
  * still fans out onto Dispatchers.IO.
  *
  * Deliberate divergences from the web: native per-file crypto ([PomboCrypto]),
- * native HTTP reads ([StorageHttp]), compress-then-publish (not pipelined),
- * MP4 faststart skipped ([StorageMediaConfig.FASTSTART] = false).
+ * native HTTP reads ([StorageHttp]), compress-then-publish (not pipelined).
  */
 class StorageMedia(
     private val bridge: PomboBridge,
@@ -104,6 +104,10 @@ class StorageMedia(
         fun openStream(): InputStream
         /** Random-access reader (non-compressed path). */
         fun openSlicer(): Slicer
+        /** The picked file itself, which the sender plays instead of downloading. */
+        val original: android.net.Uri? get() = null
+        /** A video's first-frame thumbnail for the announce (base64 JPEG), if one could be made. */
+        fun thumbnail(): String? = null
         interface Slicer : Closeable {
             fun readAt(offset: Long, length: Int): ByteArray
         }
@@ -150,7 +154,8 @@ class StorageMedia(
         val firstChunkTs: Long?,
         val lastChunkTs: Long?,
         val storedChunks: Int?,
-        val encSalt: String?
+        val encSalt: String?,
+        val thumbnail: String? = null
     ) {
         companion object {
             /** Parse from an announce message's `metadata` object; null if unusable. */
@@ -176,7 +181,8 @@ class StorageMedia(
                     firstChunkTs = optLongOrNull("firstChunkTs"),
                     lastChunkTs = optLongOrNull("lastChunkTs"),
                     storedChunks = optIntOrNull("storedChunks"),
-                    encSalt = optStrOrNull("encSalt")
+                    encSalt = optStrOrNull("encSalt"),
+                    thumbnail = VideoThumbnail.accept(optStrOrNull("thumbnail"))
                 )
             }
         }
@@ -205,7 +211,16 @@ class StorageMedia(
 
     /** transferId -> completed file on disk (staged bytes or inflated output), for saving. */
     private val completed = ConcurrentHashMap<String, File>()
-    fun completedFile(transferId: String): File? = completed[transferId]
+    private val localFiles = StorageLocalFiles(transferDir)
+    fun completedFile(transferId: String): File? =
+        completed[transferId] ?: localFiles.received(transferId)?.also { completed[transferId] = it }
+
+    /** Keeps the original of an upload playable across restarts. */
+    fun recordSentOriginal(transferId: String, uri: String) = localFiles.recordSent(transferId, uri)
+    fun sentOriginal(transferId: String): String? = localFiles.sent(transferId)
+
+    /** Expires old local files; returns the originals' Uris whose read grant the caller should release. */
+    fun sweepLocalFiles(): List<String> = localFiles.sweepExpired()
 
     /**
      * Forgets a download's partial state for good: staged bytes and progress
@@ -235,6 +250,8 @@ class StorageMedia(
         _uploads.value = emptyMap()
         _downloads.value = emptyMap()
         completed.clear()
+        StorageStreams.clear()
+        localFiles.reload()
         chunkIdentities.clear()
     }
 
@@ -306,7 +323,7 @@ class StorageMedia(
     }
 
     private suspend fun warmUpPartitions(
-        sid: String, firstPartition: Int, identityPk: String?,
+        sid: String, firstPartition: Int, count: Int, identityPk: String?,
         gateAddress: String? = null,
         onStatus: (String) -> Unit
     ) {
@@ -316,7 +333,7 @@ class StorageMedia(
             onStatus("Preparing network…")
             val ping = byteArrayOf(0)
             coroutineScope {
-                for (k in 0 until CHUNK_PARTS) launch {
+                for (k in 0 until count) launch {
                     // Pings ride the same publisher as the chunks, or the wallet
                     // would appear on the channel's -1 stream just from warm-up.
                     try {
@@ -477,7 +494,16 @@ class StorageMedia(
 
         // DM inboxes place chunks at P4-P12 (after the 4 classic partitions).
         val firstPart = if (isDm) StreamConstants.STORAGE_DM_FIRST_CHUNK_PARTITION else StreamConstants.STORAGE_FIRST_CHUNK_PARTITION
-        fun chunkPartition(i: Int) = StreamConstants.storageChunkPartition(i, firstPart)
+        val partitionCount = try {
+            bridge.call("getStreamInfo", JSONObject().put("streamId", messageStreamId))
+                .optJSONObject("metadata")?.optInt("partitions", 0)?.takeIf { it > 0 }
+        } catch (e: Exception) {
+            Log.w(TAG, "storage upload: partition count unknown, assuming the standard layout: ${e.message}"); null
+        }
+        val chunkParts = StreamConstants.chunkPartitionsFor(partitionCount, firstPart)
+        if (chunkParts < 1) throw IllegalStateException("This channel has no partitions for files on storage")
+        if (chunkParts < CHUNK_PARTS) Log.i(TAG, "storage upload: $chunkParts chunk partitions (stream has $partitionCount)")
+        fun chunkPartition(i: Int) = StreamConstants.storageChunkPartition(i, firstPart, chunkParts)
 
         val bases = try { endpoints.rotation(messageStreamId) } catch (e: Exception) {
             Log.w(TAG, "storage endpoint resolution failed: ${e.message}"); emptyList()
@@ -497,6 +523,7 @@ class StorageMedia(
 
         val up = UploadState(tid, source.size, generation.get())
         emit(up)
+        val thumbnailJob = if (source.fileType.startsWith("video/")) scope.async(Dispatchers.IO) { source.thumbnail() } else null
 
         // Single-slot dispatcher: engine coordination never runs two coroutines at once.
         val engine = Dispatchers.Default.limitedParallelism(1)
@@ -508,10 +535,27 @@ class StorageMedia(
             val compression = if (doCompress) "deflate" else "none"
             up.phase = "Processing…"; emit(up)
 
+            // The stored bytes: a video may gain a segment index, so its size is the slicer's.
+            var rawSize = source.size
+            if (!doCompress) slicer = withContext(Dispatchers.IO) {
+                val raw = source.openSlicer()
+                if (!StorageMediaConfig.FASTSTART || !Mp4Faststart.isMp4Like(source.fileName, source.fileType)) return@withContext raw
+                up.phase = "Optimizing video for streaming…"; emit(up)
+                val fs = Mp4Faststart.remux(raw, source.size)
+                if (fs.slicer != null) Log.i(TAG, "Faststart: converted (${fs.reason})")
+                else Log.i(TAG, "Faststart: no conversion (${fs.reason})")
+                val laidOut = fs.slicer ?: raw
+                val indexed = Mp4Faststart.addSegmentIndex(laidOut, source.size)
+                if (indexed.slicer == null) return@withContext laidOut
+                Log.i(TAG, "Segment index: ${indexed.reason}")
+                rawSize = indexed.size
+                indexed.slicer
+            }
+
             // Worst-case deflate size bound (zlib stored blocks + header slack), so
             // the chunk meta + chunk math start BEFORE compression finishes — the
             // true size goes in the announce. Same estimate the web uses.
-            val metaCompSize = if (doCompress) source.size + ceil(source.size / 16384.0).toLong() * 5 + 64 else source.size
+            val metaCompSize = if (doCompress) source.size + ceil(source.size / 16384.0).toLong() * 5 + 64 else rawSize
             val startTs = wall()
             val metaBytes = StorageWire.chunkMetaJson(source.fileName, source.fileType, source.size, metaCompSize, compression, tid, startTs)
             val overheadHeader = 4 + metaBytes.size + 4 + 4
@@ -524,9 +568,9 @@ class StorageMedia(
             // committed = compressed bytes on disk & readable; publish workers consume
             // the growing prefix instead of waiting for the whole file to compress
             // first. The non-compressed path has everything available immediately.
-            val committed = AtomicLong(if (doCompress) 0L else source.size)
+            val committed = AtomicLong(if (doCompress) 0L else rawSize)
             val compDoneFlag = AtomicBoolean(!doCompress)
-            val compSizeRef = AtomicLong(if (doCompress) 0L else source.size)
+            val compSizeRef = AtomicLong(if (doCompress) 0L else rawSize)
             val producerError = AtomicReference<Throwable?>(null)
             fun curTc(): Int = if (compDoneFlag.get()) max(1, ceil(compSizeRef.get().toDouble() / upc).toInt()) else estTc
 
@@ -556,8 +600,6 @@ class StorageMedia(
                         compDoneFlag.set(true)
                     }
                 }
-            } else {
-                slicer = withContext(Dispatchers.IO) { source.openSlicer() }
             }
             val theSlicer = slicer!!
 
@@ -604,7 +646,7 @@ class StorageMedia(
                 gateAddress != null -> gateAddress.lowercase()
                 else -> null
             }
-            warmUpPartitions(messageStreamId, firstPart, publishIdentityPk, gateAddress) { up.phase = it; emit(up) }
+            warmUpPartitions(messageStreamId, firstPart, chunkParts, publishIdentityPk, gateAddress) { up.phase = it; emit(up) }
 
             val firstChunkTs = wall()
             val uploadStart = perf()
@@ -638,7 +680,7 @@ class StorageMedia(
                 for ((i, hist) in chunkTsHist) { val p = chunkPartition(i); for (t in hist) m["$p:$t"] = i }
                 return m
             }
-            fun allPartitionWindows(from: Long, to: Long) = (0 until CHUNK_PARTS).map { Win(firstPart + it, from, to) }
+            fun allPartitionWindows(from: Long, to: Long) = (0 until chunkParts).map { Win(firstPart + it, from, to) }
             fun windowsForIndices(indices: Collection<Int>): List<Win> {
                 val pad = 1500L
                 val raw = ArrayList<Win>()
@@ -841,12 +883,13 @@ class StorageMedia(
             var storedCount: Int? = null
             if (StorageMediaConfig.VERIFY) withContext(engine) {
                 fun missingIdx(): List<Int> = (0 until tc).filter { !stored.contains(it) }
-                fun updBar() { up.percent = if (tc > 0) stored.size * 100 / tc else 0; up.stage = "verifying"; emitThrottled(up) }
+                fun updBar() { up.percent = 100; up.stage = "verifying"; emitThrottled(up) }
+                up.phase = "Verifying on storage…"
                 updBar()
 
                 // Frontier visibility: wait until each partition's newest chunk is readable.
-                val newestByPart = LongArray(CHUNK_PARTS)
-                for (i in 0 until tc) { val k = i % CHUNK_PARTS; val ts = chunkTs[i] ?: 0L; if (ts > newestByPart[k]) newestByPart[k] = ts }
+                val newestByPart = LongArray(chunkParts)
+                for (i in 0 until tc) { val k = i % chunkParts; val ts = chunkTs[i] ?: 0L; if (ts > newestByPart[k]) newestByPart[k] = ts }
                 suspend fun frontierVisible(k: Int): Boolean {
                     val base = if (bases.isNotEmpty()) bases[k % bases.size] else null
                     if (base == null || newestByPart[k] == 0L) return true
@@ -857,14 +900,14 @@ class StorageMedia(
                     return try { var seen = false; StorageHttp.directFetchRange(base, messageStreamId, firstPart + k, newestByPart[k] - 1500, newestByPart[k] + 1500) { seen = true }; seen } catch (e: Exception) { true }
                 }
                 if (bases.isNotEmpty() && tc > 1) {
-                    val pending = (0 until CHUNK_PARTS).filter { newestByPart[it] > 0 }.toMutableSet()
+                    val pending = (0 until chunkParts).filter { newestByPart[it] > 0 }.toMutableSet()
                     var lastPending = pending.size; var frontStall = 0
                     while (pending.isNotEmpty() && frontStall < 10) {
                         for (k in pending.toList()) try { if (frontierVisible(k)) pending.remove(k) } catch (e: Exception) { /* retry */ }
                         if (pending.isEmpty()) break
                         frontStall = if (pending.size < lastPending) 0 else frontStall + 1
                         lastPending = pending.size
-                        up.phase = "Waiting for storage (${CHUNK_PARTS - pending.size}/$CHUNK_PARTS partitions caught up)…"; emit(up)
+                        up.phase = "Waiting for storage (${chunkParts - pending.size}/$chunkParts partitions caught up)…"; emit(up)
                         delay(2000)
                     }
                 }
@@ -878,20 +921,19 @@ class StorageMedia(
                     stored.addAll(found); missing = missingIdx(); updBar()
                 }
 
-                if (StorageMediaConfig.SECOND_CHANCE && !verifyBlind && missing.size > max(10, tc / 20)) {
-                    val scStart = perf(); var zeroProgress = 0; var stalledReal = 0
+                // Publishing returns long before the chunks reach storage, and they keep
+                // arriving for minutes after: repair only once nothing new has landed for a while.
+                if (StorageMediaConfig.SECOND_CHANCE && !verifyBlind && missing.isNotEmpty()) {
+                    val scStart = perf()
+                    val cap = max(5 * 60000L, tc * 2000L)
+                    var lastProgress = perf()
                     Log.w(TAG, "Storage pre-repair drain: ${missing.size}/$tc missing after the sweep")
-                    while (missing.isNotEmpty() && stalledReal < 2 && zeroProgress < 24 && perf() - scStart < 5 * 60000) {
+                    while (missing.isNotEmpty() && perf() - lastProgress < StorageMediaConfig.VERIFY_QUIET_MS && perf() - scStart < cap) {
                         delay(2500)
                         val before = missing.size
                         stored.addAll(readStoredIndices(messageStreamId, windowsForIndices(missing), tsIndexForVerify(), bases, "drain", expectedPublisher = verifyPublisher, storedKey = chunkIdentityPk))
                         missing = missingIdx(); updBar()
-                        if (missing.size < before) { zeroProgress = 0; stalledReal = 0 } else {
-                            zeroProgress++
-                            val parts = missing.map { it % CHUNK_PARTS }.toSet()
-                            var allPassed = true; for (k in parts) if (!frontierVisible(k)) { allPassed = false; break }
-                            if (allPassed) stalledReal++ else stalledReal = 0
-                        }
+                        if (missing.size < before) lastProgress = perf()
                         up.phase = "Waiting for storage: ${missing.size} unconfirmed…"; emit(up)
                     }
                 }
@@ -904,15 +946,15 @@ class StorageMedia(
                     Log.w(TAG, "Storage repair pass $pass: ${missing.size} chunks confirmed missing")
                     up.phase = "Repairing (pass $pass)…"; up.stage = "repairing"; emit(up)
                     republishParallel(missing)
-                    var noProg = 0
-                    var r = 0
-                    while (r < 30 && missing.isNotEmpty()) {
-                        r++
+                    var lastProgress = perf()
+                    while (missing.isNotEmpty()) {
                         delay(2000)
                         stored.addAll(readStoredIndices(messageStreamId, windowsForIndices(missing), tsIndexForVerify(), bases, "post-repair pass $pass", expectedPublisher = verifyPublisher, storedKey = chunkIdentityPk))
                         val before = missing.size; missing = missingIdx(); updBar()
-                        if (missing.size < before) { noProg = 0; continue }
-                        noProg++; if (noProg >= 6) { Log.w(TAG, "$noProg reads with no progress — republishing the ${missing.size} missing again"); break }
+                        if (missing.size < before) { lastProgress = perf(); continue }
+                        if (perf() - lastProgress >= StorageMediaConfig.VERIFY_QUIET_MS) {
+                            Log.w(TAG, "Nothing new for ${StorageMediaConfig.VERIFY_QUIET_MS / 1000}s — republishing the ${missing.size} missing again"); break
+                        }
                     }
                     stalledPasses = if (stored.size > storedBefore) 0 else stalledPasses + 1
                 }
@@ -926,11 +968,13 @@ class StorageMedia(
             // ---- announce ----
             up.phase = "Publishing announcement…"; up.stage = "announce"; emit(up)
             val sender = transport.myAddress() ?: throw IllegalStateException("No identity")
+            val thumbnail = thumbnailJob?.await()
             val timestamp = wall()
             val meta = JSONObject().apply {
+                if (thumbnail != null) put("thumbnail", thumbnail)
                 put("transferId", tid); put("fileName", source.fileName); put("fileType", source.fileType)
                 put("originalSize", source.size); put("compressedSize", compSize); put("compression", compression)
-                put("totalChunks", tc); put("chunkDataSize", upc); put("chunkPartitions", CHUNK_PARTS)
+                put("totalChunks", tc); put("chunkDataSize", upc); put("chunkPartitions", chunkParts)
                 put("firstChunkPartition", firstPart); put("firstChunkTs", firstChunkTs); put("lastChunkTs", lastChunkTs)
                 put("storedChunks", storedCount ?: JSONObject.NULL); put("encSalt", sealer.encSalt ?: JSONObject.NULL)
             }
@@ -955,8 +999,9 @@ class StorageMedia(
             up.phase = when { storedCount == null -> "Stored — UNVERIFIED (storage node issue)"; ok -> "Stored in %.1fs ✓".format(secs); else -> "Stored with gaps ($storedCount/$tc)" }
             up.stage = "done"; up.percent = 100; up.bytesSent = up.totalBytes ?: totalBytesSent
             emit(up); clearProgress(tid)
-            val rows = if (chunkIdentityPk == null) emptyList()
-                else chunkTsHist.flatMap { (i, hist) -> hist.map { DmSentRows.Row(messageStreamId, chunkPartition(i), it, 0, chunkIdentityPk) } }
+            val rowKey = chunkIdentityPk ?: if (channelEphemeral) publishIdentityPk else null
+            val rows = if (rowKey == null) emptyList()
+                else chunkTsHist.flatMap { (i, hist) -> hist.map { DmSentRows.Row(messageStreamId, chunkPartition(i), it, 0, rowKey) } }
             return SendResult(msgId, announce, storedCount, tc, rows)
         } catch (e: Exception) {
             up.error = e.message; emit(up); clearProgress(tid); throw e
@@ -1085,6 +1130,10 @@ class StorageMedia(
         val staging = withContext(Dispatchers.IO) {
             StorageStagingStore.open(dir.also { it.mkdirs() }, tid, compressedSize, chunkDataSize, total)
         }
+        val isVideo = meta.fileType.startsWith("video/")
+        if (isVideo && !isCompressed) {
+            StorageStreams.put(tid, StorageStreams.Stream(staging.stagedFile(), compressedSize, chunkDataSize, staging::hasChunk))
+        }
 
         var status = "downloading"
         var bytesReceived = staging.completedChunks().toLong() * chunkDataSize
@@ -1130,7 +1179,7 @@ class StorageMedia(
             }
         }
 
-        publishDl(DownloadProgress(tid, status, 0, staging.completedChunks(), total, bytesReceived, meta.originalSize, null, null))
+        publishDl(DownloadProgress(tid, status, staging.completedChunks() * 100 / max(1, total), staging.completedChunks(), total, bytesReceived, meta.originalSize, null, null))
 
         val dlStart = perf()
         try {
@@ -1143,25 +1192,69 @@ class StorageMedia(
             )
 
             suspend fun fetch(windows: List<Win>) {
-                if (isDm) fetchWindowsResendDm(chunkStreamId, windows, onRow, peerPublicKey!!)
-                else fetchWindowsParallel(chunkStreamId, windows, onRow, bases)
+                val picker = StorageWindows.Picker(windows) {
+                    StorageWindows.wantedTime(
+                        meta.firstChunkTs, meta.lastChunkTs, total, meta.chunkPartitions,
+                        StorageStreams.get(tid)?.wanted ?: -1
+                    )
+                }
+                // A DM window crosses the bridge whole: only video slices are small enough to run several.
+                val dmConcurrency = if (isVideo) StorageMediaConfig.DOWNLOAD_CONCURRENCY else 1
+                if (isDm) fetchWindowsResendDm(chunkStreamId, picker, dmConcurrency, onRow, peerPublicKey!!)
+                else fetchWindowsParallel(chunkStreamId, windows.size, picker, onRow, bases)
             }
 
             val resumeN = staging.completedChunks()
             if (resumeN < total) {
                 val windows = if (resumeN > 0 && resumeN >= total * 0.3) windowsFor(missing())
+                    else if (isVideo) StorageWindows.sequentialWindows(
+                        meta.firstChunkTs, meta.lastChunkTs, total, meta.firstChunkPartition, meta.chunkPartitions,
+                        fromT, toT, StorageMediaConfig.VIDEO_SLICE_CHUNKS
+                    )
                     else StorageWindows.chunkWindowsFor(meta.firstChunkPartition, meta.chunkPartitions, fromT, toT)
-                fetch(windows)
+                coroutineScope {
+                    // A player stuck on a chunk the pass already read past fetches it
+                    // directly: near its estimated time first, then its whole partition.
+                    val chaser = if (isVideo) launch {
+                        var chased = -1
+                        var tries = 0
+                        while (isActive) {
+                            delay(2000)
+                            val s = StorageStreams.get(tid) ?: continue
+                            val w = s.wanted
+                            if (w < 0 || w >= total || staging.hasChunk(w)) continue
+                            if (System.currentTimeMillis() - s.wantedSince < StorageMediaConfig.STALL_CHASE_MS) continue
+                            if (w != chased) { chased = w; tries = 0 }
+                            tries++
+                            val p = StorageWindows.partitionOfChunk(w, meta.firstChunkPartition, meta.chunkPartitions)
+                            Log.i(TAG, "Storage download: player waits on chunk $w, fetching it directly (try $tries)")
+                            fetch(if (tries == 1) windowsFor(listOf(w)) else listOf(Win(p, fromT, toT)))
+                            s.wantedSince = System.currentTimeMillis()
+                        }
+                    } else null
+                    try { fetch(windows) } finally { chaser?.cancel() }
+                }
             }
 
             var pass = 0
+            var widened = false
             while (staging.completedChunks() < total && pass < StorageMediaConfig.DOWNLOAD_RETRY_PASSES) {
                 pass++
                 delay(2000L * pass)
                 val before = staging.completedChunks()
                 val m = missing()
-                Log.w(TAG, "Storage download retry $pass/${StorageMediaConfig.DOWNLOAD_RETRY_PASSES}: ${m.size} chunks missing")
-                fetch(windowsFor(m))
+                val retryWindows = windowsFor(m)
+                Log.w(TAG, "Storage download retry $pass/${StorageMediaConfig.DOWNLOAD_RETRY_PASSES}: ${m.size} chunks missing ${m.take(20)}" +
+                    if (m.size <= 20) " in ${retryWindows.joinToString { "P${it.partition} ${it.from}-${it.to}" }}" else "")
+                fetch(retryWindows)
+                if (staging.completedChunks() == before && !widened) {
+                    // The windows guess each chunk's time from its index, and an upload
+                    // that published in bursts puts chunks far from that guess.
+                    widened = true
+                    val parts = m.map { StorageWindows.partitionOfChunk(it, meta.firstChunkPartition, meta.chunkPartitions) }.toSortedSet()
+                    Log.w(TAG, "Storage retry: estimated windows found nothing, reading P$parts over the full range")
+                    fetch(parts.map { Win(it, fromT, toT) })
+                }
                 if (staging.completedChunks() == before) {
                     Log.w(TAG, "Storage retry made no progress — storage does not have the missing chunks")
                     break
@@ -1175,16 +1268,21 @@ class StorageMedia(
                 phase = "Finishing write to disk…"; emitDl()
                 val asmStart = perf()
                 val outFile = withContext(Dispatchers.IO) { assemble(staging, dir, tid, isCompressed) { p -> phase = p; emitDlThrottled() } }
-                if (generation.get() == startedAt) completed[tid] = outFile
+                if (generation.get() == startedAt) {
+                    completed[tid] = outFile
+                    localFiles.recordReceived(tid, outFile)
+                }
+                StorageStreams.get(tid)?.finished = true
                 status = "complete"; phase = null
                 bytesReceived = meta.originalSize
                 emitDl()
                 Log.i(TAG, "Storage download complete: ${meta.fileName} ($total chunks); assemble ${perf() - asmStart}ms")
             } else {
+                StorageStreams.stop(tid)
                 status = "error"
                 publishDl(DownloadProgress(tid, status, staging.completedChunks() * 100 / max(1, total),
                     staging.completedChunks(), total, bytesReceived, meta.originalSize, null, null,
-                    "Storage incomplete — some chunks are missing. Retry later."))
+                    "Incomplete on storage (${staging.completedChunks()}/$total)"))
                 // Keep the partial staging on disk for a later resume.
                 staging.close()
                 Log.w(TAG, "Incomplete storage download: ${staging.completedChunks()}/$total preserved on disk")
@@ -1194,14 +1292,16 @@ class StorageMedia(
             // failure, so the staging stays on disk (same as the "incomplete"
             // branch above) and the status reflects a deliberate pause rather
             // than an error.
+            StorageStreams.stop(tid)
             status = "paused"
             val done = staging.completedChunks()
             publishDl(DownloadProgress(tid, status, if (total > 0) done * 100 / total else 0, done, total, bytesReceived, meta.originalSize, null, null))
             runCatching { staging.close() }
             throw e
         } catch (e: Exception) {
+            StorageStreams.stop(tid)
             status = "error"
-            publishDl(DownloadProgress(tid, status, 0, staging.completedChunks(), total, bytesReceived, meta.originalSize, null, null, e.message))
+            publishDl(DownloadProgress(tid, status, staging.completedChunks() * 100 / max(1, total), staging.completedChunks(), total, bytesReceived, meta.originalSize, null, null, e.message))
             runCatching { staging.close() }
             throw e
         }
@@ -1237,11 +1337,11 @@ class StorageMedia(
      * round-robining windows across bases. A per-window failure is logged and the
      * retry passes re-request through other nodes.
      */
-    private suspend fun fetchWindowsParallel(sid: String, windows: List<Win>, onRow: (StorageHttp.Row) -> Unit, bases: List<String>) {
-        if (windows.isEmpty() || bases.isEmpty()) return
+    private suspend fun fetchWindowsParallel(sid: String, count: Int, picker: StorageWindows.Picker, onRow: (StorageHttp.Row) -> Unit, bases: List<String>) {
+        if (count == 0 || bases.isEmpty()) return
         val next = AtomicInteger(0)
         coroutineScope {
-            repeat(min(StorageMediaConfig.DOWNLOAD_CONCURRENCY, windows.size)) {
+            repeat(min(StorageMediaConfig.DOWNLOAD_CONCURRENCY, count)) {
                 launch(Dispatchers.IO) {
                     // isActive, not `true`: the reads below are BLOCKING HTTP —
                     // no suspension points — so a cancelled Job (pause/cancel)
@@ -1250,10 +1350,8 @@ class StorageMedia(
                     // handler in downloadFile aborts mid-window for the same
                     // reason; this check catches the between-windows gap.
                     while (isActive) {
-                        val idx = next.getAndIncrement()
-                        if (idx >= windows.size) break
-                        val w = windows[idx]
-                        val base = bases[idx % bases.size]
+                        val w = picker.next() ?: break
+                        val base = bases[next.getAndIncrement() % bases.size]
                         try {
                             StorageHttp.directFetchRange(base, sid, w.partition, w.from, w.to, onRow)
                             endpoints.noteSuccess(base)
@@ -1277,32 +1375,41 @@ class StorageMedia(
      * packed bytes (base64). Sequential — a window can carry many chunks and each
      * response is large. [onRow] gets the already-opened packed chunk as content.
      */
-    private suspend fun fetchWindowsResendDm(inboxStreamId: String, windows: List<Win>, onRow: (StorageHttp.Row) -> Unit, peerPublicKey: String) {
+    private suspend fun fetchWindowsResendDm(inboxStreamId: String, picker: StorageWindows.Picker, concurrency: Int, onRow: (StorageHttp.Row) -> Unit, peerPublicKey: String) {
         // Rows cross the bridge SEALED; the pair key opens them here — the
         // ECDH decrypt IS the integrity check, so a foreign/tampered row
         // simply fails to open and is skipped.
         val myPk = myPrivateKey() ?: return
         val pairKey = SealedSenderCrypto.pairKey(myPk, peerPublicKey) ?: return
-        for (w in windows) {
-            try {
-                val res = bridge.call(
-                    "resendStorageChunksDm",
-                    JSONObject().put("streamId", inboxStreamId).put("partition", w.partition)
-                        .put("fromTs", w.from).put("toTs", w.to),
-                    timeoutMs = 180_000
-                )
-                val rows = res.optJSONArray("rows") ?: continue
-                for (i in 0 until rows.length()) {
-                    val r = rows.optJSONObject(i) ?: continue
-                    val b64 = r.optString("data")
-                    if (b64.isEmpty()) continue
-                    val sealed = try { Base64.decode(b64, Base64.NO_WRAP) } catch (e: Exception) { continue }
-                    val bytes = SealedSenderCrypto.pairOpen(sealed, pairKey) ?: continue
-                    val pub = if (r.isNull("publisherId")) null else r.optString("publisherId")
-                    onRow(StorageHttp.Row(bytes, r.optLong("timestamp"), pub))
+        coroutineScope {
+            repeat(concurrency) {
+                launch(Dispatchers.IO) {
+                    while (isActive) {
+                        val w = picker.next() ?: break
+                        try {
+                            val res = bridge.call(
+                                "resendStorageChunksDm",
+                                JSONObject().put("streamId", inboxStreamId).put("partition", w.partition)
+                                    .put("fromTs", w.from).put("toTs", w.to),
+                                timeoutMs = 180_000
+                            )
+                            val rows = res.optJSONArray("rows") ?: continue
+                            for (i in 0 until rows.length()) {
+                                val r = rows.optJSONObject(i) ?: continue
+                                val b64 = r.optString("data")
+                                if (b64.isEmpty()) continue
+                                val sealed = try { Base64.decode(b64, Base64.NO_WRAP) } catch (e: Exception) { continue }
+                                val bytes = SealedSenderCrypto.pairOpen(sealed, pairKey) ?: continue
+                                val pub = if (r.isNull("publisherId")) null else r.optString("publisherId")
+                                onRow(StorageHttp.Row(bytes, r.optLong("timestamp"), pub))
+                            }
+                        } catch (e: kotlinx.coroutines.CancellationException) {
+                            throw e
+                        } catch (e: Exception) {
+                            Log.w(TAG, "DM storage resend window P${w.partition} failed: ${e.message}")
+                        }
+                    }
                 }
-            } catch (e: Exception) {
-                Log.w(TAG, "DM storage resend window P${w.partition} failed: ${e.message}")
             }
         }
     }

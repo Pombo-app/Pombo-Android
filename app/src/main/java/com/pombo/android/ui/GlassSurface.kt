@@ -13,6 +13,7 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.Shape
 import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.unit.dp
+import com.pombo.android.ui.theme.PomboColors
 
 /**
  * Real backdrop blur for dialog windows — the web's `backdrop-blur-md` on modal
@@ -58,7 +59,7 @@ fun GlassSurface(
     Box(
         modifier
             .then(
-                if (opaqueBase) Modifier.background(Color(0xFF0E0E10).copy(alpha = 0.88f), shape)
+                if (opaqueBase) Modifier.background(PomboColors.Surface4.copy(alpha = 0.88f), shape)
                 else Modifier
             )
             .background(Color.White.copy(alpha = fillAlpha), shape)

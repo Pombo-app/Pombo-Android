@@ -13,6 +13,8 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.IntrinsicSize
+import androidx.compose.foundation.layout.wrapContentSize
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.sizeIn
 import androidx.compose.foundation.layout.padding
@@ -31,7 +33,6 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.Send
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.outlined.SentimentSatisfied
-import androidx.compose.material.icons.filled.PushPin
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Edit
 import androidx.compose.material.icons.filled.CheckCircleOutline
@@ -61,16 +62,6 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.text.font.FontWeight
-import androidx.compose.material.icons.filled.VisibilityOff
-import androidx.compose.material.icons.outlined.ContentCopy
-import androidx.compose.material.icons.outlined.Badge
-import androidx.compose.material.icons.outlined.MailOutline
-import androidx.compose.material.icons.outlined.PersonRemove
-import androidx.compose.material.icons.outlined.PersonAddAlt
-import androidx.compose.material.icons.outlined.Edit
-import androidx.compose.material.icons.outlined.Delete
-import androidx.compose.material.icons.outlined.VisibilityOff
-import androidx.compose.material.icons.outlined.Block
 import androidx.compose.material.icons.outlined.Settings
 import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.draw.drawBehind
@@ -118,6 +109,20 @@ private fun ImageBubbleContent(msg: UiMessage, onOpen: (() -> Unit)? = null) {
     if (bytes != null) {
         val context = androidx.compose.ui.platform.LocalContext.current
         val loader = MediaLoader.get(context)
+        val density = LocalDensity.current.density
+        // The box Fit draws into, shrunk to the picture itself, so the time
+        // laid over its corner lands on the image and not beside a narrow one.
+        val fitted = remember(bytes, density) {
+            val o = android.graphics.BitmapFactory.Options().apply { inJustDecodeBounds = true }
+            android.graphics.BitmapFactory.decodeByteArray(bytes, 0, bytes.size, o)
+            if (o.outWidth <= 0 || o.outHeight <= 0) null
+            else {
+                val w = o.outWidth / density
+                val h = o.outHeight / density
+                val scale = minOf(w.coerceIn(200f, 260f) / w, h.coerceIn(150f, 320f) / h)
+                (w * scale).dp to (h * scale).dp
+            }
+        }
         coil.compose.AsyncImage(
             model = coil.request.ImageRequest.Builder(context).data(bytes).build(),
             contentDescription = "image",
@@ -128,7 +133,10 @@ private fun ImageBubbleContent(msg: UiMessage, onOpen: (() -> Unit)? = null) {
                 // A floor as well as a cap: small GIFs/stickers (a 100px sticker
                 // rendered at 100px) came out too small to read. Fit grows them
                 // into the minimum while keeping their aspect ratio.
-                .sizeIn(minWidth = 200.dp, minHeight = 150.dp, maxWidth = 260.dp, maxHeight = 320.dp)
+                .then(
+                    if (fitted != null) Modifier.size(fitted.first, fitted.second)
+                    else Modifier.sizeIn(minWidth = 200.dp, minHeight = 150.dp, maxWidth = 260.dp, maxHeight = 320.dp)
+                )
                 .clip(RoundedCornerShape(8.dp))
                 // Web wires every rendered image to openLightbox(); without this
                 // a received photo could never be viewed above 260×320dp.
@@ -138,13 +146,13 @@ private fun ImageBubbleContent(msg: UiMessage, onOpen: (() -> Unit)? = null) {
         Box(
             Modifier
                 .size(200.dp, 140.dp)
-                .background(PomboColors.Background, RoundedCornerShape(8.dp)),
+                .background(PomboColors.Bg, RoundedCornerShape(8.dp)),
             contentAlignment = Alignment.Center
         ) {
             Column(horizontalAlignment = Alignment.CenterHorizontally) {
                 CircularProgressIndicator(color = PomboColors.Accent, strokeWidth = 2.dp, modifier = Modifier.size(22.dp))
                 Spacer(Modifier.height(6.dp))
-                Text("Receiving image…", color = PomboColors.TextDim, fontSize = 11.sp)
+                Text("Receiving image…", color = PomboColors.TextSecondary, fontSize = 11.sp)
             }
         }
     }
@@ -221,7 +229,7 @@ private fun MediaLightbox(bytes: ByteArray, onDismiss: () -> Unit) {
             ) {
                 Box(
                     Modifier
-                        .background(Color.White.copy(alpha = 0.10f), CircleShape)
+                        .background(PomboColors.Overlay10, CircleShape)
                         .clickableNoRipple {
                             if (!saving) {
                                 saving = true
@@ -249,7 +257,7 @@ private fun MediaLightbox(bytes: ByteArray, onDismiss: () -> Unit) {
                 Spacer(Modifier.width(10.dp))
                 Box(
                     Modifier
-                        .background(Color.White.copy(alpha = 0.10f), CircleShape)
+                        .background(PomboColors.Overlay10, CircleShape)
                         .clickableNoRipple(onDismiss)
                         .padding(10.dp),
                     contentAlignment = Alignment.Center
@@ -274,10 +282,11 @@ private fun MediaLightbox(bytes: ByteArray, onDismiss: () -> Unit) {
 private suspend fun saveImageToGallery(context: android.content.Context, bytes: ByteArray): Boolean =
     kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
         try {
-            val name = "pombo_${System.currentTimeMillis()}.jpg"
+            val (mime, ext) = imageType(bytes)
+            val name = "pombo_${System.currentTimeMillis()}.$ext"
             val values = android.content.ContentValues().apply {
                 put(android.provider.MediaStore.Images.Media.DISPLAY_NAME, name)
-                put(android.provider.MediaStore.Images.Media.MIME_TYPE, "image/jpeg")
+                put(android.provider.MediaStore.Images.Media.MIME_TYPE, mime)
                 if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.Q) {
                     put(android.provider.MediaStore.Images.Media.RELATIVE_PATH, "Pictures/Pombo")
                 }
@@ -293,6 +302,18 @@ private suspend fun saveImageToGallery(context: android.content.Context, bytes: 
             false
         }
     }
+
+/** MIME type and file extension from the image's leading bytes; JPEG otherwise. */
+internal fun imageType(bytes: ByteArray): Pair<String, String> {
+    fun at(i: Int) = if (i < bytes.size) bytes[i].toInt() and 0xFF else -1
+    return when {
+        at(0) == 0x89 && at(1) == 0x50 && at(2) == 0x4E && at(3) == 0x47 -> "image/png" to "png"
+        at(0) == 0x47 && at(1) == 0x49 && at(2) == 0x46 -> "image/gif" to "gif"
+        at(0) == 0x52 && at(1) == 0x49 && at(2) == 0x46 && at(3) == 0x46 &&
+            at(8) == 0x57 && at(9) == 0x45 && at(10) == 0x42 && at(11) == 0x50 -> "image/webp" to "webp"
+        else -> "image/jpeg" to "jpg"
+    }
+}
 
 // ==================== message grouping (web: MessageGrouper.js) ====================
 
@@ -654,17 +675,37 @@ private fun MessageBubble(
     // reason, and so do file transfers: their card IS the bubble on the web,
     // and a filled bubble around it reads as a double frame.
     val bareBubble = emojiKind != null || msg.isImage || msg.file != null || msg.storageFile != null
+    // Web embedYouTubeLinks: every YouTube link gains a player card under the
+    // text, unless disabled in Settings → Content.
+    val ytEnabled = com.pombo.android.ui.LocalYouTubeEmbedsEnabled.current
+    val ytIds = remember(msg.text, ytEnabled, bareBubble) {
+        if (ytEnabled && !bareBubble) com.pombo.android.ui.youtubeVideoIds(msg.text) else emptyList()
+    }
+    // A plain text bubble is as wide as its widest row (quote, reactions), and
+    // the time sits in that width's corner rather than right after the text.
+    val textOnlyBubble = !bareBubble && ytIds.isEmpty()
     // Web MessageRenderer.buildMessageHTML always emits the sender row, for own
     // messages too; only `.msg-group-middle/.msg-group-last .message-sender-row
     // { display: none }` hides it. Excluding `msg.mine` here left our own
     // messages without a name or verification badge.
     val showSender = pos == GroupPos.SINGLE || pos == GroupPos.FIRST
+    val showMeta = pos == GroupPos.SINGLE || pos == GroupPos.LAST || isActive ||
+        msg.edited || msg.pending || msg.failed
+    val metaInReactions = reactions.isNotEmpty() && !msg.isImage && emojiKind == null
+    val metaInline = showMeta && !metaInReactions
+    val minBubbleWidth = when {
+        bareBubble -> 0.dp
+        msg.replyTo != null -> 170.dp
+        showSender -> 120.dp
+        else -> 0.dp
+    }
     var menu by remember { mutableStateOf(false) }
     // Where the long-press landed, in window coordinates, so the menu can open
     // under the thumb like the web does instead of anchored to the bubble.
     var menuAt by remember { mutableStateOf(androidx.compose.ui.unit.IntOffset.Zero) }
     var bubbleOrigin by remember { mutableStateOf(androidx.compose.ui.geometry.Offset.Zero) }
     var picker by remember { mutableStateOf(false) }
+    var pickerAt by remember { mutableStateOf(androidx.compose.ui.unit.IntOffset.Zero) }
     var confirmBan by remember { mutableStateOf(false) }
     var confirmErase by remember { mutableStateOf(false) }
     var confirmDelete by remember { mutableStateOf(false) }
@@ -696,15 +737,12 @@ private fun MessageBubble(
                 // in the Row: as a sibling they either pushed the bubble or, in
                 // the zero-width version, went missing on wide messages because
                 // there was no room left in the row for them to be placed into.
-                // Centred rather than bottom-anchored as the CSS is: anchored to
-                // the bottom, the lower of the two triggers fell behind the
-                // composer on the last message and could not be reached.
                 if (isActive) MessageActionTriggers(
                     modifier = Modifier
-                        .align(if (msg.mine) Alignment.CenterStart else Alignment.CenterEnd)
-                        .offset(x = if (msg.mine) (-30).dp else 30.dp),
+                        .align(if (msg.mine) Alignment.BottomStart else Alignment.BottomEnd)
+                        .offset(x = if (msg.mine) (-30).dp else 30.dp, y = (-2).dp),
                     onReply = if (canWrite) onReply else null,
-                    onReact = { picker = true }
+                    onReact = { pickerAt = it; picker = true }
                 )
                 Column(
                     Modifier
@@ -764,6 +802,8 @@ private fun MessageBubble(
                                 }
                             )
                         }
+                        .widthIn(min = minBubbleWidth)
+                        .then(if (textOnlyBubble) Modifier.width(IntrinsicSize.Max) else Modifier)
                         // .message-bubble { padding: 0.20rem 0.7rem } → 3.2/11.2px.
                         // Web drops it to 0.25rem for media bubbles; the file
                         // card brings its own padding, so none here.
@@ -789,36 +829,27 @@ private fun MessageBubble(
                             Spacer(Modifier.width(6.dp))
                             CircularProgressIndicator(
                                 modifier = Modifier.size(10.dp),
-                                color = Color.White.copy(alpha = 0.55f),
+                                color = PomboColors.Overlay55,
                                 strokeWidth = 1.5.dp
                             )
                         }
                     }
                     if (showSender) {
-                        // Web getVerificationBadge: ENS → circled green check,
-                        // trusted contact → amber star, plain valid → ✓.
-                        // Web: `trustLevel === 1 || (trustLevel >= 1 && ensName)`
-                        // — i.e. "an ENS name is known". There it always holds,
-                        // because the web stores the name inside `msg.verified`
-                        // at verification time. Ours arrives on two independent
-                        // paths (trustLevel at verification, ensName when the
-                        // lookup returns), and for history the lookup lands
-                        // second, leaving trustLevel 0 next to an .eth name and
-                        // a plain tick. Either signal is enough.
+                        // The ENS name arrives on two independent paths
+                        // (trustLevel at verification, ensName when the lookup
+                        // returns); for history the lookup lands second, so
+                        // either signal is enough.
                         val hasEns = msg.trustLevel == 1 || msg.ensName != null
+                        val badge = when {
+                            msg.verified == false -> com.pombo.android.ui.AuthorBadgeKind.FAILED
+                            msg.verified != true -> null
+                            hasEns -> com.pombo.android.ui.AuthorBadgeKind.ENS
+                            msg.trustLevel == 2 && !msg.mine -> com.pombo.android.ui.AuthorBadgeKind.CONTACT
+                            else -> com.pombo.android.ui.AuthorBadgeKind.VERIFIED
+                        }
                         Row(verticalAlignment = Alignment.CenterVertically) {
-                            if (msg.verified == true) {
-                                when {
-                                    hasEns -> Icon(
-                                        Icons.Filled.CheckCircleOutline, contentDescription = "ENS verified",
-                                        tint = Color(0xFF4ADE80), modifier = Modifier.size(14.dp)
-                                    )
-                                    msg.trustLevel == 2 -> Icon(
-                                        Icons.Filled.Star, contentDescription = "Trusted contact",
-                                        tint = Color(0xFFD4A544), modifier = Modifier.size(14.dp)
-                                    )
-                                    else -> Text("✓", color = PomboColors.Success, fontSize = 11.sp, fontWeight = FontWeight.Bold)
-                                }
+                            if (badge != null) {
+                                com.pombo.android.ui.AuthorBadge(badge)
                                 Spacer(Modifier.width(3.dp))
                             }
                             Text(
@@ -826,6 +857,7 @@ private fun MessageBubble(
                                     ?: (msg.ensName ?: msg.senderName ?: shortAddress(msg.sender)),
                                 color = addressColor(msg.sender),
                                 fontSize = 12.sp,
+                                lineHeight = 16.sp,
                                 fontWeight = FontWeight.SemiBold
                             )
                         }
@@ -834,35 +866,39 @@ private fun MessageBubble(
                     msg.replyTo?.let { r ->
                         Row(
                             Modifier
-                                .padding(bottom = 6.dp)
+                                .padding(top = if (showSender) 4.dp else 7.dp, bottom = 6.dp)
+                                .then(if (textOnlyBubble) Modifier.fillMaxWidth() else Modifier)
                                 .widthIn(max = 280.dp)
-                                .background(Color.White.copy(alpha = 0.05f), RoundedCornerShape(6.dp))
+                                .clip(RoundedCornerShape(6.dp))
+                                .background(PomboColors.Overlay5)
                                 // Tapping a quote jumps to what it quotes, as on
                                 // the web; the quote block was previously inert.
                                 .then(
                                     if (onJumpTo != null) Modifier.clickableNoRipple { onJumpTo(r.id) }
                                     else Modifier
                                 )
-                                .padding(horizontal = 8.dp, vertical = 4.dp)
+                                .padding(end = 8.dp),
+                            verticalAlignment = Alignment.CenterVertically
                         ) {
-                            Box(Modifier.width(2.dp).height(26.dp).background(Color.White.copy(alpha = 0.15f)))
+                            Box(Modifier.width(2.dp).height(22.dp).background(PomboColors.Overlay15))
                             Spacer(Modifier.width(6.dp))
-                            Column {
-                                Text(
-                                    r.senderName ?: shortAddress(r.sender),
-                                    color = Color.White.copy(alpha = 0.60f),
-                                    fontSize = 12.sp, fontWeight = FontWeight.Medium
-                                )
-                                Text(
-                                    // A quoted media message carries no text
-                                    // over the wire (web parity) — blank means
-                                    // media, never a legitimate empty message.
-                                    if (r.text.isBlank()) "[Media]"
-                                    else r.text.take(50) + if (r.text.length > 50) "..." else "",
-                                    color = Color.White.copy(alpha = 0.50f),
-                                    fontSize = 13.sp, maxLines = 1
-                                )
-                            }
+                            Text(
+                                r.senderName ?: shortAddress(r.sender),
+                                color = PomboColors.Overlay60,
+                                fontSize = 12.sp, fontWeight = FontWeight.Medium,
+                                maxLines = 1
+                            )
+                            Spacer(Modifier.width(6.dp))
+                            Text(
+                                // A quoted media message carries no text
+                                // over the wire (web parity) — blank means
+                                // media, never a legitimate empty message.
+                                if (r.text.isBlank()) "[Media]" else r.text,
+                                color = PomboColors.Overlay50,
+                                fontSize = 13.sp, maxLines = 1,
+                                overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis,
+                                modifier = Modifier.weight(1f, fill = false)
+                            )
                         }
                     }
                     if (msg.file != null) {
@@ -880,36 +916,50 @@ private fun MessageBubble(
                             textColor = bubbleTextColor
                         )
                     } else if (msg.isImage) {
-                        ImageBubbleContent(msg, onOpen = { lightbox = true })
-                    } else {
-                        Text(
-                            // Bare URLs become tappable links, like the web's
-                            // linkify. Emoji-only text never contains one, so
-                            // the scan is skipped for that path.
-                            if (emojiKind == null) com.pombo.android.ui.linkifiedText(msg.text)
-                            else androidx.compose.ui.text.AnnotatedString(msg.text),
-                            color = bubbleTextColor,
-                            // Web: emoji-only messages render large (2rem for
-                            // 1-3, 1.6rem for 4+) with no bubble behind them.
-                            fontSize = when (emojiKind) {
-                                "few" -> 32.sp
-                                "many" -> 26.sp
-                                else -> 14.sp
-                            },
-                            lineHeight = if (emojiKind != null) 40.sp else 20.sp
-                        )
-                        // Web embedYouTubeLinks: every YouTube link gains a
-                        // player card under the text, unless disabled in
-                        // Settings → Content.
-                        if (com.pombo.android.ui.LocalYouTubeEmbedsEnabled.current && emojiKind == null) {
-                            val ytIds = remember(msg.text) { com.pombo.android.ui.youtubeVideoIds(msg.text) }
-                            ytIds.forEach { id -> com.pombo.android.ui.YouTubeEmbed(id) }
+                        Box {
+                            ImageBubbleContent(msg, onOpen = { lightbox = true })
+                            if (showMeta) MessageMeta(
+                                msg, onRetry, overMedia = true,
+                                modifier = Modifier.align(Alignment.BottomEnd).padding(6.dp)
+                            )
                         }
+                    } else {
+                        TextWithTrailingMeta(
+                            modifier = if (textOnlyBubble) Modifier.fillMaxWidth() else Modifier,
+                            text = {
+                                Text(
+                                    // Bare URLs become tappable links, like the web's
+                                    // linkify. Emoji-only text never contains one, so
+                                    // the scan is skipped for that path.
+                                    if (emojiKind == null) com.pombo.android.ui.linkifiedText(msg.text)
+                                    else androidx.compose.ui.text.AnnotatedString(msg.text),
+                                    color = bubbleTextColor,
+                                    // Web: emoji-only messages render large (2rem for
+                                    // 1-3, 1.6rem for 4+) with no bubble behind them.
+                                    fontSize = when (emojiKind) {
+                                        "few" -> 32.sp
+                                        "many" -> 26.sp
+                                        else -> 14.sp
+                                    },
+                                    lineHeight = if (emojiKind != null) 40.sp else 20.sp,
+                                    onTextLayout = it
+                                )
+                            },
+                            meta = if (ytIds.isEmpty() && metaInline) ({ MessageMeta(msg, onRetry) }) else null
+                        )
+                        ytIds.forEach { id -> com.pombo.android.ui.YouTubeEmbed(id) }
+                        if (ytIds.isNotEmpty() && metaInline) MessageMeta(msg, onRetry, modifier = Modifier.align(Alignment.End))
                     }
-                    // `.message-footer` — reactions sit INSIDE the bubble, on the
-                    // same row as the timestamp (MessageRenderer.js:444-447).
-                    // They used to hang below the bubble as a separate strip.
+                    if ((msg.file != null || msg.storageFile != null) && metaInline) {
+                        MessageMeta(msg, onRetry, modifier = Modifier.align(Alignment.End).padding(top = 2.dp, end = 4.dp))
+                    }
+                    if (reactions.isNotEmpty()) Row(
+                        (if (textOnlyBubble) Modifier.fillMaxWidth() else Modifier).padding(top = 4.dp),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.Bottom
+                    ) {
                     androidx.compose.foundation.layout.FlowRow(
+                        Modifier.weight(1f, fill = false),
                         verticalArrangement = Arrangement.Center,
                         horizontalArrangement = Arrangement.spacedBy(4.dp)
                     ) {
@@ -917,94 +967,76 @@ private fun MessageBubble(
                             val reactedByMe = me != null && users.contains(me)
                             Row(
                                 Modifier
-                                    // The web's touch branch (@media hover:none
-                                    // and pointer:coarse) computes to a 33px
-                                    // pill, but that reads oversized here, so
-                                    // this is the whole chip scaled to 85% of
-                                    // it — height, emoji, label and padding
-                                    // together, to keep the proportions.
-                                    .height(28.dp)
+                                    .height(22.dp)
                                     .background(
                                         if (reactedByMe) PomboColors.Accent.copy(alpha = 0.15f)
-                                        else Color.White.copy(alpha = 0.08f),
+                                        else PomboColors.Overlay8,
                                         RoundedCornerShape(12.dp)
                                     )
                                     .clickable { onReact(emoji, !reactedByMe) }
-                                    // `padding: 6px 12px` at 85%
-                                    .padding(horizontal = 10.dp),
+                                    .padding(horizontal = 9.dp),
                                 verticalAlignment = Alignment.CenterVertically
                             ) {
-                                // The "pop": the emoji is larger than the chip's
-                                // label but takes up less room than it draws
-                                // (`margin: -6px -3px`), so it cannot stretch
-                                // the pill. Offsetting alone would move it while
-                                // still reserving its full size.
-                                Text(
-                                    emoji, fontSize = 20.sp, lineHeight = 20.sp,
-                                    // Font padding off, or the glyph box grows
-                                    // past the size actually asked for.
-                                    style = androidx.compose.ui.text.TextStyle(
-                                        platformStyle = androidx.compose.ui.text.PlatformTextStyle(
-                                            includeFontPadding = false
-                                        )
-                                    ),
-                                    modifier = Modifier.negativeMargin(horizontal = 3.dp, vertical = 5.dp)
-                                )
+                                // The "pop": the emoji's 26dp box overflows the
+                                // 22dp chip by 2dp above and below but reports a
+                                // smaller size, so it cannot stretch the pill.
+                                // The colour-emoji glyph draws past its font
+                                // size, so it is centred in the box rather than
+                                // sized by the text line.
+                                Box(
+                                    Modifier.negativeMargin(horizontal = 2.dp, vertical = 2.dp).size(26.dp),
+                                    contentAlignment = Alignment.Center
+                                ) {
+                                    Text(
+                                        emoji, fontSize = 23.sp, lineHeight = 23.sp,
+                                        overflow = androidx.compose.ui.text.style.TextOverflow.Visible,
+                                        style = androidx.compose.ui.text.TextStyle(
+                                            platformStyle = androidx.compose.ui.text.PlatformTextStyle(
+                                                includeFontPadding = false
+                                            )
+                                        ),
+                                        modifier = Modifier.wrapContentSize(unbounded = true)
+                                    )
+                                }
                                 Spacer(Modifier.width(4.dp))
                                 Text(
                                     "${users.size}",
-                                    color = Color.White.copy(alpha = 0.80f),
+                                    color = PomboColors.Overlay80,
                                     fontSize = 12.sp, lineHeight = 18.sp
                                 )
                             }
                         }
-                        Text(
-                            formatTime(msg.timestamp) +
-                                (if (msg.edited) " · edited" else "") +
-                                (if (msg.pending) " · sending…" else "") +
-                                (if (msg.failed) (if (msg.undelivered) " · Not delivered" else " · Not sent") else ""),
-                            color = if (msg.failed) PomboColors.Danger else PomboColors.TextDim,
-                            // Web `.message-time` is `text-xs` = 12px.
-                            fontSize = 12.sp,
-                            modifier = Modifier.align(Alignment.CenterVertically)
-                        )
-                        if (msg.failed) {
-                            Spacer(Modifier.width(6.dp))
-                            Text(
-                                "Retry",
-                                color = PomboColors.Danger,
-                                fontSize = 12.sp,
-                                textDecoration = androidx.compose.ui.text.style.TextDecoration.Underline,
-                                modifier = Modifier
-                                    .align(Alignment.CenterVertically)
-                                    .clickableNoRipple(onRetry)
-                            )
-                        }
-                        when (msg.verified) {
-                            false -> { Spacer(Modifier.width(4.dp)); Text("❌", fontSize = 12.sp) }
-                            else -> {}
-                        }
                     }
+                    if (metaInReactions && showMeta) {
+                        MessageMeta(msg, onRetry, modifier = Modifier.padding(start = 14.dp, bottom = 1.dp))
+                    }
+                    }
+                    if (msg.verified == false) Text(
+                        "Could not verify: dated ahead of your clock",
+                        color = PomboColors.Danger, fontSize = 12.sp, lineHeight = 16.sp,
+                        modifier = Modifier.padding(top = 4.dp)
+                    )
                 }
 
                 // Long-press context menu (web #message-context-menu), opened at
                 // the touch point. Item order, icons and colours follow
                 // index.html:2540-2600.
                 if (menu) {
-                    val red = Color(0xFFF87171)      // text-red-400
+                    val red = PomboColors.Danger
+                    val icons = com.pombo.android.ui.PomboIcons
                     com.pombo.android.ui.PomboContextMenu(
                         touchOffset = menuAt,
                         onDismiss = { menu = false }
                     ) {
                         com.pombo.android.ui.ContextMenuItem(
-                            "Copy Text", Icons.Outlined.ContentCopy
+                            "Copy Text", icons.CopyText
                         ) { menu = false; clipboard.setText(androidx.compose.ui.text.AnnotatedString(msg.text)) }
                         com.pombo.android.ui.ContextMenuItem(
-                            "Copy Address", Icons.Outlined.Badge
+                            "Copy Address", icons.Clipboard
                         ) { menu = false; clipboard.setText(androidx.compose.ui.text.AnnotatedString(msg.sender)) }
                         if (canWrite) {
                             com.pombo.android.ui.ContextMenuItem(
-                                "Reply", Icons.AutoMirrored.Filled.Reply
+                                "Reply", icons.Reply
                             ) { menu = false; onReply() }
                         }
 
@@ -1012,16 +1044,14 @@ private fun MessageBubble(
                             com.pombo.android.ui.ContextMenuDivider()
                             // Web hides "Send DM" when you are already in that DM.
                             if (onBlock == null) com.pombo.android.ui.ContextMenuItem(
-                                "Send DM", Icons.Outlined.MailOutline,
-                                iconTint = Color(0xFF38BDF8)   // text-sky-400
+                                "Send DM", icons.Envelope
                             ) { menu = false; onSendDm() }
                             if (isContact) com.pombo.android.ui.ContextMenuItem(
-                                "Remove from Contacts", Icons.Outlined.PersonRemove,
+                                "Remove from Contacts", icons.UserMinus,
                                 iconTint = red, labelColor = red
                             ) { menu = false; onRemoveContact() }
                             else com.pombo.android.ui.ContextMenuItem(
-                                "Add to Contacts", Icons.Outlined.PersonAddAlt,
-                                iconTint = Color(0xFF10B981)   // text-emerald-500
+                                "Add to Contacts", icons.UserPlus
                             ) { menu = false; onAddContact() }
                         }
 
@@ -1037,10 +1067,10 @@ private fun MessageBubble(
                         if (showEdit || showOwnerDelete) {
                             com.pombo.android.ui.ContextMenuDivider()
                             if (showEdit) com.pombo.android.ui.ContextMenuItem(
-                                "Edit Message", Icons.Outlined.Edit
+                                "Edit Message", icons.Edit
                             ) { menu = false; onEdit() }
                             if (showOwnerDelete) com.pombo.android.ui.ContextMenuItem(
-                                "Delete Message", Icons.Outlined.Delete,
+                                "Delete Message", icons.Trash,
                                 iconTint = red, labelColor = red
                             ) { menu = false; confirmDelete = true }
                         }
@@ -1048,7 +1078,7 @@ private fun MessageBubble(
                         if (isDm && canErase && !msg.mine) {
                             com.pombo.android.ui.ContextMenuDivider()
                             com.pombo.android.ui.ContextMenuItem(
-                                "Erase from storage", Icons.Outlined.Delete,
+                                "Erase from storage", icons.Erase,
                                 iconTint = red, labelColor = red
                             ) { menu = false; confirmErase = true }
                         }
@@ -1065,25 +1095,33 @@ private fun MessageBubble(
                         val showBan = canHide && !msg.mine && !isCreator
                         if (canHide) {
                             com.pombo.android.ui.ContextMenuDivider()
-                            if (canModerate) com.pombo.android.ui.ContextMenuItem(
-                                if (isPinned) "Unpin Message" else "Pin Message",
-                                Icons.Filled.PushPin,
-                                iconTint = Color(0xFFFBBF24)   // text-amber-400
-                            ) { menu = false; onPin(!isPinned) }
+                            if (canModerate) {
+                                if (isPinned) com.pombo.android.ui.ContextMenuItem(
+                                    "Unpin Message", icons.Close
+                                ) { menu = false; onPin(false) }
+                                else com.pombo.android.ui.ContextMenuItem(
+                                    "Pin Message", icons.Pin,
+                                    iconTint = Color(0xFFFBBF24)   // text-amber-400
+                                ) { menu = false; onPin(true) }
+                            }
                             // Hide keeps the bytes and is reversible; Erase
                             // removes them from every provider that can, and
                             // only exists where one can (web _toggleAdminItems).
-                            if (!isErased) com.pombo.android.ui.ContextMenuItem(
-                                if (isHidden) "Unhide Message" else "Hide Message",
-                                Icons.Outlined.VisibilityOff,
-                                iconTint = red, labelColor = red
-                            ) { menu = false; onHide(!isHidden) }
+                            if (!isErased) {
+                                if (isHidden) com.pombo.android.ui.ContextMenuItem(
+                                    "Unhide Message", icons.Eye
+                                ) { menu = false; onHide(false) }
+                                else com.pombo.android.ui.ContextMenuItem(
+                                    "Hide Message", icons.Trash,
+                                    iconTint = red, labelColor = red
+                                ) { menu = false; onHide(true) }
+                            }
                             if (canErase && !isErased && !isErasing) com.pombo.android.ui.ContextMenuItem(
-                                "Erase from storage", Icons.Outlined.Delete,
+                                "Erase from storage", icons.Erase,
                                 iconTint = red, labelColor = red
                             ) { menu = false; confirmErase = true }
                             if (showBan) com.pombo.android.ui.ContextMenuItem(
-                                "Ban User", Icons.Outlined.Block,
+                                "Ban User", icons.Ban,
                                 iconTint = red, labelColor = red
                             ) { menu = false; confirmBan = true }
                         }
@@ -1093,24 +1131,22 @@ private fun MessageBubble(
                         if (!msg.mine && onBlock != null) {
                             com.pombo.android.ui.ContextMenuDivider()
                             com.pombo.android.ui.ContextMenuItem(
-                                "Block User", Icons.Outlined.Block,
+                                "Block User", icons.Ban,
                                 iconTint = red, labelColor = red
                             ) { menu = false; confirmBlock = true }
                         }
                     }
                 }
 
-                // Reaction palette (web #reaction-picker)
-                DropdownMenu(
-                    expanded = picker,
-                    onDismissRequest = { picker = false },
-                    modifier = Modifier
-                        .background(Color(0xFF16161B))
-                        .width(240.dp)
+                // Reaction palette (web #reaction-picker), opened at the react
+                // button so it lands next to the bubble's bottom, not its top.
+                if (picker) com.pombo.android.ui.PomboContextMenu(
+                    touchOffset = pickerAt,
+                    onDismiss = { picker = false }
                 ) {
                     androidx.compose.foundation.layout.FlowRow(
-                        Modifier.padding(8.dp),
-                        horizontalArrangement = Arrangement.spacedBy(4.dp)
+                        Modifier.width(232.dp).padding(horizontal = 6.dp, vertical = 2.dp),
+                        horizontalArrangement = Arrangement.spacedBy(2.dp)
                     ) {
                         REACTION_EMOJIS.forEach { emoji ->
                             val reactedByMe = me != null && reactions[emoji]?.contains(me) == true
@@ -1148,8 +1184,8 @@ private fun MessageBubble(
         androidx.compose.ui.window.Dialog(onDismissRequest = { confirmDelete = false }) {
             Column(
                 Modifier.fillMaxWidth()
-                    .background(Color(0xFF16161B), RoundedCornerShape(20.dp))
-                    .border(1.dp, Color.White.copy(alpha = 0.08f), RoundedCornerShape(20.dp))
+                    .background(PomboColors.SurfaceRaised, RoundedCornerShape(20.dp))
+                    .border(1.dp, PomboColors.Overlay8, RoundedCornerShape(20.dp))
                     .padding(20.dp)
             ) {
                 Text("Delete message", color = Color.White, fontSize = 17.sp, fontWeight = FontWeight.SemiBold)
@@ -1162,17 +1198,17 @@ private fun MessageBubble(
                         purgeProviders > 0 -> "Removed for everyone. Its copy on storage cannot be erased from this session."
                         else -> "Removed for everyone."
                     },
-                    color = Color.White.copy(alpha = 0.60f), fontSize = 14.sp, lineHeight = 20.sp
+                    color = PomboColors.Overlay60, fontSize = 14.sp, lineHeight = 20.sp
                 )
                 Spacer(Modifier.height(18.dp))
                 Row {
                     Box(
                         Modifier.weight(1f)
-                            .background(Color.White.copy(alpha = 0.05f), RoundedCornerShape(12.dp))
+                            .background(PomboColors.Overlay5, RoundedCornerShape(12.dp))
                             .clickableNoRipple { confirmDelete = false }
                             .padding(vertical = 10.dp),
                         contentAlignment = Alignment.Center
-                    ) { Text("Cancel", color = Color.White.copy(alpha = 0.60f), fontSize = 14.sp) }
+                    ) { Text("Cancel", color = PomboColors.Overlay60, fontSize = 14.sp) }
                     Spacer(Modifier.width(10.dp))
                     Box(
                         Modifier.weight(1f)
@@ -1191,8 +1227,8 @@ private fun MessageBubble(
         androidx.compose.ui.window.Dialog(onDismissRequest = { confirmErase = false }) {
             Column(
                 Modifier.fillMaxWidth()
-                    .background(Color(0xFF16161B), RoundedCornerShape(20.dp))
-                    .border(1.dp, Color.White.copy(alpha = 0.08f), RoundedCornerShape(20.dp))
+                    .background(PomboColors.SurfaceRaised, RoundedCornerShape(20.dp))
+                    .border(1.dp, PomboColors.Overlay8, RoundedCornerShape(20.dp))
                     .padding(20.dp)
             ) {
                 Text("Erase from storage", color = Color.White, fontSize = 17.sp, fontWeight = FontWeight.SemiBold)
@@ -1202,17 +1238,17 @@ private fun MessageBubble(
                         "It disappears from this device and cannot be recovered."
                     else "Remove this message from every storage provider that can erase it. " +
                         "It stays hidden for everyone and cannot be recovered.",
-                    color = Color.White.copy(alpha = 0.60f), fontSize = 14.sp, lineHeight = 20.sp
+                    color = PomboColors.Overlay60, fontSize = 14.sp, lineHeight = 20.sp
                 )
                 Spacer(Modifier.height(18.dp))
                 Row {
                     Box(
                         Modifier.weight(1f)
-                            .background(Color.White.copy(alpha = 0.05f), RoundedCornerShape(12.dp))
+                            .background(PomboColors.Overlay5, RoundedCornerShape(12.dp))
                             .clickableNoRipple { confirmErase = false }
                             .padding(vertical = 10.dp),
                         contentAlignment = Alignment.Center
-                    ) { Text("Cancel", color = Color.White.copy(alpha = 0.60f), fontSize = 14.sp) }
+                    ) { Text("Cancel", color = PomboColors.Overlay60, fontSize = 14.sp) }
                     Spacer(Modifier.width(10.dp))
                     Box(
                         Modifier.weight(1f)
@@ -1231,8 +1267,8 @@ private fun MessageBubble(
         androidx.compose.ui.window.Dialog(onDismissRequest = { confirmBlock = false }) {
             Column(
                 Modifier.fillMaxWidth()
-                    .background(Color(0xFF16161B), RoundedCornerShape(20.dp))
-                    .border(1.dp, Color.White.copy(alpha = 0.08f), RoundedCornerShape(20.dp))
+                    .background(PomboColors.SurfaceRaised, RoundedCornerShape(20.dp))
+                    .border(1.dp, PomboColors.Overlay8, RoundedCornerShape(20.dp))
                     .padding(20.dp)
             ) {
                 Text("Block user", color = Color.White, fontSize = 17.sp, fontWeight = FontWeight.SemiBold)
@@ -1241,17 +1277,17 @@ private fun MessageBubble(
                     "Block ${msg.sender.take(6)}…${msg.sender.takeLast(4)}? All messages from " +
                         "this user will be permanently ignored, and this conversation " +
                         "will be removed from this device.",
-                    color = Color.White.copy(alpha = 0.60f), fontSize = 14.sp, lineHeight = 20.sp
+                    color = PomboColors.Overlay60, fontSize = 14.sp, lineHeight = 20.sp
                 )
                 Spacer(Modifier.height(18.dp))
                 Row {
                     Box(
                         Modifier.weight(1f)
-                            .background(Color.White.copy(alpha = 0.05f), RoundedCornerShape(12.dp))
+                            .background(PomboColors.Overlay5, RoundedCornerShape(12.dp))
                             .clickableNoRipple { confirmBlock = false }
                             .padding(vertical = 10.dp),
                         contentAlignment = Alignment.Center
-                    ) { Text("Cancel", color = Color.White.copy(alpha = 0.60f), fontSize = 14.sp) }
+                    ) { Text("Cancel", color = PomboColors.Overlay60, fontSize = 14.sp) }
                     Spacer(Modifier.width(10.dp))
                     Box(
                         Modifier.weight(1f)
@@ -1278,13 +1314,139 @@ private fun MessageBubble(
  */
 private fun Modifier.negativeMargin(horizontal: Dp = 0.dp, vertical: Dp = 0.dp): Modifier =
     this.layout { measurable, constraints ->
-        val placeable = measurable.measure(constraints)
         val dx = horizontal.roundToPx()
         val dy = vertical.roundToPx()
+        // The child may be as much larger than the parent allows as the
+        // margin gives back, or a fixed-height parent clips it.
+        val placeable = measurable.measure(
+            constraints.copy(
+                maxWidth = if (constraints.hasBoundedWidth) constraints.maxWidth + dx * 2 else constraints.maxWidth,
+                maxHeight = if (constraints.hasBoundedHeight) constraints.maxHeight + dy * 2 else constraints.maxHeight
+            )
+        )
         val w = (placeable.width - dx * 2).coerceAtLeast(0)
         val h = (placeable.height - dy * 2).coerceAtLeast(0)
         layout(w, h) { placeable.place(-dx, -dy) }
     }
+
+/** Web `.message-meta`: time, edited, send state and Retry. */
+@Composable
+private fun MessageMeta(
+    msg: UiMessage,
+    onRetry: () -> Unit,
+    modifier: Modifier = Modifier,
+    overMedia: Boolean = false
+) {
+    Row(
+        modifier.then(
+            if (overMedia) Modifier
+                .background(Color.Black.copy(alpha = 0.55f), RoundedCornerShape(50))
+                .padding(horizontal = 6.dp, vertical = 1.dp)
+            else Modifier
+        ),
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        Text(
+            formatTime(msg.timestamp) +
+                (if (msg.edited) " · edited" else "") +
+                (if (msg.pending) " · sending…" else "") +
+                (if (msg.failed) (if (msg.undelivered) " · Not delivered" else " · Not sent") else ""),
+            color = when {
+                msg.failed -> PomboColors.Danger
+                overMedia -> Color.White.copy(alpha = 0.85f)
+                else -> PomboColors.Overlay35
+            },
+            fontSize = 11.sp,
+            lineHeight = 14.sp
+        )
+        if (msg.failed) {
+            Spacer(Modifier.width(6.dp))
+            Text(
+                "Retry",
+                color = PomboColors.Danger,
+                fontSize = 12.sp,
+                lineHeight = 16.sp,
+                textDecoration = androidx.compose.ui.text.style.TextDecoration.Underline,
+                modifier = Modifier.clickableNoRipple(onRetry)
+            )
+        }
+    }
+}
+
+/**
+ * Text with the meta in the bottom-right corner: on the last line when it
+ * fits beside it, otherwise on a line of its own (web: `.message-meta` floated
+ * after the text). [text] must forward its `onTextLayout` to the argument.
+ */
+@Composable
+private fun TextWithTrailingMeta(
+    text: @Composable ((androidx.compose.ui.text.TextLayoutResult) -> Unit) -> Unit,
+    meta: (@Composable () -> Unit)?,
+    modifier: Modifier = Modifier
+) {
+    val gapPx = with(LocalDensity.current) { 14.dp.roundToPx() }
+    val dropPx = with(LocalDensity.current) { 4.dp.roundToPx() }
+    val layoutHolder = remember { arrayOfNulls<androidx.compose.ui.text.TextLayoutResult>(1) }
+    val policy = remember(gapPx, dropPx) {
+        object : androidx.compose.ui.layout.MeasurePolicy {
+            override fun androidx.compose.ui.layout.MeasureScope.measure(
+                measurables: List<androidx.compose.ui.layout.Measurable>,
+                constraints: androidx.compose.ui.unit.Constraints
+            ): androidx.compose.ui.layout.MeasureResult {
+                val loose = constraints.copy(minWidth = 0, minHeight = 0)
+                val textP = measurables[0].measure(loose)
+                val metaP = measurables.getOrNull(1)?.measure(loose)
+                val r = layoutHolder[0]
+                if (metaP == null || r == null) {
+                    return layout(maxOf(textP.width, constraints.minWidth), textP.height) { textP.place(0, 0) }
+                }
+                val last = r.lineCount - 1
+                val rtl = r.getParagraphDirection(r.getLineStart(last)) ==
+                    androidx.compose.ui.text.style.ResolvedTextDirection.Rtl
+                val lastRight = kotlin.math.ceil(r.getLineRight(last)).toInt()
+                val sameLine = !rtl && lastRight + gapPx + metaP.width <= constraints.maxWidth
+                return if (sameLine) {
+                    val width = maxOf(textP.width, lastRight + gapPx + metaP.width, constraints.minWidth)
+                    val metaBaseline = metaP[androidx.compose.ui.layout.FirstBaseline]
+                        .takeIf { it != androidx.compose.ui.layout.AlignmentLine.Unspecified } ?: metaP.height
+                    val metaY = kotlin.math.round(r.getLineBaseline(last)).toInt() - metaBaseline + dropPx
+                    val height = maxOf(textP.height, metaY + metaP.height)
+                    layout(width, height) {
+                        textP.place(0, 0)
+                        metaP.place(width - metaP.width, metaY)
+                    }
+                } else {
+                    val width = maxOf(textP.width, metaP.width, constraints.minWidth)
+                    layout(width, textP.height + metaP.height) {
+                        textP.place(0, 0)
+                        metaP.place(width - metaP.width, textP.height)
+                    }
+                }
+            }
+
+            // The bubble sizes to its widest child by intrinsics, so this must
+            // count the meta on the text's line or a short message wraps it.
+            override fun androidx.compose.ui.layout.IntrinsicMeasureScope.maxIntrinsicWidth(
+                measurables: List<androidx.compose.ui.layout.IntrinsicMeasurable>,
+                height: Int
+            ): Int = measurables[0].maxIntrinsicWidth(height) +
+                (measurables.getOrNull(1)?.let { gapPx + it.maxIntrinsicWidth(height) } ?: 0)
+
+            override fun androidx.compose.ui.layout.IntrinsicMeasureScope.minIntrinsicWidth(
+                measurables: List<androidx.compose.ui.layout.IntrinsicMeasurable>,
+                height: Int
+            ): Int = measurables.maxOf { it.minIntrinsicWidth(height) }
+        }
+    }
+    androidx.compose.ui.layout.Layout(
+        content = {
+            text { layoutHolder[0] = it }
+            meta?.invoke()
+        },
+        modifier = modifier,
+        measurePolicy = policy
+    )
+}
 
 /**
  * The bubble tail — `.message-bubble::before` (components.css:380-401).
@@ -1352,21 +1514,29 @@ private fun MessageActionTriggers(
     modifier: Modifier = Modifier,
     /** Null where this account may not post: reacting stays, replying does not. */
     onReply: (() -> Unit)?,
-    onReact: () -> Unit
+    /** Receives the react button's bottom-left corner, in window coordinates. */
+    onReact: (androidx.compose.ui.unit.IntOffset) -> Unit
 ) {
+    var reactAt by remember { mutableStateOf(androidx.compose.ui.unit.IntOffset.Zero) }
     Column(
         modifier.padding(horizontal = 4.dp),
         verticalArrangement = Arrangement.spacedBy(6.dp)
     ) {
         if (onReply != null) Icon(
             Icons.AutoMirrored.Filled.Reply, contentDescription = "Reply",
-            tint = Color.White.copy(alpha = 0.60f),
+            tint = PomboColors.Overlay60,
             modifier = Modifier.size(18.dp).clickableNoRipple(onReply)
         )
         Icon(
             Icons.Outlined.SentimentSatisfied, contentDescription = "React",
-            tint = Color.White.copy(alpha = 0.60f),
-            modifier = Modifier.size(18.dp).clickableNoRipple(onReact)
+            tint = PomboColors.Overlay60,
+            modifier = Modifier
+                .size(18.dp)
+                .onGloballyPositioned {
+                    val p = it.localToWindow(androidx.compose.ui.geometry.Offset(0f, it.size.height.toFloat()))
+                    reactAt = androidx.compose.ui.unit.IntOffset(p.x.toInt(), p.y.toInt())
+                }
+                .clickableNoRipple { onReact(reactAt) }
         )
     }
 }
