@@ -1230,13 +1230,24 @@ class StorageMedia(
             }
 
             var pass = 0
+            var widened = false
             while (staging.completedChunks() < total && pass < StorageMediaConfig.DOWNLOAD_RETRY_PASSES) {
                 pass++
                 delay(2000L * pass)
                 val before = staging.completedChunks()
                 val m = missing()
-                Log.w(TAG, "Storage download retry $pass/${StorageMediaConfig.DOWNLOAD_RETRY_PASSES}: ${m.size} chunks missing")
-                fetch(windowsFor(m))
+                val retryWindows = windowsFor(m)
+                Log.w(TAG, "Storage download retry $pass/${StorageMediaConfig.DOWNLOAD_RETRY_PASSES}: ${m.size} chunks missing ${m.take(20)}" +
+                    if (m.size <= 20) " in ${retryWindows.joinToString { "P${it.partition} ${it.from}-${it.to}" }}" else "")
+                fetch(retryWindows)
+                if (staging.completedChunks() == before && !widened) {
+                    // The windows guess each chunk's time from its index, and an upload
+                    // that published in bursts puts chunks far from that guess.
+                    widened = true
+                    val parts = m.map { StorageWindows.partitionOfChunk(it, meta.firstChunkPartition, meta.chunkPartitions) }.toSortedSet()
+                    Log.w(TAG, "Storage retry: estimated windows found nothing, reading P$parts over the full range")
+                    fetch(parts.map { Win(it, fromT, toT) })
+                }
                 if (staging.completedChunks() == before) {
                     Log.w(TAG, "Storage retry made no progress — storage does not have the missing chunks")
                     break
