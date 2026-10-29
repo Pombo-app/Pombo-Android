@@ -57,6 +57,9 @@ object StorageMediaConfig {
     /** Repair passes over chunks still missing after the verify sweep. */
     const val DOWNLOAD_RETRY_PASSES = 3
 
+    /** Upload verify repairs only after this long with no new chunk confirmed (web verifyQuietMs). */
+    const val VERIFY_QUIET_MS = 30_000L
+
     // ===== Download =====
 
     /** Parallel window reads on download (web concurrencyMobile). */

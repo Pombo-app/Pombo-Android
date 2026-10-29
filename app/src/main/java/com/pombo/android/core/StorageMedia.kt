@@ -921,20 +921,19 @@ class StorageMedia(
                     stored.addAll(found); missing = missingIdx(); updBar()
                 }
 
-                if (StorageMediaConfig.SECOND_CHANCE && !verifyBlind && missing.size > max(10, tc / 20)) {
-                    val scStart = perf(); var zeroProgress = 0; var stalledReal = 0
+                // Publishing returns long before the chunks reach storage, and they keep
+                // arriving for minutes after: repair only once nothing new has landed for a while.
+                if (StorageMediaConfig.SECOND_CHANCE && !verifyBlind && missing.isNotEmpty()) {
+                    val scStart = perf()
+                    val cap = max(5 * 60000L, tc * 2000L)
+                    var lastProgress = perf()
                     Log.w(TAG, "Storage pre-repair drain: ${missing.size}/$tc missing after the sweep")
-                    while (missing.isNotEmpty() && stalledReal < 2 && zeroProgress < 24 && perf() - scStart < 5 * 60000) {
+                    while (missing.isNotEmpty() && perf() - lastProgress < StorageMediaConfig.VERIFY_QUIET_MS && perf() - scStart < cap) {
                         delay(2500)
                         val before = missing.size
                         stored.addAll(readStoredIndices(messageStreamId, windowsForIndices(missing), tsIndexForVerify(), bases, "drain", expectedPublisher = verifyPublisher, storedKey = chunkIdentityPk))
                         missing = missingIdx(); updBar()
-                        if (missing.size < before) { zeroProgress = 0; stalledReal = 0 } else {
-                            zeroProgress++
-                            val parts = missing.map { it % chunkParts }.toSet()
-                            var allPassed = true; for (k in parts) if (!frontierVisible(k)) { allPassed = false; break }
-                            if (allPassed) stalledReal++ else stalledReal = 0
-                        }
+                        if (missing.size < before) lastProgress = perf()
                         up.phase = "Waiting for storage: ${missing.size} unconfirmed…"; emit(up)
                     }
                 }
@@ -947,15 +946,15 @@ class StorageMedia(
                     Log.w(TAG, "Storage repair pass $pass: ${missing.size} chunks confirmed missing")
                     up.phase = "Repairing (pass $pass)…"; up.stage = "repairing"; emit(up)
                     republishParallel(missing)
-                    var noProg = 0
-                    var r = 0
-                    while (r < 30 && missing.isNotEmpty()) {
-                        r++
+                    var lastProgress = perf()
+                    while (missing.isNotEmpty()) {
                         delay(2000)
                         stored.addAll(readStoredIndices(messageStreamId, windowsForIndices(missing), tsIndexForVerify(), bases, "post-repair pass $pass", expectedPublisher = verifyPublisher, storedKey = chunkIdentityPk))
                         val before = missing.size; missing = missingIdx(); updBar()
-                        if (missing.size < before) { noProg = 0; continue }
-                        noProg++; if (noProg >= 6) { Log.w(TAG, "$noProg reads with no progress — republishing the ${missing.size} missing again"); break }
+                        if (missing.size < before) { lastProgress = perf(); continue }
+                        if (perf() - lastProgress >= StorageMediaConfig.VERIFY_QUIET_MS) {
+                            Log.w(TAG, "Nothing new for ${StorageMediaConfig.VERIFY_QUIET_MS / 1000}s — republishing the ${missing.size} missing again"); break
+                        }
                     }
                     stalledPasses = if (stored.size > storedBefore) 0 else stalledPasses + 1
                 }
