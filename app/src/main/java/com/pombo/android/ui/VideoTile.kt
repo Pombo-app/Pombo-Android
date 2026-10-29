@@ -98,7 +98,8 @@ fun VideoTile(
     status: String,
     working: Boolean = false,
     onDownload: (() -> Unit)?,
-    onSave: (() -> Unit)?
+    onSave: (() -> Unit)?,
+    onRetry: (() -> Unit)? = null
 ) {
     var playing by remember(id, source) { mutableStateOf(source != null && autoplayRequests.remove(id)) }
     val fullscreen = LocalVideoFullscreen.current
@@ -159,6 +160,10 @@ fun VideoTile(
             if (onSave != null) Text(
                 "Save", color = PomboColors.Overlay40, fontSize = 11.sp, maxLines = 1,
                 modifier = Modifier.clickable(onClick = onSave)
+            )
+            if (onRetry != null) Text(
+                "Retry", color = PomboColors.Overlay40, fontSize = 11.sp, maxLines = 1,
+                modifier = Modifier.clickable(onClick = onRetry)
             )
         }
     }

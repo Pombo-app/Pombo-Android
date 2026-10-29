@@ -3830,10 +3830,32 @@ class AppViewModel(app: Application) : AndroidViewModel(app), PomboBridge.Listen
      * the source (chunk i = bytes i*upc..), so the slicer opens a SEEKABLE file
      * descriptor; compression reads it sequentially via [openStream].
      */
-    fun sendStorageFile(uri: android.net.Uri) = trackSend(viewModelScope.launch {
+    /** An upload this session announced with gaps: what a retry sends again (memory only). */
+    private data class StorageRetry(val uri: android.net.Uri, val channelStreamId: String, val messageId: String)
+    private val storageRetries = java.util.concurrent.ConcurrentHashMap<String, StorageRetry>()
+    private val _retryableTransfers = MutableStateFlow<Set<String>>(emptySet())
+    val retryableTransfers: StateFlow<Set<String>> = _retryableTransfers.asStateFlow()
+
+    private fun publishRetries() { _retryableTransfers.value = storageRetries.keys.toSet() }
+
+    /**
+     * Sends an upload announced with gaps again, then deletes the incomplete
+     * copy (erasing it from storage with this session's keys). The old copy
+     * stays until the new one is out, so a failed retry loses nothing.
+     */
+    fun retryStorageUpload(transferId: String) {
+        val retry = storageRetries[transferId] ?: return
+        if (manager.current.value?.messageStreamId != retry.channelStreamId) return
+        storageRetries.remove(transferId); publishRetries()
+        trackSend(viewModelScope.launch { shareStorage(retry.uri, replaces = retry, retriedId = transferId) })
+    }
+
+    fun sendStorageFile(uri: android.net.Uri) = trackSend(viewModelScope.launch { shareStorage(uri, replaces = null, retriedId = null) })
+
+    private suspend fun shareStorage(uri: android.net.Uri, replaces: StorageRetry?, retriedId: String?) {
         try {
             val (name, size, mime) = documentInfo(uri)
-                ?: run { _lastError.value = "Could not read the file size"; return@launch }
+                ?: run { _lastError.value = "Could not read the file size"; return }
             val resolver = getApplication<Application>().contentResolver
             val fName = name; val fMime = mime; val fSize = size
             val isVideo = fMime.startsWith("video/")
@@ -3870,11 +3892,22 @@ class AppViewModel(app: Application) : AndroidViewModel(app), PomboBridge.Listen
                 }
             }
             ensureTransferService()
-            manager.sendStorageFile(source)
+            val channelStreamId = manager.current.value?.messageStreamId
+            val (messageId, meta) = manager.sendStorageFile(source)
+            if (replaces != null) runCatching { manager.deleteMessage(replaces.messageId) }
+            val stored = meta?.storedChunks
+            val total = meta?.totalChunks
+            if (meta != null && stored != null && total != null && stored < total && channelStreamId != null) {
+                storageRetries[meta.transferId] = StorageRetry(uri, channelStreamId, messageId); publishRetries()
+                toast("Stored with gaps ($stored/$total)", com.pombo.android.ui.ToastKind.WARNING, subtitle = "Retry sends it again")
+            } else if (replaces != null) {
+                toast("Sent again", com.pombo.android.ui.ToastKind.SUCCESS)
+            }
         } catch (e: Exception) {
+            if (replaces != null && retriedId != null) { storageRetries[retriedId] = replaces; publishRetries() }
             _lastError.value = "Storage share failed: ${e.message}"
         }
-    })
+    }
 
     fun toggleReaction(messageId: String, emoji: String, add: Boolean) = viewModelScope.launch {
         // Web wording: a raw exception string means nothing to the user.

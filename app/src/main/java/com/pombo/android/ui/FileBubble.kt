@@ -74,6 +74,9 @@ interface StorageTransfers {
     fun original(transferId: String): android.net.Uri?
     /** The open channel is a DM: our own uploads live in the peer's inbox, which we cannot read. */
     val inDm: Boolean
+    /** This session announced the upload with gaps and can send it again. */
+    fun canRetry(transferId: String): Boolean
+    fun onRetry(transferId: String)
 }
 
 val LocalStorageTransfers = staticCompositionLocalOf<StorageTransfers?> { null }
@@ -366,11 +369,13 @@ fun StorageFileBubbleContent(
             working = working,
             status = when {
                 active || isError -> line1
+                incomplete -> "Incomplete on storage (${file.storedChunks}/${file.totalChunks})"
                 source == null && unreachable -> "Not on this device"
                 else -> ""
             },
-            onDownload = if (source == null && !active && !unreachable) ({ transfers?.onDownload(messageId) }) else null,
-            onSave = if (completedFile != null) ({ transfers?.onSave(file.transferId, file.fileName) }) else null
+            onDownload = if (source == null && !active && !unreachable && !incomplete) ({ transfers?.onDownload(messageId) }) else null,
+            onSave = if (completedFile != null) ({ transfers?.onSave(file.transferId, file.fileName) }) else null,
+            onRetry = if (incomplete && transfers?.canRetry(file.transferId) == true) ({ transfers.onRetry(file.transferId) }) else null
         )
         return
     }
@@ -403,11 +408,17 @@ fun StorageFileBubbleContent(
                         )
                     }
                 }
-                if (incomplete) Text(
-                    "⚠ incomplete on storage (${file.storedChunks}/${file.totalChunks})",
-                    color = Color(0xFFFBBF24).copy(alpha = 0.7f), fontSize = 10.sp, maxLines = 1,
-                    overflow = TextOverflow.Ellipsis, modifier = Modifier.padding(top = 2.dp)
-                )
+                if (incomplete) Row(Modifier.padding(top = 2.dp), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                    Text(
+                        "⚠ incomplete on storage (${file.storedChunks}/${file.totalChunks})",
+                        color = Color(0xFFFBBF24).copy(alpha = 0.7f), fontSize = 10.sp, maxLines = 1,
+                        overflow = TextOverflow.Ellipsis
+                    )
+                    if (transfers?.canRetry(file.transferId) == true) Text(
+                        "Retry", color = Color(0xFFFBBF24).copy(alpha = 0.9f), fontSize = 10.sp, maxLines = 1,
+                        modifier = Modifier.clickable { transfers.onRetry(file.transferId) }
+                    )
+                }
             }
             if (mine && action != null) action()
         }

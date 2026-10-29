@@ -204,7 +204,8 @@ fun PomboApp(vm: AppViewModel) {
         val storageDownloads by vm.storageDownloads.collectAsState()
         val savedTransferIds by vm.savedTransferIds.collectAsState()
         val inDm = current?.type == "dm"
-        val storageTransfers = remember(storageUploads, storageDownloads, savedTransferIds, inDm) {
+        val retryableTransfers by vm.retryableTransfers.collectAsState()
+        val storageTransfers = remember(storageUploads, storageDownloads, savedTransferIds, inDm, retryableTransfers) {
             object : com.pombo.android.ui.StorageTransfers {
                 override fun uploadFor(transferId: String) = storageUploads[transferId]
                 override fun downloadFor(transferId: String) = storageDownloads[transferId]
@@ -215,6 +216,8 @@ fun PomboApp(vm: AppViewModel) {
                 override fun completedFile(transferId: String) = vm.storageCompletedFile(transferId)
                 override fun original(transferId: String) = vm.storageOriginal(transferId)
                 override val inDm = inDm
+                override fun canRetry(transferId: String) = retryableTransfers.contains(transferId)
+                override fun onRetry(transferId: String) = vm.retryStorageUpload(transferId)
             }
         }
         androidx.compose.runtime.CompositionLocalProvider(

@@ -361,7 +361,8 @@ internal class FileTransfers(private val manager: ChannelManager) {
      * timeline. Progress is observed via [storageMedia].uploads, keyed by the
      * bubble's transferId.
      */
-    suspend fun sendStorageFile(source: com.pombo.android.core.StorageMedia.Source) {
+    /** @return the message id and the announced metadata */
+    suspend fun sendStorageFile(source: com.pombo.android.core.StorageMedia.Source): Pair<String, com.pombo.android.core.StorageMedia.StorageFileMetadata?> {
         val channel = _current.value ?: throw IllegalStateException("No channel open")
         if (source.size <= 0) throw IllegalArgumentException("File is empty")
         val sender = myAddress() ?: throw IllegalStateException("No identity")
@@ -449,6 +450,7 @@ internal class FileTransfers(private val manager: ChannelManager) {
             } else {
                 manager.rememberChannelFileRows(id, result.chunkRows)
             }
+            return id to finalMeta
         } catch (e: Exception) {
             _messages.value = _messages.value.filterNot { it.id == id }
             throw e
