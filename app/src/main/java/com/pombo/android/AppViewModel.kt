@@ -116,6 +116,9 @@ class AppViewModel(app: Application) : AndroidViewModel(app), PomboBridge.Listen
         if (transferBusy()) ensureTransferService()
     }
 
+    /** transferId -> whether our upload's original can still be read; see [storageOriginal]. */
+    private val originalReadable = java.util.concurrent.ConcurrentHashMap<String, Boolean>()
+
     val manager = ChannelManager(
         bridge = bridge,
         store = channelStore,
@@ -1876,9 +1879,7 @@ class AppViewModel(app: Application) : AndroidViewModel(app), PomboBridge.Listen
             // user already joined (web does this right after the initial render).
             runCatching { manager.refreshChannelMetadataFromGraph() }
         }
-        viewModelScope.launch(kotlinx.coroutines.Dispatchers.IO) {
-            com.pombo.android.core.TransferDirs.sweep(app, manager.transferDir)
-        }
+        sweepTransfers(manager.transferDir)
         // A Keystore invalidation (lock screen removed, backup restore) forces
         // SecurePrefs to reset the affected files so the app can boot at all —
         // a silent reset of the wallet file would otherwise look like account loss.
@@ -1994,7 +1995,16 @@ class AppViewModel(app: Application) : AndroidViewModel(app), PomboBridge.Listen
     /** Whether a storage download has landed on disk, ready to save. */
     fun storageFileReady(transferId: String) = manager.storageCompletedFile(transferId) != null
     fun storageCompletedFile(transferId: String) = manager.storageCompletedFile(transferId)
-    fun storageOriginal(transferId: String) = manager.storageOriginal(transferId)
+    /** The original of our upload, while it is still on the device and readable. */
+    fun storageOriginal(transferId: String): android.net.Uri? {
+        val uri = manager.storageOriginal(transferId) ?: return null
+        val readable = originalReadable.getOrPut(transferId) {
+            runCatching {
+                getApplication<Application>().contentResolver.openFileDescriptor(uri, "r")?.close() != null
+            }.getOrDefault(false)
+        }
+        return uri.takeIf { readable }
+    }
     fun localMeshFile(fileId: String) = manager.media.localFile(fileId)
 
     // Auto-save bookkeeping: which completed transfers already had saveFile/
@@ -3764,8 +3774,17 @@ class AppViewModel(app: Application) : AndroidViewModel(app), PomboBridge.Listen
         transferSends.toList().forEach { it.cancel() }
         val next = com.pombo.android.core.TransferDirs.forScope(getApplication(), address, guest, _address.value)
         manager.transferDir = next
+        originalReadable.clear()
+        sweepTransfers(next)
+    }
+
+    private fun sweepTransfers(dir: java.io.File) {
         viewModelScope.launch(kotlinx.coroutines.Dispatchers.IO) {
-            com.pombo.android.core.TransferDirs.sweep(getApplication(), next)
+            com.pombo.android.core.TransferDirs.sweep(getApplication(), dir)
+            val resolver = getApplication<Application>().contentResolver
+            for (uri in manager.sweepStorageLocalFiles()) runCatching {
+                resolver.releasePersistableUriPermission(android.net.Uri.parse(uri), android.content.Intent.FLAG_GRANT_READ_URI_PERMISSION)
+            }
         }
     }
 
@@ -3817,11 +3836,15 @@ class AppViewModel(app: Application) : AndroidViewModel(app), PomboBridge.Listen
                 ?: run { _lastError.value = "Could not read the file size"; return@launch }
             val resolver = getApplication<Application>().contentResolver
             val fName = name; val fMime = mime; val fSize = size
+            val isVideo = fMime.startsWith("video/")
+            if (isVideo) runCatching {
+                resolver.takePersistableUriPermission(uri, android.content.Intent.FLAG_GRANT_READ_URI_PERMISSION)
+            }
             val source = object : com.pombo.android.core.StorageMedia.Source {
                 override val fileName = fName
                 override val fileType = fMime
                 override val size = fSize
-                override val original = uri
+                override val original = if (isVideo) uri else null
                 override fun openStream() = resolver.openInputStream(uri)
                     ?: throw java.io.IOException("cannot open the selected file")
                 override fun openSlicer(): com.pombo.android.core.StorageMedia.Source.Slicer {

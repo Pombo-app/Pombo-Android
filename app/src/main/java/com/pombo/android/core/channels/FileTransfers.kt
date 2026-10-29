@@ -308,9 +308,6 @@ internal class FileTransfers(private val manager: ChannelManager) {
      */
     private val storageTransferChannel = java.util.concurrent.ConcurrentHashMap<String, StorageTransferInfo>()
 
-    /** transferId -> the file this session sent, for the lifetime of the session. */
-    private val storageOriginals = java.util.concurrent.ConcurrentHashMap<String, android.net.Uri>()
-
     /** transferId -> the Job running its download, so pauseStorageTransfer() can cancel just that one. */
     private val storageDownloadJobs = java.util.concurrent.ConcurrentHashMap<String, kotlinx.coroutines.Job>()
 
@@ -397,7 +394,7 @@ internal class FileTransfers(private val manager: ChannelManager) {
             ensName = ensStore.cachedName(sender), ensAvatar = ensStore.cachedAvatar(sender)
         )
         storageTransferChannel[tid] = StorageTransferInfo(source.fileName, channelDisplayName(channel), channel.messageStreamId, bubble)
-        source.original?.let { storageOriginals[tid] = it }
+        source.original?.let { storageMedia.recordSentOriginal(tid, it.toString()) }
         mergeMessages(listOf(bubble))
         try {
             // Gated channels: capture the CURRENT key for the whole transfer
@@ -641,8 +638,12 @@ internal class FileTransfers(private val manager: ChannelManager) {
     /** The completed storage download's file on disk, or null (for saving). */
     fun storageCompletedFile(transferId: String): java.io.File? = storageMedia.completedFile(transferId)
 
-    /** The file this session sent as [transferId], or null. */
-    fun storageOriginal(transferId: String): android.net.Uri? = storageOriginals[transferId]
+    /** The file this device sent as [transferId], or null. */
+    fun storageOriginal(transferId: String): android.net.Uri? =
+        storageMedia.sentOriginal(transferId)?.let(android.net.Uri::parse)
+
+    /** See [com.pombo.android.core.StorageMedia.sweepLocalFiles]. */
+    fun sweepStorageLocalFiles(): List<String> = storageMedia.sweepLocalFiles()
 
     /**
      * Starts fetching the file announced by [messageId] in the open channel.

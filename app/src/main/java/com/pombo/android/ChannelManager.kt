@@ -7465,6 +7465,8 @@ class ChannelManager(
 
     fun storageOriginal(transferId: String): android.net.Uri? = files.storageOriginal(transferId)
 
+    fun sweepStorageLocalFiles(): List<String> = files.sweepStorageLocalFiles()
+
     fun cancelTransfer(fileId: String) = files.cancelTransfer(fileId)
 
     fun pauseTransfer(fileId: String) = files.pauseTransfer(fileId)

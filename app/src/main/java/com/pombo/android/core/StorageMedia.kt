@@ -207,7 +207,16 @@ class StorageMedia(
 
     /** transferId -> completed file on disk (staged bytes or inflated output), for saving. */
     private val completed = ConcurrentHashMap<String, File>()
-    fun completedFile(transferId: String): File? = completed[transferId]
+    private val localFiles = StorageLocalFiles(transferDir)
+    fun completedFile(transferId: String): File? =
+        completed[transferId] ?: localFiles.received(transferId)?.also { completed[transferId] = it }
+
+    /** Keeps the original of an upload playable across restarts. */
+    fun recordSentOriginal(transferId: String, uri: String) = localFiles.recordSent(transferId, uri)
+    fun sentOriginal(transferId: String): String? = localFiles.sent(transferId)
+
+    /** Expires old local files; returns the originals' Uris whose read grant the caller should release. */
+    fun sweepLocalFiles(): List<String> = localFiles.sweepExpired()
 
     /**
      * Forgets a download's partial state for good: staged bytes and progress
@@ -237,6 +246,7 @@ class StorageMedia(
         _uploads.value = emptyMap()
         _downloads.value = emptyMap()
         completed.clear()
+        localFiles.reload()
         chunkIdentities.clear()
     }
 
@@ -1177,7 +1187,10 @@ class StorageMedia(
                 phase = "Finishing write to disk…"; emitDl()
                 val asmStart = perf()
                 val outFile = withContext(Dispatchers.IO) { assemble(staging, dir, tid, isCompressed) { p -> phase = p; emitDlThrottled() } }
-                if (generation.get() == startedAt) completed[tid] = outFile
+                if (generation.get() == startedAt) {
+                    completed[tid] = outFile
+                    localFiles.recordReceived(tid, outFile)
+                }
                 status = "complete"; phase = null
                 bytesReceived = meta.originalSize
                 emitDl()
