@@ -24,6 +24,8 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
 import androidx.compose.runtime.staticCompositionLocalOf
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -36,6 +38,7 @@ import androidx.compose.ui.unit.sp
 import com.pombo.android.core.MediaController
 import com.pombo.android.ui.theme.PomboColors
 import com.pombo.android.core.StorageMedia
+import com.pombo.android.core.StorageStreams
 
 /**
  * What a file bubble needs from the app, provided once at the top of the tree.
@@ -343,7 +346,13 @@ fun StorageFileBubbleContent(
 
     if (isVideo) {
         val completedFile = if (ready) transfers?.completedFile(file.transferId) else null
-        val source = completedFile?.let(android.net.Uri::fromFile) ?: transfers?.original(file.transferId)
+        // Kept once playback starts from the download, so its end does not restart the player.
+        val stream = remember(file.transferId) { mutableStateOf<android.net.Uri?>(null) }
+        LaunchedEffect(file.transferId, downloading, pausedDl, isError) {
+            if (isError || pausedDl) stream.value = null
+            else if (downloading && stream.value == null) stream.value = StorageStreams.uriFor(file.transferId)
+        }
+        val source = stream.value ?: completedFile?.let(android.net.Uri::fromFile) ?: transfers?.original(file.transferId)
         VideoTile(
             id = file.transferId,
             fileName = file.fileName,

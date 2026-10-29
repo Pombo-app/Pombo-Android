@@ -55,7 +55,10 @@ import androidx.compose.ui.viewinterop.AndroidView
 import androidx.media3.common.MediaItem
 import androidx.media3.common.PlaybackException
 import androidx.media3.common.Player
+import androidx.media3.common.util.UnstableApi
+import androidx.media3.datasource.DataSource
 import androidx.media3.exoplayer.ExoPlayer
+import androidx.media3.exoplayer.source.DefaultMediaSourceFactory
 import androidx.media3.ui.PlayerView
 import com.pombo.android.R
 import com.pombo.android.ui.theme.PomboColors
@@ -190,16 +193,19 @@ private fun VideoPoster(source: Uri) {
     }
 }
 
+@androidx.annotation.OptIn(UnstableApi::class)
 @Composable
 private fun VideoPlayer(source: Uri, modifier: Modifier) {
     val context = LocalContext.current
     var failed by remember(source) { mutableStateOf(false) }
     val player = remember(source) {
-        ExoPlayer.Builder(context).build().apply {
-            setMediaItem(MediaItem.fromUri(source))
-            prepare()
-            playWhenReady = true
-        }
+        ExoPlayer.Builder(context)
+            .setMediaSourceFactory(DefaultMediaSourceFactory(DataSource.Factory { VideoDataSource(context) }))
+            .build().apply {
+                setMediaItem(MediaItem.fromUri(source))
+                prepare()
+                playWhenReady = true
+            }
     }
     DisposableEffect(player) {
         val listener = object : Player.Listener {

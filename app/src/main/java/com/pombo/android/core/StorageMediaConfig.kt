@@ -61,4 +61,7 @@ object StorageMediaConfig {
 
     /** Parallel window reads on download (web concurrencyMobile). */
     const val DOWNLOAD_CONCURRENCY = 3
+
+    /** Video downloads read the file front to back in slices of this many chunks (web videoSliceChunks). */
+    const val VIDEO_SLICE_CHUNKS = 36
 }

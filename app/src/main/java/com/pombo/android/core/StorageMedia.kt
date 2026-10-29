@@ -245,6 +245,7 @@ class StorageMedia(
         _uploads.value = emptyMap()
         _downloads.value = emptyMap()
         completed.clear()
+        StorageStreams.clear()
         localFiles.reload()
         chunkIdentities.clear()
     }
@@ -1104,6 +1105,10 @@ class StorageMedia(
         val staging = withContext(Dispatchers.IO) {
             StorageStagingStore.open(dir.also { it.mkdirs() }, tid, compressedSize, chunkDataSize, total)
         }
+        val isVideo = meta.fileType.startsWith("video/")
+        if (isVideo && !isCompressed) {
+            StorageStreams.put(tid, StorageStreams.Stream(staging.stagedFile(), compressedSize, chunkDataSize, staging::hasChunk))
+        }
 
         var status = "downloading"
         var bytesReceived = staging.completedChunks().toLong() * chunkDataSize
@@ -1169,6 +1174,10 @@ class StorageMedia(
             val resumeN = staging.completedChunks()
             if (resumeN < total) {
                 val windows = if (resumeN > 0 && resumeN >= total * 0.3) windowsFor(missing())
+                    else if (isVideo) StorageWindows.sequentialWindows(
+                        meta.firstChunkTs, meta.lastChunkTs, total, meta.firstChunkPartition, meta.chunkPartitions,
+                        fromT, toT, StorageMediaConfig.VIDEO_SLICE_CHUNKS
+                    )
                     else StorageWindows.chunkWindowsFor(meta.firstChunkPartition, meta.chunkPartitions, fromT, toT)
                 fetch(windows)
             }
@@ -1198,11 +1207,13 @@ class StorageMedia(
                     completed[tid] = outFile
                     localFiles.recordReceived(tid, outFile)
                 }
+                StorageStreams.get(tid)?.finished = true
                 status = "complete"; phase = null
                 bytesReceived = meta.originalSize
                 emitDl()
                 Log.i(TAG, "Storage download complete: ${meta.fileName} ($total chunks); assemble ${perf() - asmStart}ms")
             } else {
+                StorageStreams.stop(tid)
                 status = "error"
                 publishDl(DownloadProgress(tid, status, staging.completedChunks() * 100 / max(1, total),
                     staging.completedChunks(), total, bytesReceived, meta.originalSize, null, null,
@@ -1216,12 +1227,14 @@ class StorageMedia(
             // failure, so the staging stays on disk (same as the "incomplete"
             // branch above) and the status reflects a deliberate pause rather
             // than an error.
+            StorageStreams.stop(tid)
             status = "paused"
             val done = staging.completedChunks()
             publishDl(DownloadProgress(tid, status, if (total > 0) done * 100 / total else 0, done, total, bytesReceived, meta.originalSize, null, null))
             runCatching { staging.close() }
             throw e
         } catch (e: Exception) {
+            StorageStreams.stop(tid)
             status = "error"
             publishDl(DownloadProgress(tid, status, 0, staging.completedChunks(), total, bytesReceived, meta.originalSize, null, null, e.message))
             runCatching { staging.close() }

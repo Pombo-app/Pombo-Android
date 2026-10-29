@@ -65,4 +65,25 @@ class StorageWindowsTest {
         assertTrue(windows.any { it.partition == p && it.from <= 6000L && it.to >= 6000L })
         assertTrue(windows.any { it.partition == p && it.from == last - 5000 && it.to == 20000L })
     }
+
+    @Test
+    fun `sequentialWindows tiles the full range - start, end, then the middle in order`() {
+        val first = 1_000_000L; val last = 1_099_000L
+        val fromT = first - 30_000; val toT = last + 60_000
+        val windows = StorageWindows.sequentialWindows(first, last, 100, 2, 9, fromT, toT, 36)
+        val slices = windows.chunked(9).map { it.first().from to it.first().to }
+        assertEquals(fromT, slices[0].first)
+        assertEquals(toT, slices[1].second)
+        val tiled = listOf(slices[0]) + slices.drop(2) + listOf(slices[1])
+        for (k in 1 until tiled.size) assertEquals(tiled[k - 1].second, tiled[k].first)
+        assertEquals((2..10).toList(), windows.take(9).map { it.partition })
+    }
+
+    @Test
+    fun `sequentialWindows falls back to full ranges without chunk timestamps`() {
+        assertEquals(
+            StorageWindows.chunkWindowsFor(2, 9, 5, 6),
+            StorageWindows.sequentialWindows(null, null, 100, 2, 9, 5, 6, 36)
+        )
+    }
 }
