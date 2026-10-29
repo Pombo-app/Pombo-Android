@@ -21,6 +21,7 @@ import kotlin.math.pow
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.async
 import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -105,6 +106,8 @@ class StorageMedia(
         fun openSlicer(): Slicer
         /** The picked file itself, which the sender plays instead of downloading. */
         val original: android.net.Uri? get() = null
+        /** A video's first-frame thumbnail for the announce (base64 JPEG), if one could be made. */
+        fun thumbnail(): String? = null
         interface Slicer : Closeable {
             fun readAt(offset: Long, length: Int): ByteArray
         }
@@ -151,7 +154,8 @@ class StorageMedia(
         val firstChunkTs: Long?,
         val lastChunkTs: Long?,
         val storedChunks: Int?,
-        val encSalt: String?
+        val encSalt: String?,
+        val thumbnail: String? = null
     ) {
         companion object {
             /** Parse from an announce message's `metadata` object; null if unusable. */
@@ -177,7 +181,8 @@ class StorageMedia(
                     firstChunkTs = optLongOrNull("firstChunkTs"),
                     lastChunkTs = optLongOrNull("lastChunkTs"),
                     storedChunks = optIntOrNull("storedChunks"),
-                    encSalt = optStrOrNull("encSalt")
+                    encSalt = optStrOrNull("encSalt"),
+                    thumbnail = VideoThumbnail.accept(optStrOrNull("thumbnail"))
                 )
             }
         }
@@ -518,6 +523,7 @@ class StorageMedia(
 
         val up = UploadState(tid, source.size, generation.get())
         emit(up)
+        val thumbnailJob = if (source.fileType.startsWith("video/")) scope.async(Dispatchers.IO) { source.thumbnail() } else null
 
         // Single-slot dispatcher: engine coordination never runs two coroutines at once.
         val engine = Dispatchers.Default.limitedParallelism(1)
@@ -963,8 +969,10 @@ class StorageMedia(
             // ---- announce ----
             up.phase = "Publishing announcement…"; up.stage = "announce"; emit(up)
             val sender = transport.myAddress() ?: throw IllegalStateException("No identity")
+            val thumbnail = thumbnailJob?.await()
             val timestamp = wall()
             val meta = JSONObject().apply {
+                if (thumbnail != null) put("thumbnail", thumbnail)
                 put("transferId", tid); put("fileName", source.fileName); put("fileType", source.fileType)
                 put("originalSize", source.size); put("compressedSize", compSize); put("compression", compression)
                 put("totalChunks", tc); put("chunkDataSize", upc); put("chunkPartitions", chunkParts)

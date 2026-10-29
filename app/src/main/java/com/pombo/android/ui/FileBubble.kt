@@ -367,6 +367,7 @@ fun StorageFileBubbleContent(
             downloading = active,
             progress = pct,
             working = working,
+            thumbnail = file.thumbnail,
             status = when {
                 active || isError -> line1
                 incomplete -> "Incomplete on storage (${file.storedChunks}/${file.totalChunks})"

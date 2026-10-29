@@ -97,6 +97,7 @@ fun VideoTile(
     progress: Float,
     status: String,
     working: Boolean = false,
+    thumbnail: String? = null,
     onDownload: (() -> Unit)?,
     onSave: (() -> Unit)?,
     onRetry: (() -> Unit)? = null
@@ -111,6 +112,7 @@ fun VideoTile(
             Modifier.fillMaxWidth().aspectRatio(16f / 9f).clip(RoundedCornerShape(12.dp)).background(PomboColors.Overlay6),
             contentAlignment = Alignment.Center
         ) {
+            if (source == null) ThumbnailPoster(thumbnail)
             when {
                 source != null && playing -> VideoPlayer(source, Modifier.fillMaxSize())
                 source != null -> {
@@ -202,6 +204,20 @@ fun VideoFullscreenHost(state: MutableState<Uri?>) {
             Modifier.align(Alignment.TopEnd).padding(top = 8.dp, end = 12.dp)
         ) { state.value = null }
     }
+}
+
+/** The announce's first-frame thumbnail, shown until the video itself is here. */
+@Composable
+private fun ThumbnailPoster(thumbnail: String?) {
+    val image = remember(thumbnail) {
+        thumbnail?.let {
+            runCatching {
+                val bytes = android.util.Base64.decode(it, android.util.Base64.NO_WRAP)
+                android.graphics.BitmapFactory.decodeByteArray(bytes, 0, bytes.size)?.asImageBitmap()
+            }.getOrNull()
+        }
+    } ?: return
+    Image(image, contentDescription = null, contentScale = ContentScale.Fit, modifier = Modifier.fillMaxSize())
 }
 
 @Composable

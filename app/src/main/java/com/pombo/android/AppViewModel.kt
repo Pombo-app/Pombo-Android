@@ -3867,6 +3867,7 @@ class AppViewModel(app: Application) : AndroidViewModel(app), PomboBridge.Listen
                 override val fileType = fMime
                 override val size = fSize
                 override val original = if (isVideo) uri else null
+                override fun thumbnail() = if (isVideo) com.pombo.android.core.VideoThumbnail.make(getApplication(), uri) else null
                 override fun openStream() = resolver.openInputStream(uri)
                     ?: throw java.io.IOException("cannot open the selected file")
                 override fun openSlicer(): com.pombo.android.core.StorageMedia.Source.Slicer {
