@@ -322,13 +322,19 @@ class StorageMedia(
         )
     }
 
+    /**
+     * Returns the pings as (partition, timestamp) to the call that sent them,
+     * so its delete removes them with the chunks they share a key with; empty
+     * for every other call.
+     */
     private suspend fun warmUpPartitions(
         sid: String, firstPartition: Int, count: Int, identityPk: String?,
         gateAddress: String? = null,
         onStatus: (String) -> Unit
-    ) {
-        if (warmedUp.contains(sid)) return
-        warmUpJobs[sid]?.let { it.join(); return }
+    ): List<Pair<Int, Long>> {
+        if (warmedUp.contains(sid)) return emptyList()
+        warmUpJobs[sid]?.let { it.join(); return emptyList() }
+        val sent = Collections.synchronizedList(ArrayList<Pair<Int, Long>>())
         val job = scope.launch(Dispatchers.IO) {
             onStatus("Preparing network…")
             val ping = byteArrayOf(0)
@@ -337,11 +343,12 @@ class StorageMedia(
                     // Pings ride the same publisher as the chunks, or the wallet
                     // would appear on the channel's -1 stream just from warm-up.
                     try {
-                        bridge.publishStorageChunk(
+                        val ts = bridge.publishStorageChunk(
                             sid, firstPartition + k, ping,
                             identityPk = identityPk,
                             gateAddress = gateAddress
                         )
+                        sent.add(firstPartition + k to ts)
                     }
                     catch (e: Exception) { Log.w(TAG, "storage warm-up P${firstPartition + k} failed: ${e.message}") }
                 }
@@ -351,6 +358,7 @@ class StorageMedia(
         }
         warmUpJobs[sid] = job
         try { job.join() } finally { warmUpJobs.remove(sid) }
+        return sent.toList()
     }
 
     // ---- verify reads (by timestamp; HTTP with format=metadata fast path) ----
@@ -646,7 +654,7 @@ class StorageMedia(
                 gateAddress != null -> gateAddress.lowercase()
                 else -> null
             }
-            warmUpPartitions(messageStreamId, firstPart, chunkParts, publishIdentityPk, gateAddress) { up.phase = it; emit(up) }
+            val warmUpPings = warmUpPartitions(messageStreamId, firstPart, chunkParts, publishIdentityPk, gateAddress) { up.phase = it; emit(up) }
 
             val firstChunkTs = wall()
             val uploadStart = perf()
@@ -1001,7 +1009,8 @@ class StorageMedia(
             emit(up); clearProgress(tid)
             val rowKey = chunkIdentityPk ?: if (channelEphemeral) publishIdentityPk else null
             val rows = if (rowKey == null) emptyList()
-                else chunkTsHist.flatMap { (i, hist) -> hist.map { DmSentRows.Row(messageStreamId, chunkPartition(i), it, 0, rowKey) } }
+                else warmUpPings.map { (p, ts) -> DmSentRows.Row(messageStreamId, p, ts, 0, rowKey) } +
+                    chunkTsHist.flatMap { (i, hist) -> hist.map { DmSentRows.Row(messageStreamId, chunkPartition(i), it, 0, rowKey) } }
             return SendResult(msgId, announce, storedCount, tc, rows)
         } catch (e: Exception) {
             up.error = e.message; emit(up); clearProgress(tid); throw e
