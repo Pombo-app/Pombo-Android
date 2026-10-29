@@ -54,8 +54,7 @@ private typealias Win = StorageWindows.Window
  * still fans out onto Dispatchers.IO.
  *
  * Deliberate divergences from the web: native per-file crypto ([PomboCrypto]),
- * native HTTP reads ([StorageHttp]), compress-then-publish (not pipelined),
- * MP4 faststart skipped ([StorageMediaConfig.FASTSTART] = false).
+ * native HTTP reads ([StorageHttp]), compress-then-publish (not pipelined).
  */
 class StorageMedia(
     private val bridge: PomboBridge,
@@ -569,7 +568,15 @@ class StorageMedia(
                     }
                 }
             } else {
-                slicer = withContext(Dispatchers.IO) { source.openSlicer() }
+                slicer = withContext(Dispatchers.IO) {
+                    val raw = source.openSlicer()
+                    if (!StorageMediaConfig.FASTSTART || !Mp4Faststart.isMp4Like(source.fileName, source.fileType)) return@withContext raw
+                    up.phase = "Optimizing video for streaming…"; emit(up)
+                    val fs = Mp4Faststart.remux(raw, source.size)
+                    if (fs.slicer != null) Log.i(TAG, "Faststart: converted (${fs.reason})")
+                    else Log.i(TAG, "Faststart: no conversion (${fs.reason})")
+                    fs.slicer ?: raw
+                }
             }
             val theSlicer = slicer!!
 

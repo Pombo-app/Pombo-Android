@@ -45,12 +45,8 @@ object StorageMediaConfig {
     /** Pre-repair drain: re-read while the cluster catches up before republishing. */
     const val SECOND_CHANCE = true
 
-    /**
-     * MP4 faststart remux on upload is DEFERRED on Android (brief §6): the web
-     * gates it behind a flag and the owner flagged it as flaky. Files upload
-     * as-is; nothing downstream depends on the faststart layout.
-     */
-    const val FASTSTART = false
+    /** Remux MP4-likes (moov first) before chunking, as the web does. */
+    const val FASTSTART = true
 
     /** Sliding window for the displayed transfer rate / ETA. */
     const val RATE_WINDOW_MS = 10_000L
