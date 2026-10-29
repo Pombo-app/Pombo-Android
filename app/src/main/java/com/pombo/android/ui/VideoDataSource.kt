@@ -46,6 +46,7 @@ private class StorageStreamDataSource : BaseDataSource(false) {
         if (length == 0) return 0
         if (remaining == 0L) return C.RESULT_END_OF_INPUT
         val s = stream ?: throw IOException("not open")
+        if (!s.has(position)) s.want(position)
         while (!s.has(position)) {
             if (s.stopped) throw IOException("video download stopped")
             try { Thread.sleep(50) } catch (e: InterruptedException) { throw InterruptedIOException() }

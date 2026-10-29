@@ -1185,8 +1185,16 @@ class StorageMedia(
             )
 
             suspend fun fetch(windows: List<Win>) {
-                if (isDm) fetchWindowsResendDm(chunkStreamId, windows, onRow, peerPublicKey!!)
-                else fetchWindowsParallel(chunkStreamId, windows, onRow, bases)
+                val picker = StorageWindows.Picker(windows) {
+                    StorageWindows.wantedTime(
+                        meta.firstChunkTs, meta.lastChunkTs, total, meta.chunkPartitions,
+                        StorageStreams.get(tid)?.wanted ?: -1
+                    )
+                }
+                // A DM window crosses the bridge whole: only video slices are small enough to run several.
+                val dmConcurrency = if (isVideo) StorageMediaConfig.DOWNLOAD_CONCURRENCY else 1
+                if (isDm) fetchWindowsResendDm(chunkStreamId, picker, dmConcurrency, onRow, peerPublicKey!!)
+                else fetchWindowsParallel(chunkStreamId, windows.size, picker, onRow, bases)
             }
 
             val resumeN = staging.completedChunks()
@@ -1197,7 +1205,28 @@ class StorageMedia(
                         fromT, toT, StorageMediaConfig.VIDEO_SLICE_CHUNKS
                     )
                     else StorageWindows.chunkWindowsFor(meta.firstChunkPartition, meta.chunkPartitions, fromT, toT)
-                fetch(windows)
+                coroutineScope {
+                    // A player stuck on a chunk the pass already read past fetches it
+                    // directly: near its estimated time first, then its whole partition.
+                    val chaser = if (isVideo) launch {
+                        var chased = -1
+                        var tries = 0
+                        while (isActive) {
+                            delay(2000)
+                            val s = StorageStreams.get(tid) ?: continue
+                            val w = s.wanted
+                            if (w < 0 || w >= total || staging.hasChunk(w)) continue
+                            if (System.currentTimeMillis() - s.wantedSince < StorageMediaConfig.STALL_CHASE_MS) continue
+                            if (w != chased) { chased = w; tries = 0 }
+                            tries++
+                            val p = StorageWindows.partitionOfChunk(w, meta.firstChunkPartition, meta.chunkPartitions)
+                            Log.i(TAG, "Storage download: player waits on chunk $w, fetching it directly (try $tries)")
+                            fetch(if (tries == 1) windowsFor(listOf(w)) else listOf(Win(p, fromT, toT)))
+                            s.wantedSince = System.currentTimeMillis()
+                        }
+                    } else null
+                    try { fetch(windows) } finally { chaser?.cancel() }
+                }
             }
 
             var pass = 0
@@ -1290,11 +1319,11 @@ class StorageMedia(
      * round-robining windows across bases. A per-window failure is logged and the
      * retry passes re-request through other nodes.
      */
-    private suspend fun fetchWindowsParallel(sid: String, windows: List<Win>, onRow: (StorageHttp.Row) -> Unit, bases: List<String>) {
-        if (windows.isEmpty() || bases.isEmpty()) return
+    private suspend fun fetchWindowsParallel(sid: String, count: Int, picker: StorageWindows.Picker, onRow: (StorageHttp.Row) -> Unit, bases: List<String>) {
+        if (count == 0 || bases.isEmpty()) return
         val next = AtomicInteger(0)
         coroutineScope {
-            repeat(min(StorageMediaConfig.DOWNLOAD_CONCURRENCY, windows.size)) {
+            repeat(min(StorageMediaConfig.DOWNLOAD_CONCURRENCY, count)) {
                 launch(Dispatchers.IO) {
                     // isActive, not `true`: the reads below are BLOCKING HTTP —
                     // no suspension points — so a cancelled Job (pause/cancel)
@@ -1303,10 +1332,8 @@ class StorageMedia(
                     // handler in downloadFile aborts mid-window for the same
                     // reason; this check catches the between-windows gap.
                     while (isActive) {
-                        val idx = next.getAndIncrement()
-                        if (idx >= windows.size) break
-                        val w = windows[idx]
-                        val base = bases[idx % bases.size]
+                        val w = picker.next() ?: break
+                        val base = bases[next.getAndIncrement() % bases.size]
                         try {
                             StorageHttp.directFetchRange(base, sid, w.partition, w.from, w.to, onRow)
                             endpoints.noteSuccess(base)
@@ -1330,32 +1357,41 @@ class StorageMedia(
      * packed bytes (base64). Sequential — a window can carry many chunks and each
      * response is large. [onRow] gets the already-opened packed chunk as content.
      */
-    private suspend fun fetchWindowsResendDm(inboxStreamId: String, windows: List<Win>, onRow: (StorageHttp.Row) -> Unit, peerPublicKey: String) {
+    private suspend fun fetchWindowsResendDm(inboxStreamId: String, picker: StorageWindows.Picker, concurrency: Int, onRow: (StorageHttp.Row) -> Unit, peerPublicKey: String) {
         // Rows cross the bridge SEALED; the pair key opens them here — the
         // ECDH decrypt IS the integrity check, so a foreign/tampered row
         // simply fails to open and is skipped.
         val myPk = myPrivateKey() ?: return
         val pairKey = SealedSenderCrypto.pairKey(myPk, peerPublicKey) ?: return
-        for (w in windows) {
-            try {
-                val res = bridge.call(
-                    "resendStorageChunksDm",
-                    JSONObject().put("streamId", inboxStreamId).put("partition", w.partition)
-                        .put("fromTs", w.from).put("toTs", w.to),
-                    timeoutMs = 180_000
-                )
-                val rows = res.optJSONArray("rows") ?: continue
-                for (i in 0 until rows.length()) {
-                    val r = rows.optJSONObject(i) ?: continue
-                    val b64 = r.optString("data")
-                    if (b64.isEmpty()) continue
-                    val sealed = try { Base64.decode(b64, Base64.NO_WRAP) } catch (e: Exception) { continue }
-                    val bytes = SealedSenderCrypto.pairOpen(sealed, pairKey) ?: continue
-                    val pub = if (r.isNull("publisherId")) null else r.optString("publisherId")
-                    onRow(StorageHttp.Row(bytes, r.optLong("timestamp"), pub))
+        coroutineScope {
+            repeat(concurrency) {
+                launch(Dispatchers.IO) {
+                    while (isActive) {
+                        val w = picker.next() ?: break
+                        try {
+                            val res = bridge.call(
+                                "resendStorageChunksDm",
+                                JSONObject().put("streamId", inboxStreamId).put("partition", w.partition)
+                                    .put("fromTs", w.from).put("toTs", w.to),
+                                timeoutMs = 180_000
+                            )
+                            val rows = res.optJSONArray("rows") ?: continue
+                            for (i in 0 until rows.length()) {
+                                val r = rows.optJSONObject(i) ?: continue
+                                val b64 = r.optString("data")
+                                if (b64.isEmpty()) continue
+                                val sealed = try { Base64.decode(b64, Base64.NO_WRAP) } catch (e: Exception) { continue }
+                                val bytes = SealedSenderCrypto.pairOpen(sealed, pairKey) ?: continue
+                                val pub = if (r.isNull("publisherId")) null else r.optString("publisherId")
+                                onRow(StorageHttp.Row(bytes, r.optLong("timestamp"), pub))
+                            }
+                        } catch (e: kotlinx.coroutines.CancellationException) {
+                            throw e
+                        } catch (e: Exception) {
+                            Log.w(TAG, "DM storage resend window P${w.partition} failed: ${e.message}")
+                        }
+                    }
                 }
-            } catch (e: Exception) {
-                Log.w(TAG, "DM storage resend window P${w.partition} failed: ${e.message}")
             }
         }
     }

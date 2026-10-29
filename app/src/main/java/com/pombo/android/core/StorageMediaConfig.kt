@@ -64,4 +64,7 @@ object StorageMediaConfig {
 
     /** Video downloads read the file front to back in slices of this many chunks (web videoSliceChunks). */
     const val VIDEO_SLICE_CHUNKS = 36
+
+    /** How long a player waits on a missing chunk before the download fetches it directly (web stallChaseMs). */
+    const val STALL_CHASE_MS = 6000L
 }

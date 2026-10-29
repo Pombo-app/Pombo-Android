@@ -20,6 +20,15 @@ object StorageStreams {
     ) {
         @Volatile var finished = false
         @Volatile var stopped = false
+        /** The chunk a player is blocked on, or -1. */
+        @Volatile var wanted = -1
+        /** When the player started waiting on [wanted]. */
+        @Volatile var wantedSince = 0L
+
+        fun want(position: Long) {
+            val chunk = (position / chunkSize).toInt()
+            if (chunk != wanted) { wantedSince = System.currentTimeMillis(); wanted = chunk }
+        }
 
         fun has(position: Long): Boolean = finished || hasChunk((position / chunkSize).toInt())
 

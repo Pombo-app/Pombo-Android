@@ -96,4 +96,32 @@ class StorageWindowsTest {
             StorageWindows.sequentialWindows(null, null, 100, 2, 9, 5, 6, 36)
         )
     }
+
+    private fun drain(p: StorageWindows.Picker) = generateSequence { p.next() }.toList()
+
+    @Test
+    fun `the picker hands out every window once, in order, with no player waiting`() {
+        val windows = (0 until 5).map { StorageWindows.Window(3, it * 10L, it * 10L + 10) }
+        assertEquals(windows, drain(StorageWindows.Picker(windows)))
+    }
+
+    @Test
+    fun `a player waiting ahead gets the windows from there on first, then the rest`() {
+        val slices = listOf(0L to 10L, 40L to 50L, 10L to 20L, 20L to 30L, 30L to 40L)
+        val windows = slices.flatMap { (f, t) -> listOf(StorageWindows.Window(3, f, t), StorageWindows.Window(4, f, t)) }
+        var wanted: Long? = null
+        val picker = StorageWindows.Picker(windows) { wanted }
+        assertEquals(windows[0], picker.next())
+        wanted = 25L
+        val rest = drain(picker)
+        assertEquals(listOf(20L, 20L, 30L, 30L, 40L, 40L, 0L, 10L, 10L), rest.map { it.from })
+        assertEquals(windows.toSet(), (rest + windows[0]).toSet())
+    }
+
+    @Test
+    fun `the wanted time sits one round of partitions before the chunk`() {
+        assertEquals(1000L + 91 * 10, StorageWindows.wantedTime(1000, 1990, 100, 9, 100))
+        assertEquals(null, StorageWindows.wantedTime(1000, 1990, 100, 9, -1))
+        assertEquals(null, StorageWindows.wantedTime(null, 1990, 100, 9, 5))
+    }
 }

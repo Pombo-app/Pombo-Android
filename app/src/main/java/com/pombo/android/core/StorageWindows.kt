@@ -13,6 +13,39 @@ object StorageWindows {
 
     data class Window(val partition: Int, val from: Long, val to: Long)
 
+    /**
+     * Hands out each window once, shared by the fetch workers: in list order,
+     * unless a player waits at [wantedFrom] — then the earliest windows still
+     * ahead of that time come first, and what lies behind it is filled last.
+     */
+    class Picker(private val windows: List<Window>, private val wantedFrom: () -> Long? = { null }) {
+        private val taken = BooleanArray(windows.size)
+        private var cursor = 0
+
+        @Synchronized
+        fun next(): Window? {
+            val t = wantedFrom()
+            if (t != null) {
+                var best = -1
+                for (i in windows.indices) {
+                    if (!taken[i] && windows[i].to > t && (best < 0 || windows[i].from < windows[best].from)) best = i
+                }
+                if (best >= 0) { taken[best] = true; return windows[best] }
+            }
+            while (cursor < windows.size && taken[cursor]) cursor++
+            if (cursor >= windows.size) return null
+            taken[cursor] = true
+            return windows[cursor++]
+        }
+    }
+
+    /** Where a player waiting on chunk [wanted] needs the download to be, a round of partitions early. */
+    fun wantedTime(firstChunkTs: Long?, lastChunkTs: Long?, totalChunks: Int, chunkPartitions: Int, wanted: Int): Long? {
+        if (wanted < 0 || firstChunkTs == null || lastChunkTs == null || totalChunks <= 1) return null
+        val interval = (lastChunkTs - firstChunkTs).toDouble() / (totalChunks - 1)
+        return firstChunkTs + Math.round(interval * (wanted - chunkPartitions))
+    }
+
     /** Partition holding chunk [i] per an announce's layout (reader trusts the announce). */
     fun partitionOfChunk(i: Int, firstPartition: Int, chunkPartitions: Int): Int =
         StreamConstants.storageChunkPartition(i, firstPartition, chunkPartitions)
