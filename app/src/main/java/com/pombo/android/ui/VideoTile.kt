@@ -5,6 +5,12 @@ import android.media.MediaMetadataRetriever
 import android.net.Uri
 import android.view.LayoutInflater
 import androidx.activity.compose.BackHandler
+import androidx.compose.animation.core.FastOutSlowInEasing
+import androidx.compose.animation.core.RepeatMode
+import androidx.compose.animation.core.animateFloat
+import androidx.compose.animation.core.infiniteRepeatable
+import androidx.compose.animation.core.rememberInfiniteTransition
+import androidx.compose.animation.core.tween
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
@@ -41,6 +47,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.runtime.staticCompositionLocalOf
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.asImageBitmap
@@ -89,6 +96,7 @@ fun VideoTile(
     downloading: Boolean,
     progress: Float,
     status: String,
+    working: Boolean = false,
     onDownload: (() -> Unit)?,
     onSave: (() -> Unit)?
 ) {
@@ -135,7 +143,10 @@ fun VideoTile(
             if (downloading) Box(
                 Modifier.align(Alignment.BottomCenter).fillMaxWidth().height(3.dp).background(Color.White.copy(alpha = 0.12f))
             ) {
-                Box(Modifier.fillMaxWidth(progress.coerceIn(0f, 1f)).fillMaxHeight().background(Color.White.copy(alpha = 0.85f)))
+                Box(
+                    Modifier.fillMaxWidth(progress.coerceIn(0f, 1f)).fillMaxHeight()
+                        .alpha(workingAlpha(working)).background(Color.White.copy(alpha = 0.85f))
+                )
             }
         }
         Row(
@@ -151,6 +162,18 @@ fun VideoTile(
             )
         }
     }
+}
+
+/** A full progress bar pulses while its upload confirms what it sent (web `.is-working`). */
+@Composable
+fun workingAlpha(working: Boolean): Float {
+    if (!working) return 1f
+    val pulse by rememberInfiniteTransition(label = "working").animateFloat(
+        initialValue = 1f, targetValue = 0.4f,
+        animationSpec = infiniteRepeatable(tween(700, easing = FastOutSlowInEasing), RepeatMode.Reverse),
+        label = "working-alpha"
+    )
+    return pulse
 }
 
 /** The fullscreen player, placed last in the app's root so it covers everything but the toasts. */

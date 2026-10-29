@@ -29,6 +29,7 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.staticCompositionLocalOf
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
@@ -142,7 +143,7 @@ fun TransportBadge(label: String) {
 
 /** A thin bottom progress bar, [pct] in 0..1, [color] the fill. */
 @Composable
-private fun ProgressBar(pct: Float, color: Color) {
+private fun ProgressBar(pct: Float, color: Color, working: Boolean = false) {
     Box(
         Modifier
             .fillMaxWidth()
@@ -153,6 +154,7 @@ private fun ProgressBar(pct: Float, color: Color) {
             Modifier
                 .fillMaxWidth(pct.coerceIn(0f, 1f))
                 .fillMaxHeight()
+                .alpha(workingAlpha(working))
                 .background(color)
         )
     }
@@ -331,6 +333,7 @@ fun StorageFileBubbleContent(
         (downloading || pausedDl) && dl != null && dl.total > 0 -> (dl.received.toFloat() / dl.total).coerceIn(0f, 1f)
         else -> 0f
     }
+    val working = uploading && up?.stage in setOf("verifying", "repairing", "announce")
 
     val action: (@Composable () -> Unit)? = when {
         // Saved is a pure status indicator — nothing to tap, nothing left to do.
@@ -360,6 +363,7 @@ fun StorageFileBubbleContent(
             source = source,
             downloading = active,
             progress = pct,
+            working = working,
             status = when {
                 active || isError -> line1
                 source == null && unreachable -> "Not on this device"
@@ -407,7 +411,7 @@ fun StorageFileBubbleContent(
             }
             if (mine && action != null) action()
         }
-        if (active) ProgressBar(pct, Color(0xFF8B5CF6))
+        if (active) ProgressBar(pct, Color(0xFF8B5CF6), working)
     }
 }
 

@@ -870,7 +870,8 @@ class StorageMedia(
             var storedCount: Int? = null
             if (StorageMediaConfig.VERIFY) withContext(engine) {
                 fun missingIdx(): List<Int> = (0 until tc).filter { !stored.contains(it) }
-                fun updBar() { up.percent = if (tc > 0) stored.size * 100 / tc else 0; up.stage = "verifying"; emitThrottled(up) }
+                fun updBar() { up.percent = 100; up.stage = "verifying"; emitThrottled(up) }
+                up.phase = "Verifying on storage…"
                 updBar()
 
                 // Frontier visibility: wait until each partition's newest chunk is readable.
