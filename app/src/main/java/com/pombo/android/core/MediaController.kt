@@ -1166,6 +1166,7 @@ class MediaController(
         val seeds = seedsFor(messageStreamId)
         if (seeds.isEmpty()) return
         ensureMediaPartitions(StreamConstants.deriveEphemeralId(messageStreamId), password)
+        if (seeds.any { it.isDm }) myDmEphemeralId()?.let { ensureMediaPartitions(it, null) }
         for (seed in seeds) {
             transport.publishMediaSignal(
                 seed.ephemeralStreamId,

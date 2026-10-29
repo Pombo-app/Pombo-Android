@@ -4908,6 +4908,25 @@ class ChannelManager(
         return healed
     }
 
+    /**
+     * Re-announces anything we can still serve in [channel]. A seeder that
+     * says nothing is invisible, so a file this device holds would look dead
+     * to anyone who arrived while we were away.
+     */
+    private suspend fun restoreSeeds(channel: Channel) {
+        try {
+            // Rehydrate first: seeds finished in a PREVIOUS session only exist
+            // on disk until this runs, and this is the one moment we hold the
+            // channel's password (the registry deliberately does not store it).
+            withContext(Dispatchers.IO) {
+                media.restoreSeedsFor(channel.messageStreamId, channel.password)
+            }
+            media.reannounceForChannel(channel.messageStreamId, channel.password)
+        } catch (e: Exception) {
+            Log.w(TAG, "seed re-announce failed: ${e.message}")
+        }
+    }
+
     private fun openInternal(channelIn: Channel, preview: Boolean) {
         val channel = healStreamIds(channelIn)
         // Paint the cached image synchronously, before any coroutine or network
@@ -4937,6 +4956,7 @@ class ChannelManager(
                 // same as a channel — this is how the peer sees me online and how
                 // "Online/Offline" flips in their header.
                 startPresence(channel)
+                launch { restoreSeeds(channel) }
             } else if (!channel.writeOnly) {
                 // Paid standing resolves alongside history — the expiry strip
                 // and the expired empty-state depend on it, and the chain read
@@ -5099,23 +5119,7 @@ class ChannelManager(
                 if (!stillCurrent(generation)) return@launch
                 _initialLoad.value = false
                 startPresence(channel)
-                // Re-announce anything we can still serve here. A seeder that
-                // says nothing is invisible, so a file this device holds would
-                // look dead to anyone who arrived while we were away.
-                launch {
-                    try {
-                        // Rehydrate first: seeds finished in a PREVIOUS session
-                        // only exist on disk until this runs, and this is the
-                        // one moment we hold the channel's password (the
-                        // registry deliberately does not store it).
-                        withContext(Dispatchers.IO) {
-                            media.restoreSeedsFor(channel.messageStreamId, channel.password)
-                        }
-                        media.reannounceForChannel(channel.messageStreamId, channel.password)
-                    } catch (e: Exception) {
-                        Log.w(TAG, "seed re-announce failed: ${e.message}")
-                    }
-                }
+                launch { restoreSeeds(channel) }
                 // Moderation convergence (web adminStatePoller, 30s): -3 has
                 // no live subscription, so after the on-open load this poller
                 // is what catches anything the admin_invalidate signal missed.
