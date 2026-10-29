@@ -1180,7 +1180,7 @@ class StorageMedia(
             }
         }
 
-        publishDl(DownloadProgress(tid, status, 0, staging.completedChunks(), total, bytesReceived, meta.originalSize, null, null))
+        publishDl(DownloadProgress(tid, status, staging.completedChunks() * 100 / max(1, total), staging.completedChunks(), total, bytesReceived, meta.originalSize, null, null))
 
         val dlStart = perf()
         try {
@@ -1283,7 +1283,7 @@ class StorageMedia(
                 status = "error"
                 publishDl(DownloadProgress(tid, status, staging.completedChunks() * 100 / max(1, total),
                     staging.completedChunks(), total, bytesReceived, meta.originalSize, null, null,
-                    "Storage incomplete — some chunks are missing. Retry later."))
+                    "Incomplete on storage (${staging.completedChunks()}/$total)"))
                 // Keep the partial staging on disk for a later resume.
                 staging.close()
                 Log.w(TAG, "Incomplete storage download: ${staging.completedChunks()}/$total preserved on disk")
@@ -1302,7 +1302,7 @@ class StorageMedia(
         } catch (e: Exception) {
             StorageStreams.stop(tid)
             status = "error"
-            publishDl(DownloadProgress(tid, status, 0, staging.completedChunks(), total, bytesReceived, meta.originalSize, null, null, e.message))
+            publishDl(DownloadProgress(tid, status, staging.completedChunks() * 100 / max(1, total), staging.completedChunks(), total, bytesReceived, meta.originalSize, null, null, e.message))
             runCatching { staging.close() }
             throw e
         }
