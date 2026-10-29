@@ -59,6 +59,15 @@ object StreamConstants {
         count: Int = STORAGE_CHUNK_PARTITIONS
     ): Int = firstPartition + (i % count)
 
+    /**
+     * How many partitions an upload spreads its chunks over: the standard
+     * count, or what the stream really has past [firstPartition] (channels
+     * created under an older layout have fewer). Unknown count → the standard one.
+     */
+    fun chunkPartitionsFor(partitionCount: Int?, firstPartition: Int): Int =
+        if (partitionCount == null) STORAGE_CHUNK_PARTITIONS
+        else (partitionCount - firstPartition).coerceIn(0, STORAGE_CHUNK_PARTITIONS)
+
     // Ephemeral stream (-2)
     const val EPH_PARTITIONS = 3
     const val EPH_CONTROL = 0           // presence, typing (JSON)

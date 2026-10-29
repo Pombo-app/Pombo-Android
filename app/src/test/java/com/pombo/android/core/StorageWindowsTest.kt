@@ -80,6 +80,16 @@ class StorageWindowsTest {
     }
 
     @Test
+    fun `chunk partitions stay inside the stream's real partitions`() {
+        assertEquals(9, StreamConstants.chunkPartitionsFor(12, 3))
+        assertEquals(8, StreamConstants.chunkPartitionsFor(11, 3))
+        assertEquals(9, StreamConstants.chunkPartitionsFor(13, 4))
+        assertEquals(9, StreamConstants.chunkPartitionsFor(20, 3))
+        assertEquals(0, StreamConstants.chunkPartitionsFor(3, 3))
+        assertEquals(9, StreamConstants.chunkPartitionsFor(null, 3))
+    }
+
+    @Test
     fun `sequentialWindows falls back to full ranges without chunk timestamps`() {
         assertEquals(
             StorageWindows.chunkWindowsFor(2, 9, 5, 6),

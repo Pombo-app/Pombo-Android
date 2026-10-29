@@ -318,7 +318,7 @@ class StorageMedia(
     }
 
     private suspend fun warmUpPartitions(
-        sid: String, firstPartition: Int, identityPk: String?,
+        sid: String, firstPartition: Int, count: Int, identityPk: String?,
         gateAddress: String? = null,
         onStatus: (String) -> Unit
     ) {
@@ -328,7 +328,7 @@ class StorageMedia(
             onStatus("Preparing network…")
             val ping = byteArrayOf(0)
             coroutineScope {
-                for (k in 0 until CHUNK_PARTS) launch {
+                for (k in 0 until count) launch {
                     // Pings ride the same publisher as the chunks, or the wallet
                     // would appear on the channel's -1 stream just from warm-up.
                     try {
@@ -489,7 +489,16 @@ class StorageMedia(
 
         // DM inboxes place chunks at P4-P12 (after the 4 classic partitions).
         val firstPart = if (isDm) StreamConstants.STORAGE_DM_FIRST_CHUNK_PARTITION else StreamConstants.STORAGE_FIRST_CHUNK_PARTITION
-        fun chunkPartition(i: Int) = StreamConstants.storageChunkPartition(i, firstPart)
+        val partitionCount = try {
+            bridge.call("getStreamInfo", JSONObject().put("streamId", messageStreamId))
+                .optJSONObject("metadata")?.optInt("partitions", 0)?.takeIf { it > 0 }
+        } catch (e: Exception) {
+            Log.w(TAG, "storage upload: partition count unknown, assuming the standard layout: ${e.message}"); null
+        }
+        val chunkParts = StreamConstants.chunkPartitionsFor(partitionCount, firstPart)
+        if (chunkParts < 1) throw IllegalStateException("This channel has no partitions for files on storage")
+        if (chunkParts < CHUNK_PARTS) Log.i(TAG, "storage upload: $chunkParts chunk partitions (stream has $partitionCount)")
+        fun chunkPartition(i: Int) = StreamConstants.storageChunkPartition(i, firstPart, chunkParts)
 
         val bases = try { endpoints.rotation(messageStreamId) } catch (e: Exception) {
             Log.w(TAG, "storage endpoint resolution failed: ${e.message}"); emptyList()
@@ -624,7 +633,7 @@ class StorageMedia(
                 gateAddress != null -> gateAddress.lowercase()
                 else -> null
             }
-            warmUpPartitions(messageStreamId, firstPart, publishIdentityPk, gateAddress) { up.phase = it; emit(up) }
+            warmUpPartitions(messageStreamId, firstPart, chunkParts, publishIdentityPk, gateAddress) { up.phase = it; emit(up) }
 
             val firstChunkTs = wall()
             val uploadStart = perf()
@@ -658,7 +667,7 @@ class StorageMedia(
                 for ((i, hist) in chunkTsHist) { val p = chunkPartition(i); for (t in hist) m["$p:$t"] = i }
                 return m
             }
-            fun allPartitionWindows(from: Long, to: Long) = (0 until CHUNK_PARTS).map { Win(firstPart + it, from, to) }
+            fun allPartitionWindows(from: Long, to: Long) = (0 until chunkParts).map { Win(firstPart + it, from, to) }
             fun windowsForIndices(indices: Collection<Int>): List<Win> {
                 val pad = 1500L
                 val raw = ArrayList<Win>()
@@ -865,8 +874,8 @@ class StorageMedia(
                 updBar()
 
                 // Frontier visibility: wait until each partition's newest chunk is readable.
-                val newestByPart = LongArray(CHUNK_PARTS)
-                for (i in 0 until tc) { val k = i % CHUNK_PARTS; val ts = chunkTs[i] ?: 0L; if (ts > newestByPart[k]) newestByPart[k] = ts }
+                val newestByPart = LongArray(chunkParts)
+                for (i in 0 until tc) { val k = i % chunkParts; val ts = chunkTs[i] ?: 0L; if (ts > newestByPart[k]) newestByPart[k] = ts }
                 suspend fun frontierVisible(k: Int): Boolean {
                     val base = if (bases.isNotEmpty()) bases[k % bases.size] else null
                     if (base == null || newestByPart[k] == 0L) return true
@@ -877,14 +886,14 @@ class StorageMedia(
                     return try { var seen = false; StorageHttp.directFetchRange(base, messageStreamId, firstPart + k, newestByPart[k] - 1500, newestByPart[k] + 1500) { seen = true }; seen } catch (e: Exception) { true }
                 }
                 if (bases.isNotEmpty() && tc > 1) {
-                    val pending = (0 until CHUNK_PARTS).filter { newestByPart[it] > 0 }.toMutableSet()
+                    val pending = (0 until chunkParts).filter { newestByPart[it] > 0 }.toMutableSet()
                     var lastPending = pending.size; var frontStall = 0
                     while (pending.isNotEmpty() && frontStall < 10) {
                         for (k in pending.toList()) try { if (frontierVisible(k)) pending.remove(k) } catch (e: Exception) { /* retry */ }
                         if (pending.isEmpty()) break
                         frontStall = if (pending.size < lastPending) 0 else frontStall + 1
                         lastPending = pending.size
-                        up.phase = "Waiting for storage (${CHUNK_PARTS - pending.size}/$CHUNK_PARTS partitions caught up)…"; emit(up)
+                        up.phase = "Waiting for storage (${chunkParts - pending.size}/$chunkParts partitions caught up)…"; emit(up)
                         delay(2000)
                     }
                 }
@@ -908,7 +917,7 @@ class StorageMedia(
                         missing = missingIdx(); updBar()
                         if (missing.size < before) { zeroProgress = 0; stalledReal = 0 } else {
                             zeroProgress++
-                            val parts = missing.map { it % CHUNK_PARTS }.toSet()
+                            val parts = missing.map { it % chunkParts }.toSet()
                             var allPassed = true; for (k in parts) if (!frontierVisible(k)) { allPassed = false; break }
                             if (allPassed) stalledReal++ else stalledReal = 0
                         }
@@ -950,7 +959,7 @@ class StorageMedia(
             val meta = JSONObject().apply {
                 put("transferId", tid); put("fileName", source.fileName); put("fileType", source.fileType)
                 put("originalSize", source.size); put("compressedSize", compSize); put("compression", compression)
-                put("totalChunks", tc); put("chunkDataSize", upc); put("chunkPartitions", CHUNK_PARTS)
+                put("totalChunks", tc); put("chunkDataSize", upc); put("chunkPartitions", chunkParts)
                 put("firstChunkPartition", firstPart); put("firstChunkTs", firstChunkTs); put("lastChunkTs", lastChunkTs)
                 put("storedChunks", storedCount ?: JSONObject.NULL); put("encSalt", sealer.encSalt ?: JSONObject.NULL)
             }
