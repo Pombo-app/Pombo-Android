@@ -985,8 +985,9 @@ class StorageMedia(
             up.phase = when { storedCount == null -> "Stored — UNVERIFIED (storage node issue)"; ok -> "Stored in %.1fs ✓".format(secs); else -> "Stored with gaps ($storedCount/$tc)" }
             up.stage = "done"; up.percent = 100; up.bytesSent = up.totalBytes ?: totalBytesSent
             emit(up); clearProgress(tid)
-            val rows = if (chunkIdentityPk == null) emptyList()
-                else chunkTsHist.flatMap { (i, hist) -> hist.map { DmSentRows.Row(messageStreamId, chunkPartition(i), it, 0, chunkIdentityPk) } }
+            val rowKey = chunkIdentityPk ?: if (channelEphemeral) publishIdentityPk else null
+            val rows = if (rowKey == null) emptyList()
+                else chunkTsHist.flatMap { (i, hist) -> hist.map { DmSentRows.Row(messageStreamId, chunkPartition(i), it, 0, rowKey) } }
             return SendResult(msgId, announce, storedCount, tc, rows)
         } catch (e: Exception) {
             up.error = e.message; emit(up); clearProgress(tid); throw e

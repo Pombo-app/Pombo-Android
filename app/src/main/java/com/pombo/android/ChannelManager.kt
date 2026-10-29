@@ -3444,6 +3444,26 @@ class ChannelManager(
     internal fun rememberDmFileRows(messageId: String, rows: List<com.pombo.android.core.DmSentRows.Row>) =
         rows.forEach { dmSentRows.remember(messageId, it) }
 
+    /**
+     * Storage rows this session published in channels under a pseudonym, with
+     * the key that signed each: kept past the pseudonym's rotation, so its
+     * author can erase a message for as long as the session that wrote it lasts.
+     */
+    private val channelSentRows = com.pombo.android.core.DmSentRows()
+
+    internal fun rememberChannelFileRows(messageId: String, rows: List<com.pombo.android.core.DmSentRows.Row>) =
+        rows.forEach { channelSentRows.remember(messageId, it) }
+
+    /** Where a published payload's row is filed: its id, or its image's id for a chunk, which has none. */
+    private fun sentRowKey(payload: JSONObject): String? =
+        payload.optString("id").ifEmpty {
+            if (payload.optString("type") == "image_chunk") payload.optString("imageId").ifEmpty { null }?.let { "image:$it" } else null
+        }
+
+    /** A message's purge groups, with a chunked image's chunks before its manifest. */
+    private fun sentGroups(rows: com.pombo.android.core.DmSentRows, streamId: String, msg: UiMessage) =
+        (msg.imageId?.let { rows.purgeGroups(streamId, "image:$it") } ?: emptyList()) + rows.purgeGroups(streamId, msg.id)
+
     /** The pair key that seals stored DM media with this peer, for opening chunk rows outside a download. */
     internal suspend fun dmPairKeyFor(peer: String): ByteArray? {
         val myPk = myPrivateKey() ?: return null
@@ -3506,9 +3526,9 @@ class ChannelManager(
         val res = bridge.call("publishAs", JSONObject()
             .put("streamId", streamId).put("partition", partition)
             .put("content", envelope).put("privateKey", ephemeralPk), timeoutMs)
-        val id = message.optString("id")
+        val id = sentRowKey(message)
         val ts = res.optLong("timestamp", 0L)
-        if (id.isNotEmpty() && ts > 0L) {
+        if (id != null && ts > 0L) {
             dmSentRows.remember(id, com.pombo.android.core.DmSentRows.Row(streamId, partition, ts, 0, ephemeralPk))
         }
         return res
@@ -6389,22 +6409,31 @@ class ChannelManager(
     }
 
     /**
-     * The storage side of an own delete, signed by the key that signed the
-     * message, which is what the node checks: the account on a Visible gated
-     * (or read-only) channel, this session's pseudonym on public/password,
-     * where an older message is out of its author's reach. Sealed channels
-     * sign with the shared key, so nobody can claim authorship there. Null
-     * when the purge does not apply; a failure comes back on the outcome
-     * rather than failing a delete that already went out.
+     * The storage side of an own delete. The node honours whoever signed the
+     * rows, and the channel owner:
+     *  - rows this session published under a pseudonym: those exact rows,
+     *    with the keys that wrote them (a pseudonym from an earlier session is gone);
+     *  - the account on a gated or read-only channel, and always for the owner.
+     * Sealed rows carry the shared key, so authorship proves nothing there.
+     * Null when the delete only hides the message; a failure comes back on
+     * the outcome rather than failing a delete that already went out.
      */
     private suspend fun purgeOwnMessage(channel: Channel, msg: UiMessage): com.pombo.android.core.StoragePurge.Outcome? {
         val providers = _purgeProviders.value
-        if (providers == 0 || channel.wireIdentity == "sealed") return null
-        if (channel.type == "dm") return purgeSentDm(channel, msg.id)
-        val key = ownPurgeKey(channel, msg) ?: return null
+        if (providers == 0) return null
+        if (channel.type == "dm") return purgeSentDm(channel, msg)
+        val sessionGroups = sentGroups(channelSentRows, channel.messageStreamId, msg)
+        val accountKey = if (sessionGroups.isEmpty()) ownAccountPurgeKey(channel) ?: return null else null
         return try {
-            val groups = messageGroups(channel, msg)
-            com.pombo.android.core.StoragePurge.purgeGroups(storageEndpoints, channel.messageStreamId, groups, key)
+            if (accountKey != null) {
+                com.pombo.android.core.StoragePurge.purgeGroups(storageEndpoints, channel.messageStreamId, messageGroups(channel, msg), accountKey)
+            } else {
+                val outcome = com.pombo.android.core.StoragePurge.purgeGroups(
+                    storageEndpoints, channel.messageStreamId, sessionGroups, sessionGroups.last().privateKeyHex!!
+                )
+                if (outcome.erasedOn > 0) { channelSentRows.forget(msg.id); msg.imageId?.let { channelSentRows.forget("image:$it") } }
+                outcome
+            }
         } catch (e: Exception) {
             com.pombo.android.core.StoragePurge.Outcome(
                 providers = providers, erasedOn = 0, forbiddenOn = 0, unreachable = 0, outcomes = emptyList(),
@@ -6413,23 +6442,22 @@ class ChannelManager(
         }
     }
 
-    private fun ownPurgeKey(channel: Channel, msg: UiMessage): String? {
-        if (channel.type == "gated" || channel.readOnly) return myPrivateKey()
-        val me = myAddress() ?: return null
-        val entry = com.pombo.android.core.ChannelIdentities.existing(channel.messageStreamId, me) ?: return null
-        if (msg.publisherId != null && !msg.publisherId.equals(entry.publisherId, ignoreCase = true)) return null
-        return entry.identityPk
+    private fun ownAccountPurgeKey(channel: Channel): String? = when {
+        amOwner(channel) -> myPrivateKey()
+        channel.wireIdentity == "sealed" -> null
+        channel.type == "gated" || channel.readOnly -> myPrivateKey()
+        else -> null
     }
 
     /** Erase a sent DM from the peer's storage with the keys that wrote it; null when this session holds none. */
-    private suspend fun purgeSentDm(channel: Channel, messageId: String): com.pombo.android.core.StoragePurge.Outcome? {
-        val groups = dmSentRows.purgeGroups(channel.messageStreamId, messageId)
+    private suspend fun purgeSentDm(channel: Channel, msg: UiMessage): com.pombo.android.core.StoragePurge.Outcome? {
+        val groups = sentGroups(dmSentRows, channel.messageStreamId, msg)
         if (groups.isEmpty()) return null
         return try {
             val outcome = com.pombo.android.core.StoragePurge.purgeGroups(
                 storageEndpoints, channel.messageStreamId, groups, groups.last().privateKeyHex!!
             )
-            if (outcome.erasedOn > 0) dmSentRows.forget(messageId)
+            if (outcome.erasedOn > 0) { dmSentRows.forget(msg.id); msg.imageId?.let { dmSentRows.forget("image:$it") } }
             outcome
         } catch (e: Exception) {
             com.pombo.android.core.StoragePurge.Outcome(
@@ -6471,8 +6499,8 @@ class ChannelManager(
             android.util.Log.d(TAG, "dm purge applies? providers=${_purgeProviders.value} holds=$holds id=$messageId")
             return _purgeProviders.value > 0 && holds
         }
-        if (_purgeProviders.value == 0 || channel.wireIdentity == "sealed") return false
-        return ownPurgeKey(channel, msg) != null
+        if (_purgeProviders.value == 0) return false
+        return channelSentRows.holds(channel.messageStreamId, msg.id) || ownAccountPurgeKey(channel) != null
     }
 
     fun sendTyping() = presence.sendTyping()
@@ -6698,7 +6726,12 @@ class ChannelManager(
             )
         password?.let { args.put("password", it) }
         val res = bridge.call("publishAsChannel", args)
-        return res.optLong("timestamp", 0L).takeIf { it > 0 } ?: System.currentTimeMillis()
+        val ts = res.optLong("timestamp", 0L)
+        val key = sentRowKey(payload)
+        if (key != null && ts > 0L) {
+            channelSentRows.remember(key, com.pombo.android.core.DmSentRows.Row(streamId, partition, ts, 0, entry.identityPk))
+        }
+        return ts.takeIf { it > 0 } ?: System.currentTimeMillis()
     }
 
     /**

@@ -446,6 +446,8 @@ internal class FileTransfers(private val manager: ChannelManager) {
                 sentDmStore.add(channel.messageStreamId, result.announce)
                 manager.rememberDmFileRows(id, result.chunkRows)
                 onLocalStateChanged()
+            } else {
+                manager.rememberChannelFileRows(id, result.chunkRows)
             }
         } catch (e: Exception) {
             _messages.value = _messages.value.filterNot { it.id == id }
