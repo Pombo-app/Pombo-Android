@@ -8,4 +8,5 @@
     android:layout_height="match_parent"
     android:background="@android:color/black"
     app:surface_type="texture_view"
+    app:controller_layout_id="@layout/pombo_player_controls"
     app:show_buffering="when_playing" />

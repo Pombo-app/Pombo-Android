@@ -104,6 +104,7 @@ fun VideoTile(
     var playing by remember(id, source) { mutableStateOf(source != null && autoplayRequests.remove(id)) }
     val fullscreen = LocalVideoFullscreen.current
     val pill = status.ifEmpty { if (source == null) size else "" }
+    val streaming = source != null && playing
 
     Column(Modifier.width(300.dp)) {
         Box(
@@ -141,14 +142,7 @@ fun VideoTile(
                     .background(Color.Black.copy(alpha = 0.6f))
                     .padding(horizontal = 7.dp, vertical = 1.dp)
             )
-            if (downloading) Box(
-                Modifier.align(Alignment.BottomCenter).fillMaxWidth().height(3.dp).background(Color.White.copy(alpha = 0.12f))
-            ) {
-                Box(
-                    Modifier.fillMaxWidth(progress.coerceIn(0f, 1f)).fillMaxHeight()
-                        .alpha(workingAlpha(working)).background(Color.White.copy(alpha = 0.85f))
-                )
-            }
+            if (downloading && !streaming) DownloadBar(progress, working, Modifier.align(Alignment.BottomCenter))
         }
         Row(
             Modifier.fillMaxWidth().padding(start = 2.dp, end = 2.dp, top = 4.dp),
@@ -166,6 +160,16 @@ fun VideoTile(
                 modifier = Modifier.clickable(onClick = onRetry)
             )
         }
+    }
+}
+
+@Composable
+private fun DownloadBar(progress: Float, working: Boolean, modifier: Modifier) {
+    Box(modifier.fillMaxWidth().height(3.dp).background(Color.White.copy(alpha = 0.12f))) {
+        Box(
+            Modifier.fillMaxWidth(progress.coerceIn(0f, 1f)).fillMaxHeight()
+                .alpha(workingAlpha(working)).background(Color.White.copy(alpha = 0.85f))
+        )
     }
 }
 
