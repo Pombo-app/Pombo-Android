@@ -529,10 +529,27 @@ class StorageMedia(
             val compression = if (doCompress) "deflate" else "none"
             up.phase = "Processing…"; emit(up)
 
+            // The stored bytes: a video may gain a segment index, so its size is the slicer's.
+            var rawSize = source.size
+            if (!doCompress) slicer = withContext(Dispatchers.IO) {
+                val raw = source.openSlicer()
+                if (!StorageMediaConfig.FASTSTART || !Mp4Faststart.isMp4Like(source.fileName, source.fileType)) return@withContext raw
+                up.phase = "Optimizing video for streaming…"; emit(up)
+                val fs = Mp4Faststart.remux(raw, source.size)
+                if (fs.slicer != null) Log.i(TAG, "Faststart: converted (${fs.reason})")
+                else Log.i(TAG, "Faststart: no conversion (${fs.reason})")
+                val laidOut = fs.slicer ?: raw
+                val indexed = Mp4Faststart.addSegmentIndex(laidOut, source.size)
+                if (indexed.slicer == null) return@withContext laidOut
+                Log.i(TAG, "Segment index: ${indexed.reason}")
+                rawSize = indexed.size
+                indexed.slicer
+            }
+
             // Worst-case deflate size bound (zlib stored blocks + header slack), so
             // the chunk meta + chunk math start BEFORE compression finishes — the
             // true size goes in the announce. Same estimate the web uses.
-            val metaCompSize = if (doCompress) source.size + ceil(source.size / 16384.0).toLong() * 5 + 64 else source.size
+            val metaCompSize = if (doCompress) source.size + ceil(source.size / 16384.0).toLong() * 5 + 64 else rawSize
             val startTs = wall()
             val metaBytes = StorageWire.chunkMetaJson(source.fileName, source.fileType, source.size, metaCompSize, compression, tid, startTs)
             val overheadHeader = 4 + metaBytes.size + 4 + 4
@@ -545,9 +562,9 @@ class StorageMedia(
             // committed = compressed bytes on disk & readable; publish workers consume
             // the growing prefix instead of waiting for the whole file to compress
             // first. The non-compressed path has everything available immediately.
-            val committed = AtomicLong(if (doCompress) 0L else source.size)
+            val committed = AtomicLong(if (doCompress) 0L else rawSize)
             val compDoneFlag = AtomicBoolean(!doCompress)
-            val compSizeRef = AtomicLong(if (doCompress) 0L else source.size)
+            val compSizeRef = AtomicLong(if (doCompress) 0L else rawSize)
             val producerError = AtomicReference<Throwable?>(null)
             fun curTc(): Int = if (compDoneFlag.get()) max(1, ceil(compSizeRef.get().toDouble() / upc).toInt()) else estTc
 
@@ -576,16 +593,6 @@ class StorageMedia(
                     } finally {
                         compDoneFlag.set(true)
                     }
-                }
-            } else {
-                slicer = withContext(Dispatchers.IO) {
-                    val raw = source.openSlicer()
-                    if (!StorageMediaConfig.FASTSTART || !Mp4Faststart.isMp4Like(source.fileName, source.fileType)) return@withContext raw
-                    up.phase = "Optimizing video for streaming…"; emit(up)
-                    val fs = Mp4Faststart.remux(raw, source.size)
-                    if (fs.slicer != null) Log.i(TAG, "Faststart: converted (${fs.reason})")
-                    else Log.i(TAG, "Faststart: no conversion (${fs.reason})")
-                    fs.slicer ?: raw
                 }
             }
             val theSlicer = slicer!!

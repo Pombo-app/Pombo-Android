@@ -70,4 +70,50 @@ class Mp4FaststartTest {
         val junk = ByteArray(64) { 0x41 }
         assertNull(Mp4Faststart.remux(BytesSlicer(junk), junk.size.toLong()).slicer)
     }
+
+    private fun u32s(vararg xs: Int) = ByteBuffer.allocate(xs.size * 4).apply { xs.forEach { putInt(it) } }.array()
+    private fun cat(vararg parts: ByteArray) = parts.fold(ByteArray(0)) { acc, b -> acc + b }
+
+    private val fragMoov = box("moov",
+        box("trak", box("tkhd", u32s(0, 0, 0, 1, 0)), box("mdia", box("mdhd", u32s(0, 0, 0, 1000, 0)))),
+        box("mvex", box("trex", u32s(0, 1, 1, 0, 0, 0))))
+    private fun fragment(tfhd: ByteArray, vararg rest: ByteArray) =
+        box("moof", box("mfhd", u32s(0, 1)), box("traf", tfhd, *rest))
+    // Per-sample durations in trun; then a default duration in tfhd.
+    private val moof1 = fragment(box("tfhd", u32s(0x020000, 1)), box("tfdt", u32s(0x01000000, 0, 1000)), box("trun", u32s(0x100, 2, 100, 150)))
+    private val moof2 = fragment(box("tfhd", u32s(0x020008, 1, 200)), box("trun", u32s(0, 3)))
+    private val mdat1 = box("mdat", ByteArray(20))
+    private val mdat2 = box("mdat", ByteArray(10))
+    private val free = box("free", ByteArray(4))
+
+    @Test
+    fun `a fragmented MP4 gains a sidx after the moov describing each fragment`() {
+        val original = cat(ftyp, fragMoov, free, moof1, mdat1, moof2, mdat2, box("mfra", ByteArray(16)))
+
+        val result = Mp4Faststart.addSegmentIndex(BytesSlicer(original), original.size.toLong())
+
+        val out = result.slicer!!.readAt(0, result.size.toInt())
+        val at = ftyp.size + fragMoov.size
+        val v = ByteBuffer.wrap(out, at, out.size - at).slice()
+        assertEquals("sidx", String(out, at + 4, 4, Charsets.ISO_8859_1))
+        assertEquals(original.size + v.getInt(0), out.size)
+        assertEquals(1, v.getInt(12))
+        assertEquals(1000, v.getInt(16))
+        assertEquals(1000L, v.getLong(20))
+        assertEquals(free.size.toLong(), v.getLong(28))
+        assertEquals(2, v.getShort(38).toInt())
+        assertEquals(listOf(moof1.size + mdat1.size, 250), listOf(v.getInt(40), v.getInt(44)))
+        assertEquals(listOf(moof2.size + mdat2.size, 600), listOf(v.getInt(52), v.getInt(56)))
+        assertArrayEquals(original.copyOfRange(at, original.size), out.copyOfRange(at + v.getInt(0), out.size))
+    }
+
+    @Test
+    fun `a progressive or already indexed MP4 is left as it is`() {
+        val progressive = cat(ftyp, moov(), mdat)
+        assertNull(Mp4Faststart.addSegmentIndex(BytesSlicer(progressive), progressive.size.toLong()).slicer)
+        val indexed = cat(ftyp, fragMoov, box("sidx", ByteArray(24)), moof1, mdat1)
+        assertEquals("already indexed", Mp4Faststart.addSegmentIndex(BytesSlicer(indexed), indexed.size.toLong()).reason)
+        val junk = ByteArray(64) { 0x41 }
+        assertNull(Mp4Faststart.addSegmentIndex(BytesSlicer(junk), junk.size.toLong()).slicer)
+    }
 }
