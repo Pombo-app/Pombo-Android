@@ -211,7 +211,7 @@ private fun DeviceSyncPanel(vm: AppViewModel) {
         Spacer(Modifier.height(14.dp))
         if (!available) {
             Text(
-                if (isGuest) "Sync belongs to a real account. Connect a wallet to move your state between devices."
+                if (isGuest) "You need an account with DM inbox to move your state between devices."
                 else "Sync travels through your own DM inbox. Create it first to turn these options on.",
                 color = PomboColors.Overlay40, fontSize = 12.sp, lineHeight = 17.sp,
                 modifier = Modifier.fillMaxWidth()
