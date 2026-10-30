@@ -751,9 +751,11 @@ private fun DmInboxPanel(vm: AppViewModel) {
     val health by vm.inboxHealth.collectAsState()
     val storage by vm.inboxStorage.collectAsState()
     var showDmSetup by remember { mutableStateOf(false) }
-    // Storage shows on open, not gated behind a Diagnose (like the channel
-    // storage panel).
-    LaunchedEffect(Unit) { vm.loadInboxStorage() }
+    // Storage and health both load on open; nothing waits behind a button.
+    LaunchedEffect(Unit) {
+        vm.loadInboxStorage()
+        vm.diagnoseInbox()
+    }
 
     if (showDmSetup) CreateDmInboxDialog(
         vm,
@@ -815,13 +817,20 @@ private fun DmInboxPanel(vm: AppViewModel) {
                     Text(title, color = PomboColors.Overlay70, fontSize = 14.sp)
                     Spacer(Modifier.height(2.dp))
                     Text(detail, color = PomboColors.Overlay30, fontSize = 12.sp, lineHeight = 16.sp)
+                    if (health is AppViewModel.InboxHealth.Failed) {
+                        Spacer(Modifier.height(6.dp))
+                        Text(
+                            "Check again", color = PomboColors.Overlay50, fontSize = 12.sp,
+                            modifier = Modifier.clickableNoRipple { vm.diagnoseInbox() }
+                        )
+                    }
                 }
             }
             Spacer(Modifier.height(14.dp))
         }
 
         val busyNow = health is AppViewModel.InboxHealth.Loading || health is AppViewModel.InboxHealth.Repairing
-        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+        if (health is AppViewModel.InboxHealth.NoInbox || health is AppViewModel.InboxHealth.Issues) Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
             if (health is AppViewModel.InboxHealth.NoInbox) {
                 // Web: the primary action morphs into "Create DM Inbox".
                 Row(
@@ -838,19 +847,6 @@ private fun DmInboxPanel(vm: AppViewModel) {
                     Text("Create DM Inbox", color = Color.White, fontSize = 13.sp, fontWeight = FontWeight.Medium)
                 }
             } else {
-                Row(
-                    Modifier.weight(1f)
-                        .background(PomboColors.Overlay5, RoundedCornerShape(8.dp))
-                        .border(1.dp, PomboColors.Overlay10, RoundedCornerShape(8.dp))
-                        .clickableNoRipple { if (!busyNow) vm.diagnoseInbox() }
-                        .padding(vertical = 8.dp),
-                    horizontalArrangement = Arrangement.Center,
-                    verticalAlignment = Alignment.CenterVertically
-                ) {
-                    Icon(Icons.Outlined.Search, contentDescription = null, tint = PomboColors.Overlay70, modifier = Modifier.size(13.dp))
-                    Spacer(Modifier.width(6.dp))
-                    Text("Diagnose", color = PomboColors.Overlay70, fontSize = 12.sp)
-                }
                 if (health is AppViewModel.InboxHealth.Issues) {
                     Row(
                         Modifier.weight(1f)
