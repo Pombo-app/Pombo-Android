@@ -172,6 +172,15 @@ class LatestMessageStore(context: Context) {
         if (file != null) persist(snapshot, file, startedAt)
     }
 
+    suspend fun remove(streamId: String) {
+        val (snapshot, file, startedAt) = synchronized(lock) {
+            if (streamId !in _previews.value) return
+            _previews.value = _previews.value - streamId
+            Triple(_previews.value, currentFile(), generation)
+        }
+        if (file != null) persist(snapshot, file, startedAt)
+    }
+
     /** Erases the previews of the account in scope (the account is being deleted). */
     suspend fun clearAccount(): Unit = withContext(Dispatchers.IO) {
         val file = synchronized(lock) { currentFile().also { reset() } } ?: return@withContext

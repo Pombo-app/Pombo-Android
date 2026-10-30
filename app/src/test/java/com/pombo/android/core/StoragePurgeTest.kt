@@ -339,4 +339,63 @@ class StoragePurgeTest {
         assertThrows(IllegalStateException::class.java) { StoragePurge.closestTarget(emptyList(), 500) }
         assertThrows(IllegalStateException::class.java) { StoragePurge.closestTarget(listOf(row(500, 0), row(500, 1)), 500) }
     }
+
+    @Test
+    fun `chunkGroupsByOpener takes every row of a transfer whose probe opens, and leaves the rest`() = runBlocking {
+        val endpoints = mockk<StorageEndpoints>()
+        coEvery { endpoints.providersWith(STREAM, "purge") } returns listOf(StorageEndpoints.Node("0xa", listOf("https://a.example")))
+        // 0xff = sealed for the blocked pair, 0xee = someone else's.
+        val sealed = mapOf(
+            "0xt1" to byteArrayOf(0xff.toByte()) + chunkBytes("t1"),
+            "0xt2" to byteArrayOf(0xee.toByte()) + chunkBytes("t2"),
+            "0xt3" to byteArrayOf(0xff.toByte()) + chunkBytes("t3")
+        )
+        val meta = mapOf(
+            4 to listOf(StorageHttp.MetaRow(10, "0xT1"), StorageHttp.MetaRow(20, "0xT2")),
+            5 to listOf(StorageHttp.MetaRow(11, "0xT1"), StorageHttp.MetaRow(30, "0xT3"))
+        )
+        val probes = ArrayList<Long>()
+        val open: (ByteArray, Long) -> ByteArray = { b, _ -> check(b[0] == 0xff.toByte()); b.copyOfRange(1, b.size) }
+        val sweep = StoragePurge.chunkGroupsByOpener(
+            endpoints, STREAM, listOf(4, 5), listOf(open),
+            readMeta = { _, p -> meta[p].orEmpty() },
+            readAt = { _, p, ts, onRow ->
+                probes.add(ts)
+                meta[p].orEmpty().filter { it.timestamp == ts }
+                    .forEach { onRow(StorageHttp.Row(sealed.getValue(it.publisherId!!.lowercase()), it.timestamp, it.publisherId)) }
+            }
+        )
+        assertEquals(
+            listOf(
+                StoragePurge.Group(4, listOf(StoragePurge.Target(10, 0))),
+                StoragePurge.Group(5, listOf(StoragePurge.Target(11, 0), StoragePurge.Target(30, 0)))
+            ),
+            sweep.groups
+        )
+        assertEquals(2, sweep.files)
+        assertEquals(0, sweep.unchecked)
+        assertEquals(listOf(10L, 20L, 30L), probes)
+    }
+
+    @Test
+    fun `chunkGroupsByOpener counts an unreadable probe and fails on an unreadable partition`() = runBlocking {
+        val endpoints = mockk<StorageEndpoints>()
+        coEvery { endpoints.providersWith(STREAM, "purge") } returns listOf(StorageEndpoints.Node("0xa", listOf("https://a.example")))
+        val open: (ByteArray, Long) -> ByteArray = { b, _ -> b }
+        val sweep = StoragePurge.chunkGroupsByOpener(
+            endpoints, STREAM, listOf(4), listOf(open),
+            readMeta = { _, _ -> listOf(StorageHttp.MetaRow(10, "0xT1")) },
+            readAt = { _, _, _, _ -> }
+        )
+        assertEquals(StoragePurge.Sweep(emptyList(), 0, 1), sweep)
+        assertThrows(IllegalStateException::class.java) {
+            runBlocking {
+                StoragePurge.chunkGroupsByOpener(
+                    endpoints, STREAM, listOf(4), listOf(open),
+                    readMeta = { _, _ -> throw java.io.IOException("down") }
+                )
+            }
+        }
+        Unit
+    }
 }

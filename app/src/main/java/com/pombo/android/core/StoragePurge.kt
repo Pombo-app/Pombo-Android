@@ -265,4 +265,64 @@ object StoragePurge {
         }
         return groups
     }
+
+    /** [files] transfers that opened; [unchecked] those whose probe row could not be read. */
+    data class Sweep(val groups: List<Group>, val files: Int, val unchecked: Int)
+
+    /**
+     * The chunk rows of every file whose chunks open with one of [openers],
+     * found by content instead of through announces, so chunks whose announce
+     * never went out are found too. A transfer writes all its chunks under one
+     * key, so one row per publisher decides for the rest (web chunkGroupsByOpener).
+     */
+    suspend fun chunkGroupsByOpener(
+        endpoints: StorageEndpoints, streamId: String, partitions: List<Int>,
+        openers: List<(ByteArray, Long) -> ByteArray>,
+        readMeta: suspend (url: String, partition: Int) -> List<StorageHttp.MetaRow> =
+            { url, partition -> StorageHttp.directFetchRangeMeta(url, streamId, partition, 0L, System.currentTimeMillis()) },
+        readAt: suspend (url: String, partition: Int, timestamp: Long, onRow: (StorageHttp.Row) -> Unit) -> Unit =
+            { url, partition, ts, onRow -> StorageHttp.directFetchRange(url, streamId, partition, ts, ts, onRow) }
+    ): Sweep {
+        val urls = endpoints.providersWith(streamId, "purge").flatMap { it.urls }
+        check(urls.isNotEmpty()) { "No storage provider can identify the chunks" }
+
+        val byPublisher = LinkedHashMap<String, MutableList<Pair<Int, Target>>>()
+        for (partition in partitions) {
+            var rows: List<StorageHttp.MetaRow>? = null
+            for (url in urls) {
+                rows = runCatching { readMeta(url, partition) }.getOrNull()
+                if (rows != null) break
+            }
+            for (r in rows ?: throw IllegalStateException("Could not read the chunks on partition $partition")) {
+                byPublisher.getOrPut(r.publisherId.orEmpty().lowercase()) { ArrayList() }
+                    .add(partition to Target(r.timestamp, r.sequenceNumber))
+            }
+        }
+
+        val byPartition = LinkedHashMap<Int, MutableList<Target>>()
+        var files = 0
+        var unchecked = 0
+        for ((publisher, rows) in byPublisher) {
+            val (probePartition, probe) = rows.first()
+            var sealed: ByteArray? = null
+            for (url in urls) {
+                val read = runCatching {
+                    readAt(url, probePartition, probe.timestamp) { r ->
+                        if (sealed == null && r.publisherId.orEmpty().lowercase() == publisher) sealed = r.content
+                    }
+                }.isSuccess
+                if (read) break
+            }
+            val bytes = sealed
+            if (bytes == null) {
+                unchecked++
+                continue
+            }
+            val theirs = openers.any { open -> chunkTransferId(runCatching { open(bytes, probe.timestamp) }.getOrNull()) != null }
+            if (!theirs) continue
+            files++
+            for ((partition, target) in rows) byPartition.getOrPut(partition) { ArrayList() }.add(target)
+        }
+        return Sweep(byPartition.map { (p, t) -> Group(p, t) }, files, unchecked)
+    }
 }
