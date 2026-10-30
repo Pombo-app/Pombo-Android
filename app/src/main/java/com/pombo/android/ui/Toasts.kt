@@ -177,9 +177,7 @@ private fun ToastItem(toast: Toast, onDismiss: () -> Unit) {
         Box(
             Modifier
                 .offset { IntOffset(offsetX.roundToInt(), 0) }
-                // The 380px cap is desktop-only; mobile lets the panel run to
-                // the container's near-full width.
-                .fillMaxWidth()
+                .widthIn(min = 200.dp)
                 // .toast { box-shadow: 0 8px 32px rgba(0,0,0,0.4), … } — on a
                 // near-black background the shadow is the only thing lifting
                 // the toast off the page.
@@ -227,7 +225,7 @@ private fun ToastItem(toast: Toast, onDismiss: () -> Unit) {
                     Spacer(Modifier.width(12.dp))
                 }
 
-                Column(Modifier.weight(1f)) {
+                Column(Modifier.weight(1f, fill = false)) {
                     Text(
                         toast.message,
                         color = PomboColors.Overlay90,
@@ -245,13 +243,16 @@ private fun ToastItem(toast: Toast, onDismiss: () -> Unit) {
             }
 
             if (!persistent) {
-                Box(
-                    Modifier
-                        .align(Alignment.BottomStart)
-                        .fillMaxWidth(barProgress.coerceIn(0f, 1f))
-                        .height(2.dp)
-                        .background(toast.kind.color)
-                )
+                // matchParentSize keeps the bar from widening the toast to the screen.
+                Box(Modifier.matchParentSize()) {
+                    Box(
+                        Modifier
+                            .align(Alignment.BottomStart)
+                            .fillMaxWidth(barProgress.coerceIn(0f, 1f))
+                            .height(2.dp)
+                            .background(toast.kind.color)
+                    )
+                }
             }
         }
     }
