@@ -39,8 +39,8 @@ import androidx.compose.material.icons.outlined.AccountBalanceWallet
 import androidx.compose.material.icons.outlined.ChevronLeft
 import androidx.compose.material.icons.outlined.ChevronRight
 import androidx.compose.material.icons.outlined.Link
-import androidx.compose.material.icons.outlined.Lock
-import androidx.compose.material.icons.outlined.Shield
+import androidx.compose.material.icons.outlined.Block
+import androidx.compose.material.icons.outlined.Key
 import androidx.compose.material.icons.outlined.SmartDisplay
 import androidx.compose.material.icons.outlined.MailOutline
 import androidx.compose.material.icons.outlined.VerifiedUser
@@ -116,8 +116,8 @@ internal enum class SettingsPanel(val label: String, val icon: ImageVector, val 
     NOTIFICATIONS("Notifications", Icons.Outlined.Notifications, 0),
     NETWORKS("Networks", Icons.Outlined.Link, 0),
     CONTENT("Content", Icons.Outlined.SmartDisplay, 0),
-    PRIVACY("Privacy", Icons.Outlined.Shield, 1),
-    SECURITY("Security", Icons.Outlined.Lock, 1),
+    PRIVACY("Privacy", Icons.Outlined.Block, 1),
+    SECURITY("Security", Icons.Outlined.Key, 1),
     DM_INBOX("DM Inbox", Icons.Outlined.MailOutline, 1)
     // ABOUT lives on the Profile screen.
 }
