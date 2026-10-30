@@ -3,6 +3,7 @@ package com.pombo.android.ui.screens
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
@@ -27,6 +28,7 @@ import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.rotate
 import androidx.compose.material.icons.automirrored.filled.KeyboardArrowRight
 import androidx.compose.material.icons.outlined.Campaign
+import androidx.compose.material.icons.outlined.Info
 import androidx.compose.material.icons.outlined.Public
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
@@ -40,6 +42,7 @@ import androidx.compose.material.icons.outlined.Close
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.ui.draw.clip
 import androidx.compose.foundation.horizontalScroll
+import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.Text
 import androidx.compose.runtime.LaunchedEffect
@@ -84,6 +87,7 @@ internal fun ExploreTab(vm: AppViewModel, onCreate: () -> Unit, onJoin: () -> Un
     var accessFilter by remember { mutableStateOf("open") }
     var categoriesExpanded by remember { mutableStateOf(false) }
     var passwordFor by remember { mutableStateOf<com.pombo.android.ExploreChannel?>(null) }
+    var detailsFor by remember { mutableStateOf<com.pombo.android.ExploreChannel?>(null) }
     androidx.compose.runtime.LaunchedEffect(Unit) { vm.loadExplore() }
 
     val isGuest by vm.isGuest.collectAsState()
@@ -96,6 +100,14 @@ internal fun ExploreTab(vm: AppViewModel, onCreate: () -> Unit, onJoin: () -> Un
         if (!nsfw && (category == "NSFW" || category == "Adult")) category = "All"
     }
 
+    detailsFor?.let { target ->
+        ExploreDetailsSheet(
+            vm, target,
+            image = exploreImages[com.pombo.android.core.StreamConstants.deriveAdminId(target.messageStreamId)],
+            ensNames = ensNames,
+            onDismiss = { detailsFor = null }
+        )
+    }
     passwordFor?.let { target ->
         ChannelPasswordDialog(
             channelName = target.name,
@@ -376,7 +388,8 @@ internal fun ExploreTab(vm: AppViewModel, onCreate: () -> Unit, onJoin: () -> Un
                     ch,
                     image = exploreImages[adminStreamId],
                     imagePending = adminStreamId in exploreImagesPending,
-                    ensNames = ensNames
+                    ensNames = ensNames,
+                    onDetails = { detailsFor = ch }
                 ) {
                     // Protected channels need the password before anything
                     // can be decrypted, so ask up front (web JoinChannelUI).
@@ -475,6 +488,7 @@ private fun ExploreCard(
     imagePending: Boolean = false,
     /** Resolved ENS names (address -> name) for the preview's sender label. */
     ensNames: Map<String, String> = emptyMap(),
+    onDetails: () -> Unit = {},
     onOpen: () -> Unit
 ) {
     // Web card is bg-white/[0.03]; on the phone's OLED black that read too
@@ -554,7 +568,15 @@ private fun ExploreCard(
                     )
                 }
             }
-            Spacer(Modifier.width(12.dp))
+            Box(
+                Modifier.size(32.dp).clip(CircleShape).clickable(onClick = onDetails),
+                contentAlignment = Alignment.Center
+            ) {
+                Icon(
+                    Icons.Outlined.Info, contentDescription = "Channel details",
+                    tint = PomboColors.Overlay40, modifier = Modifier.size(20.dp)
+                )
+            }
         }
         // Tags (category / language) — `px-1.5 py-1 bg-white/5 text-white/50
         // text-[11px] rounded`, category hidden when it is the default.
@@ -562,70 +584,53 @@ private fun ExploreCard(
             ch.category.takeIf { it.isNotEmpty() && !it.equals("general", true) }?.replaceFirstChar { it.uppercase() },
             ch.language.takeIf { it.isNotEmpty() }?.uppercase()
         )
-        if (ch.gateVerb != null || tags.isNotEmpty() || ch.wireIdentity != null) {
+        ch.gateVerb?.let { verb ->
             Spacer(Modifier.height(12.dp))
-            Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.Bottom) {
-                Row(
-                    Modifier.weight(1f).padding(start = 68.dp),
-                    verticalAlignment = Alignment.Bottom
-                ) {
-                    ch.gateVerb?.let { verb ->
-                        Text(
-                            verb.uppercase(),
-                            color = if (ch.gateMode == 3) PomboColors.Accent.copy(alpha = 0.70f)
-                                else PomboColors.Overlay40,
-                            fontSize = 10.exp, fontWeight = FontWeight.Medium, letterSpacing = 1.sp,
-                            modifier = Modifier.alignByBaseline()
-                        )
-                        Spacer(Modifier.width(6.dp))
-                        Text(
-                            ch.gateValue ?: "",
-                            color = PomboColors.Overlay90, maxLines = 1,
-                            fontSize = 13.exp, fontWeight = FontWeight.SemiBold,
-                            modifier = Modifier.alignByBaseline()
-                        )
-                        Spacer(Modifier.width(6.dp))
-                        Text(
-                            ch.gateQualifier ?: "",
-                            color = PomboColors.Overlay40, fontSize = 11.exp, maxLines = 1,
-                            overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis,
-                            modifier = Modifier.alignByBaseline()
-                        )
-                    }
+            HorizontalDivider(color = PomboColors.Overlay5, thickness = 1.dp)
+            Spacer(Modifier.height(12.dp))
+            Column(
+                Modifier.fillMaxWidth(),
+                horizontalAlignment = Alignment.CenterHorizontally
+            ) {
+                Text(
+                    verb.uppercase(),
+                    color = if (ch.gateMode == 3) PomboColors.Accent.copy(alpha = 0.70f)
+                        else PomboColors.Overlay40,
+                    fontSize = 11.exp, fontWeight = FontWeight.Medium, letterSpacing = 1.sp
+                )
+                Spacer(Modifier.height(2.dp))
+                Row(verticalAlignment = Alignment.Bottom) {
+                    Text(
+                        ch.gateValue ?: "",
+                        color = PomboColors.Overlay90, maxLines = 1,
+                        fontSize = 15.exp, fontWeight = FontWeight.SemiBold,
+                        modifier = Modifier.alignByBaseline()
+                    )
+                    Spacer(Modifier.width(6.dp))
+                    Text(
+                        ch.gateQualifier ?: "",
+                        color = PomboColors.Overlay50, fontSize = 13.exp, maxLines = 1,
+                        overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis,
+                        modifier = Modifier.alignByBaseline()
+                    )
                 }
-                if (tags.isNotEmpty() || ch.wireIdentity != null) {
-                    // Audience icon (never identity — both modes guarantee
-                    // authorship to participants) rides centered above the
-                    // LAST tag, in the card-metadata corner.
-                    Row(
-                        horizontalArrangement = Arrangement.spacedBy(6.dp),
-                        verticalAlignment = Alignment.Bottom
-                    ) {
-                        val tagText: @Composable (String) -> Unit = { t ->
-                            Text(
-                                t,
-                                color = PomboColors.Overlay50, fontSize = 11.exp,
-                                fontWeight = FontWeight.Medium,
-                                modifier = Modifier
-                                    .background(PomboColors.Overlay5, RoundedCornerShape(4.dp))
-                                    .padding(horizontal = 6.dp, vertical = 4.dp)
-                            )
-                        }
-                        tags.dropLast(1).forEach { tagText(it) }
-                        Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                            ch.wireIdentity?.let { mode ->
-                                Icon(
-                                    if (mode == "sealed") Icons.Outlined.People else Icons.Outlined.Public,
-                                    contentDescription = if (mode == "sealed")
-                                        "Sealed — authors readable by members only" else "Visible — every message signed by its author",
-                                    tint = PomboColors.Overlay50,
-                                    modifier = Modifier.size(16.dp)
-                                )
-                                if (tags.isNotEmpty()) Spacer(Modifier.height(4.dp))
-                            }
-                            tags.lastOrNull()?.let { tagText(it) }
-                        }
-                    }
+            }
+        }
+        if (tags.isNotEmpty()) {
+            Spacer(Modifier.height(if (ch.gateVerb != null) 8.dp else 12.dp))
+            Row(
+                Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(6.dp, Alignment.End)
+            ) {
+                tags.forEach { t ->
+                    Text(
+                        t,
+                        color = PomboColors.Overlay50, fontSize = 10.exp,
+                        fontWeight = FontWeight.Medium,
+                        modifier = Modifier
+                            .background(PomboColors.Overlay5, RoundedCornerShape(4.dp))
+                            .padding(horizontal = 6.dp, vertical = 2.dp)
+                    )
                 }
             }
         }

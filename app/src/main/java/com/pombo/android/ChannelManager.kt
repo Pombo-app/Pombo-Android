@@ -66,7 +66,9 @@ data class ExploreChannel(
     val gateValue: String? = null,
     val gateQualifier: String? = null,
     /** Wire identity from metadata `m` ('sealed' | 'visible'). */
-    val wireIdentity: String? = null
+    val wireIdentity: String? = null,
+    /** Creation time, ms epoch; 0 when the directory did not say. */
+    val createdAt: Long = 0L
 ) {
     companion object {
         fun of(info: com.pombo.android.core.GraphApi.ChannelInfo) = ExploreChannel(
@@ -78,7 +80,8 @@ data class ExploreChannel(
             category = info.category,
             readOnly = info.readOnly,
             gateAddress = info.gateAddress,
-            wireIdentity = info.wireIdentity
+            wireIdentity = info.wireIdentity,
+            createdAt = info.createdAt
         )
     }
 }
