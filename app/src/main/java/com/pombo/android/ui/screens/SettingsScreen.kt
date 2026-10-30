@@ -375,25 +375,40 @@ private fun AccountPanel(vm: AppViewModel) {
 
         Spacer(Modifier.height(16.dp))
         SettingsFieldLabel("Account Address")
-        // Tapping the address itself copies it — no separate button.
-        Box(
-            Modifier.fillMaxWidth()
-                .background(PomboColors.Overlay5, RoundedCornerShape(12.dp))
-                .border(1.dp, PomboColors.Overlay10, RoundedCornerShape(12.dp))
-                .clickableNoRipple {
-                    address?.let {
-                        clipboard.setText(androidx.compose.ui.text.AnnotatedString(it))
-                        vm.toast("Address copied", com.pombo.android.ui.ToastKind.SUCCESS)
-                    }
-                }
-                .padding(horizontal = 14.dp, vertical = 12.dp)
-        ) {
-            Text(
-                address ?: "—",
-                color = PomboColors.Overlay60, fontSize = 12.sp,
-                fontFamily = androidx.compose.ui.text.font.FontFamily.Monospace,
-                maxLines = 1
-            )
+        val copyAddress = {
+            address?.let {
+                clipboard.setText(androidx.compose.ui.text.AnnotatedString(it))
+                vm.toast("Address copied", com.pombo.android.ui.ToastKind.SUCCESS)
+            }
+        }
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Box(
+                Modifier.weight(1f)
+                    .background(PomboColors.Overlay5, RoundedCornerShape(12.dp))
+                    .border(1.dp, PomboColors.Overlay10, RoundedCornerShape(12.dp))
+                    .clickableNoRipple { copyAddress() }
+                    .padding(horizontal = 14.dp, vertical = 12.dp)
+            ) {
+                Text(
+                    address ?: "—",
+                    color = PomboColors.Overlay60, fontSize = 12.sp,
+                    fontFamily = androidx.compose.ui.text.font.FontFamily.Monospace,
+                    maxLines = 1
+                )
+            }
+            Spacer(Modifier.width(8.dp))
+            Box(
+                Modifier.size(42.dp)
+                    .background(PomboColors.Overlay5, RoundedCornerShape(12.dp))
+                    .border(1.dp, PomboColors.Overlay10, RoundedCornerShape(12.dp))
+                    .clickableNoRipple { copyAddress() },
+                contentAlignment = Alignment.Center
+            ) {
+                Icon(
+                    com.pombo.android.ui.PomboIcons.CopyText, contentDescription = "Copy address",
+                    tint = PomboColors.Overlay60, modifier = Modifier.size(16.dp)
+                )
+            }
         }
 
         // Sync publishes to the account's own DM inbox (partition 1);
