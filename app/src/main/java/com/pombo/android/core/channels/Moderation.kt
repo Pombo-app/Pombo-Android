@@ -402,13 +402,12 @@ internal class Moderation(private val manager: ChannelManager) {
                 GATE_MODE_TOKEN -> "Gated · Hold ≥ ${fmt(info.optString("minBalance", "0"))} $symbol"
                 GATE_MODE_NFT -> "Gated · Hold $symbol NFT"
                 GATE_MODE_PAID -> {
-                    val days = (info.optString("duration", "0").toLongOrNull() ?: 0L) / 86_400.0
-                    val d = if (days == days.toLong().toDouble()) days.toLong().toString()
-                        else "%.1f".format(days)
+                    val period = com.pombo.android.core.GateFormat.period(
+                        info.optString("duration", "0").toLongOrNull() ?: 0L)
                     // WPOL-priced gates display POL: gatePay auto-wraps, so
                     // plain POL is literally what the subscriber spends.
                     val paySymbol = if (info.optString("token").lowercase() == WRAPPED_NATIVE) "POL" else symbol
-                    "Paid · ${fmt(info.optString("price", "0"))} $paySymbol / $d ${if (d == "1") "day" else "days"}"
+                    "Paid · ${fmt(info.optString("price", "0"))} $paySymbol / $period"
                 }
                 else -> null
             }
@@ -429,14 +428,13 @@ internal class Moderation(private val manager: ChannelManager) {
                     mode, "Hold", "${fmt(info.optString("minBalance", "0"))} $symbol", "in your wallet")
                 GATE_MODE_NFT -> GateCardInfo(mode, "Hold", "$symbol NFT", "in your wallet")
                 GATE_MODE_PAID -> {
-                    val days = (info.optString("duration", "0").toLongOrNull() ?: 0L) / 86_400.0
-                    val d = if (days == days.toLong().toDouble()) days.toLong().toString()
-                        else "%.1f".format(days)
+                    val period = com.pombo.android.core.GateFormat.period(
+                        info.optString("duration", "0").toLongOrNull() ?: 0L)
                     val sym = if (info.optString("token").lowercase() == WRAPPED_NATIVE) "POL" else symbol
                     // "per" spells out the recurrence under SUBSCRIBE
                     GateCardInfo(mode, "Subscribe",
                         "${fmt(info.optString("price", "0"))} $sym",
-                        if (d == "1") "per day" else "per $d days")
+                        "per $period")
                 }
                 else -> GateCardInfo(mode, null, null, null)
             }

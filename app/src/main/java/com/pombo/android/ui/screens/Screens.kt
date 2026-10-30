@@ -330,8 +330,6 @@ internal fun GateEntryDialog(vm: AppViewModel, entry: AppViewModel.GateEntry) {
     } catch (e: Exception) { false }
     val paidMsLeft = info.paidUntil * 1000L - System.currentTimeMillis()
     val subscribed = info.mode == GateModes.PAID && paidMsLeft > 0
-    val days = info.durationSeconds / 86_400.0
-    val daysLabel = if (days == days.toLong().toDouble()) days.toLong().toString() else "%.1f".format(days)
 
     // WPOL-priced gates read POL everywhere the user sees a cost — gatePay
     // auto-wraps, plain POL is literally what they spend. By token ADDRESS:
@@ -344,7 +342,7 @@ internal fun GateEntryDialog(vm: AppViewModel, entry: AppViewModel.GateEntry) {
         GateModes.NFT -> Triple("Hold", "${info.tokenSymbol} NFT", "in your wallet")
         GateModes.PAID -> Triple(
             "Subscribe", "${fmt(info.price, info.tokenDecimals)} $paySymbol",
-            "per $daysLabel " + if (daysLabel == "1") "day" else "days"
+            "per ${com.pombo.android.core.GateFormat.period(info.durationSeconds)}"
         )
         else -> null
     }

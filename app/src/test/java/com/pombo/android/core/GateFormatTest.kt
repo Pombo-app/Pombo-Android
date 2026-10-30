@@ -1,6 +1,7 @@
 package com.pombo.android.core
 
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertTrue
 import org.junit.Test
 
 /**
@@ -27,6 +28,16 @@ class GateFormatTest {
     fun formatRemaining_subHour() {
         assertEquals("less than an hour", GateFormat.formatRemaining(30L * 60_000))
         assertEquals("less than an hour", GateFormat.formatRemaining(1))
+    }
+
+    @Test
+    fun period_namesTheLargestUnitItReaches() {
+        assertEquals("day", GateFormat.period(86_400))
+        assertEquals("30 days", GateFormat.period(30L * 86_400))
+        assertEquals("6 hours", GateFormat.period(6L * 3_600))
+        assertEquals("10 minutes", GateFormat.period(600))
+        assertEquals("45 seconds", GateFormat.period(45))
+        assertTrue(GateFormat.period(90L * 60).matches(Regex("1[.,]5 hours")))
     }
 
     @Test
