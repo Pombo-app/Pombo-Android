@@ -92,7 +92,6 @@ internal fun ContactsTab(vm: AppViewModel) {
                             .padding(12.dp),
                         verticalAlignment = Alignment.CenterVertically
                     ) {
-                        // Local nickname wins, then ENS, then the address.
                         LaunchedEffect(c.address) { vm.ensureEns(c.address) }
                         val ens = ensNames[c.address.lowercase()]
                         Avatar(
@@ -101,10 +100,8 @@ internal fun ContactsTab(vm: AppViewModel) {
                         )
                         Spacer(Modifier.width(12.dp))
                         Column(Modifier.weight(1f)) {
-                            // Web renderList: nickname (or short address) on top,
-                            // then the FULL address in mono at 10px/white-30.
                             Text(
-                                c.nickname ?: ens ?: shortAddr(c.address),
+                                ens ?: c.nickname ?: shortAddr(c.address),
                                 color = PomboColors.TextPrimary, fontSize = 13.sp,
                                 fontWeight = FontWeight.Medium, maxLines = 1
                             )

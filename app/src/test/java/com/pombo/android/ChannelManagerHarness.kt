@@ -38,7 +38,8 @@ class ChannelManagerHarness(
     private val trustedContacts: Set<String> = emptySet(),
     failedOutbox: com.pombo.android.data.FailedOutboxStore? = null,
     pendingCreateStore: com.pombo.android.data.PendingCreateStore? = null,
-    val epochKeyStore: com.pombo.android.data.EpochKeyStore = mockk(relaxed = true)
+    val epochKeyStore: com.pombo.android.data.EpochKeyStore = mockk(relaxed = true),
+    previewStore: com.pombo.android.core.LatestMessageStore = mockk(relaxed = true)
 ) {
     /** Throwaway key; the channel pseudonym is minted from it, so it must be real. */
     val myKey = "0x4f3edf983ac636a65a842ce7c78d9aa706d3b113bce9c46f30d7d21715b23b1d"
@@ -85,7 +86,7 @@ class ChannelManagerHarness(
             myPrivateKey = { myKey },
             myUsername = { "me" },
             imageStore = mockk(relaxed = true),
-            previewStore = mockk(relaxed = true),
+            previewStore = previewStore,
             ensStore = ensStore,
             blobStore = mockk(relaxed = true),
             sentDmStore = mockk(relaxed = true),

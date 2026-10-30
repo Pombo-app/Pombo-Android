@@ -112,6 +112,7 @@ internal fun ChatsTab(vm: AppViewModel, onContacts: () -> Unit, onConnect: () ->
     // the preview was cached, so baking it in at fetch time is not enough.
     val ensNames by vm.ensNames.collectAsState()
     val unreadCounts by vm.unreadCounts.collectAsState()
+    val myAddress by vm.address.collectAsState()
     val channelOrder by vm.channelOrder.collectAsState()
     var filter by remember { mutableStateOf(ChannelFilter.ALL) }
 
@@ -307,7 +308,7 @@ internal fun ChatsTab(vm: AppViewModel, onContacts: () -> Unit, onConnect: () ->
                         )
                     },
                 contentPadding = PaddingValues(start = 10.dp, end = 10.dp, top = 6.dp, bottom = 18.dp),
-                verticalArrangement = Arrangement.spacedBy(2.dp)
+                verticalArrangement = Arrangement.spacedBy(6.dp)
             ) {
                 itemsIndexed(localOrder, key = { _, ch -> ch.messageStreamId }) { _, ch ->
                     val isDragging = ch.messageStreamId == draggingKey
@@ -357,6 +358,7 @@ internal fun ChatsTab(vm: AppViewModel, onContacts: () -> Unit, onConnect: () ->
                             peerEnsAvatarUrl = ch.peerAddress?.let { ensAvatars[it.lowercase()] },
                             ensNames = ensNames,
                             unread = unreadCounts[ch.messageStreamId] ?: 0,
+                            myAddress = myAddress,
                             onOpen = { vm.openChannel(ch.messageStreamId, com.pombo.android.AppViewModel.ChatOrigin.CHATS) }
                         )
                     }
@@ -983,6 +985,7 @@ private fun ChannelListItem(
     ensNames: Map<String, String> = emptyMap(),
     /** Unread messages since this channel was last opened. */
     unread: Int = 0,
+    myAddress: String? = null,
     onOpen: () -> Unit
 ) {
     Row(
@@ -995,7 +998,7 @@ private fun ChannelListItem(
             .background(PomboColors.Overlay5, RoundedCornerShape(12.dp))
             .border(1.dp, Color.White.copy(alpha = 0.085f), RoundedCornerShape(12.dp))
             .clickable(onClick = onOpen)
-            .padding(horizontal = 12.dp, vertical = 8.dp),
+            .padding(horizontal = 12.dp, vertical = 10.dp),
         verticalAlignment = Alignment.CenterVertically
     ) {
         if (image != null) {
@@ -1022,47 +1025,62 @@ private fun ChannelListItem(
         Spacer(Modifier.width(12.dp))
         Column(Modifier.weight(1f)) {
             Row(verticalAlignment = Alignment.CenterVertically) {
-                Text(
-                    channel.name, color = PomboColors.TextPrimary, fontSize = 15.sp,
-                    fontWeight = FontWeight.SemiBold, maxLines = 1,
-                    modifier = Modifier.weight(1f, fill = false)
-                )
-                // Web: the ONLY row indicator is a megaphone for read-only
-                // (announcement) channels — no lock for password channels
-                // (the chat header already shows the type). ChannelListUI.js:609.
-                if (channel.readOnly) {
-                    Spacer(Modifier.width(6.dp))
-                    Icon(
-                        Icons.Outlined.Campaign, contentDescription = null,
-                        tint = PomboColors.Overlay40, modifier = Modifier.size(14.dp)
+                Row(Modifier.weight(1f), verticalAlignment = Alignment.CenterVertically) {
+                    Text(
+                        channel.name, color = PomboColors.TextPrimary, fontSize = 15.sp,
+                        fontWeight = FontWeight.SemiBold, maxLines = 1,
+                        modifier = Modifier.weight(1f, fill = false)
+                    )
+                    // Web: the ONLY row indicator is a megaphone for read-only
+                    // (announcement) channels — no lock for password channels
+                    // (the chat header already shows the type). ChannelListUI.js:609.
+                    if (channel.readOnly) {
+                        Spacer(Modifier.width(6.dp))
+                        Icon(
+                            Icons.Outlined.Campaign, contentDescription = null,
+                            tint = PomboColors.Overlay40, modifier = Modifier.size(14.dp)
+                        )
+                    }
+                }
+                // Unread badge — web caps the label at "+30" and tints it accent.
+                if (unread > 0) {
+                    Spacer(Modifier.width(8.dp))
+                    Text(
+                        if (unread >= 30) "+30" else "$unread",
+                        color = Color.White, fontSize = 11.sp, fontWeight = FontWeight.Medium,
+                        modifier = Modifier
+                            .background(PomboColors.Accent.copy(alpha = 0.20f), RoundedCornerShape(50))
+                            .padding(horizontal = 7.dp, vertical = 2.dp)
                     )
                 }
             }
+            Spacer(Modifier.height(4.dp))
             // Last message preview, cached like the web sidebar. DMs drop the
             // sender prefix (web omitSender), channels keep "sender: body".
             // The ENS name is resolved HERE (not baked into the stored label) —
             // it usually resolves after the preview was cached.
-            preview?.let { p ->
-                val ensLabel = p.senderAddress.takeIf { it.isNotEmpty() }
-                    ?.let { ensNames[it.lowercase()] }
-                val body = collapseWhitespace(p.text)
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                val line = preview?.let { p ->
+                    val label = when {
+                        p.senderAddress.isNotEmpty() && p.senderAddress.equals(myAddress, ignoreCase = true) -> "You"
+                        else -> p.senderAddress.takeIf { it.isNotEmpty() }
+                            ?.let { ensNames[it.lowercase()] } ?: p.sender
+                    }
+                    val body = collapseWhitespace(p.text)
+                    if (channel.type == "dm") body else "$label: $body"
+                }.orEmpty()
                 Text(
-                    if (channel.type == "dm") body else "${ensLabel ?: p.sender}: $body",
+                    line,
                     color = PomboColors.TextSecondary, fontSize = 11.sp, maxLines = 1,
-                    overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis
+                    overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis,
+                    modifier = Modifier.weight(1f)
                 )
+                val time = preview?.let { previewTime(it.ts) }.orEmpty()
+                if (time.isNotEmpty()) {
+                    Spacer(Modifier.width(8.dp))
+                    Text(time, color = PomboColors.Overlay40, fontSize = 11.sp, maxLines = 1)
+                }
             }
-        }
-        // Unread badge — web caps the label at "+30" and tints it accent.
-        if (unread > 0) {
-            Spacer(Modifier.width(8.dp))
-            Text(
-                if (unread >= 30) "+30" else "$unread",
-                color = Color.White, fontSize = 11.sp, fontWeight = FontWeight.Medium,
-                modifier = Modifier
-                    .background(PomboColors.Accent.copy(alpha = 0.20f), RoundedCornerShape(50))
-                    .padding(horizontal = 7.dp, vertical = 2.dp)
-            )
         }
     }
 }

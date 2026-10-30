@@ -542,17 +542,15 @@ private fun ExploreCard(
                     )
                 }
                 if (ch.lastText.isNotEmpty()) {
-                    // `.explore-preview-line mt-3 ml-3`: 0.875rem, white/50,
-                    // 3 lines on mobile, and indented 12px past the description.
+                    // `.explore-preview-line mt-3`: 0.875rem, white/50, two lines.
                     Spacer(Modifier.height(12.dp))
                     val ensLabel = ch.lastSenderAddress.takeIf { it.isNotEmpty() }
                         ?.let { ensNames[it.lowercase()] }
                     Text(
                         "${ensLabel ?: ch.lastSender}: ${collapseWhitespace(ch.lastText)}",
                         color = PomboColors.Overlay50, fontSize = 14.exp,
-                        lineHeight = 18.exp, maxLines = 3,
-                        overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis,
-                        modifier = Modifier.padding(start = 12.dp)
+                        lineHeight = 18.exp, maxLines = 2,
+                        overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis
                     )
                 }
             }
@@ -564,35 +562,34 @@ private fun ExploreCard(
             ch.category.takeIf { it.isNotEmpty() && !it.equals("general", true) }?.replaceFirstChar { it.uppercase() },
             ch.language.takeIf { it.isNotEmpty() }?.uppercase()
         )
-        // Access stack (N-D) + tags share ONE zone: the stack (VERB / VALUE /
-        // QUALIFIER) anchors the center, the badges sit on the bottom-right
-        // corner at the same height — one row of card height instead of two,
-        // and no orphaned lone badge. Subscribe = recurring (accent-tinted
-        // verb); Hold = mere possession, "in your wallet" = "you pay nothing".
         if (ch.gateVerb != null || tags.isNotEmpty() || ch.wireIdentity != null) {
             Spacer(Modifier.height(12.dp))
-            Box(Modifier.fillMaxWidth()) {
-                ch.gateVerb?.let { verb ->
-                    Column(
-                        Modifier.align(Alignment.Center),
-                        horizontalAlignment = Alignment.CenterHorizontally
-                    ) {
+            Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.Bottom) {
+                Row(
+                    Modifier.weight(1f).padding(start = 68.dp),
+                    verticalAlignment = Alignment.Bottom
+                ) {
+                    ch.gateVerb?.let { verb ->
                         Text(
                             verb.uppercase(),
                             color = if (ch.gateMode == 3) PomboColors.Accent.copy(alpha = 0.70f)
                                 else PomboColors.Overlay40,
-                            fontSize = 10.exp, fontWeight = FontWeight.Medium, letterSpacing = 1.sp
+                            fontSize = 10.exp, fontWeight = FontWeight.Medium, letterSpacing = 1.sp,
+                            modifier = Modifier.alignByBaseline()
                         )
-                        Spacer(Modifier.height(2.dp))
+                        Spacer(Modifier.width(6.dp))
                         Text(
                             ch.gateValue ?: "",
-                            color = PomboColors.Overlay90,
-                            fontSize = 15.exp, fontWeight = FontWeight.SemiBold
+                            color = PomboColors.Overlay90, maxLines = 1,
+                            fontSize = 13.exp, fontWeight = FontWeight.SemiBold,
+                            modifier = Modifier.alignByBaseline()
                         )
-                        Spacer(Modifier.height(2.dp))
+                        Spacer(Modifier.width(6.dp))
                         Text(
                             ch.gateQualifier ?: "",
-                            color = PomboColors.Overlay40, fontSize = 11.exp
+                            color = PomboColors.Overlay40, fontSize = 11.exp, maxLines = 1,
+                            overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis,
+                            modifier = Modifier.alignByBaseline()
                         )
                     }
                 }
@@ -601,7 +598,6 @@ private fun ExploreCard(
                     // authorship to participants) rides centered above the
                     // LAST tag, in the card-metadata corner.
                     Row(
-                        Modifier.align(Alignment.BottomEnd),
                         horizontalArrangement = Arrangement.spacedBy(6.dp),
                         verticalAlignment = Alignment.Bottom
                     ) {

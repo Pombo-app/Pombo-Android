@@ -39,8 +39,8 @@ import androidx.compose.material.icons.outlined.AccountBalanceWallet
 import androidx.compose.material.icons.outlined.ChevronLeft
 import androidx.compose.material.icons.outlined.ChevronRight
 import androidx.compose.material.icons.outlined.Link
-import androidx.compose.material.icons.outlined.Lock
-import androidx.compose.material.icons.outlined.Shield
+import androidx.compose.material.icons.outlined.Block
+import androidx.compose.material.icons.outlined.Key
 import androidx.compose.material.icons.outlined.SmartDisplay
 import androidx.compose.material.icons.outlined.MailOutline
 import androidx.compose.material.icons.outlined.VerifiedUser
@@ -49,7 +49,6 @@ import androidx.compose.material.icons.outlined.ErrorOutline
 import androidx.compose.material.icons.outlined.Delete
 import androidx.compose.material.icons.filled.CheckCircleOutline
 import androidx.compose.material.icons.outlined.Notifications
-import androidx.compose.material.icons.outlined.Storage
 import androidx.compose.material.icons.outlined.Sync
 import androidx.compose.material.icons.outlined.FileUpload
 import androidx.compose.material.icons.outlined.FileDownload
@@ -116,8 +115,8 @@ internal enum class SettingsPanel(val label: String, val icon: ImageVector, val 
     NOTIFICATIONS("Notifications", Icons.Outlined.Notifications, 0),
     NETWORKS("Networks", Icons.Outlined.Link, 0),
     CONTENT("Content", Icons.Outlined.SmartDisplay, 0),
-    PRIVACY("Privacy", Icons.Outlined.Shield, 1),
-    SECURITY("Security", Icons.Outlined.Lock, 1),
+    PRIVACY("Privacy", Icons.Outlined.Block, 1),
+    SECURITY("Security", Icons.Outlined.Key, 1),
     DM_INBOX("DM Inbox", Icons.Outlined.MailOutline, 1)
     // ABOUT lives on the Profile screen.
 }
@@ -376,25 +375,40 @@ private fun AccountPanel(vm: AppViewModel) {
 
         Spacer(Modifier.height(16.dp))
         SettingsFieldLabel("Account Address")
-        // Tapping the address itself copies it — no separate button.
-        Box(
-            Modifier.fillMaxWidth()
-                .background(PomboColors.Overlay5, RoundedCornerShape(12.dp))
-                .border(1.dp, PomboColors.Overlay10, RoundedCornerShape(12.dp))
-                .clickableNoRipple {
-                    address?.let {
-                        clipboard.setText(androidx.compose.ui.text.AnnotatedString(it))
-                        vm.toast("Address copied", com.pombo.android.ui.ToastKind.SUCCESS)
-                    }
-                }
-                .padding(horizontal = 14.dp, vertical = 12.dp)
-        ) {
-            Text(
-                address ?: "—",
-                color = PomboColors.Overlay60, fontSize = 12.sp,
-                fontFamily = androidx.compose.ui.text.font.FontFamily.Monospace,
-                maxLines = 1
-            )
+        val copyAddress = {
+            address?.let {
+                clipboard.setText(androidx.compose.ui.text.AnnotatedString(it))
+                vm.toast("Address copied", com.pombo.android.ui.ToastKind.SUCCESS)
+            }
+        }
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Box(
+                Modifier.weight(1f)
+                    .background(PomboColors.Overlay5, RoundedCornerShape(12.dp))
+                    .border(1.dp, PomboColors.Overlay10, RoundedCornerShape(12.dp))
+                    .clickableNoRipple { copyAddress() }
+                    .padding(horizontal = 14.dp, vertical = 12.dp)
+            ) {
+                Text(
+                    address ?: "—",
+                    color = PomboColors.Overlay60, fontSize = 12.sp,
+                    fontFamily = androidx.compose.ui.text.font.FontFamily.Monospace,
+                    maxLines = 1
+                )
+            }
+            Spacer(Modifier.width(8.dp))
+            Box(
+                Modifier.size(42.dp)
+                    .background(PomboColors.Overlay5, RoundedCornerShape(12.dp))
+                    .border(1.dp, PomboColors.Overlay10, RoundedCornerShape(12.dp))
+                    .clickableNoRipple { copyAddress() },
+                contentAlignment = Alignment.Center
+            ) {
+                Icon(
+                    com.pombo.android.ui.PomboIcons.CopyText, contentDescription = "Copy address",
+                    tint = PomboColors.Overlay60, modifier = Modifier.size(16.dp)
+                )
+            }
         }
 
         // Sync publishes to the account's own DM inbox (partition 1);
@@ -460,7 +474,7 @@ private fun AccountPanel(vm: AppViewModel) {
 
         Row(verticalAlignment = Alignment.CenterVertically) {
             Icon(
-                Icons.Outlined.Storage, contentDescription = null,
+                com.pombo.android.ui.PomboIcons.Database, contentDescription = null,
                 tint = PomboColors.Overlay80, modifier = Modifier.size(16.dp)
             )
             Spacer(Modifier.width(8.dp))

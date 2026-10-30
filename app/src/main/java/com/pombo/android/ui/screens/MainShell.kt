@@ -1,6 +1,7 @@
 package com.pombo.android.ui.screens
 
 import androidx.compose.foundation.background
+import com.pombo.android.ui.glassPanel
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.interaction.MutableInteractionSource
@@ -250,17 +251,10 @@ private fun PillNav(
     onSelect: (Tab) -> Unit,
     modifier: Modifier = Modifier
 ) {
-    // .pill-nav-inner: rgba(255,255,255,0.06) fill, 0.08 border, radius 2rem,
-    // and crucially `backdrop-filter: blur(20px)`. Compose cannot blur an
-    // in-layout surface, and over a true-black background a bare 6% white fill
-    // is nearly invisible — the pill read as a faint outline instead of a
-    // frosted slab. The denser base stands in for the blur.
     val pillShape = RoundedCornerShape(32.dp)
     Row(
         modifier
-            .background(PomboColors.Surface4.copy(alpha = 0.88f), pillShape)
-            .background(PomboColors.Overlay6, pillShape)
-            .border(1.dp, PomboColors.Overlay8, pillShape)
+            .glassPanel(pillShape)
             .padding(horizontal = 8.dp, vertical = 6.dp),
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.spacedBy(4.dp)
@@ -467,7 +461,7 @@ private fun ProfileTab(vm: AppViewModel, onAddAccount: () -> Unit) {
                 Modifier.fillMaxWidth().background(PomboColors.Bg, RoundedCornerShape(12.dp))
                     .border(1.dp, PomboColors.Overlay8, RoundedCornerShape(12.dp))
             ) {
-                accounts.forEachIndexed { i, acc ->
+                accounts.sortedByDescending { it.address.equals(address, ignoreCase = true) }.forEachIndexed { i, acc ->
                     if (i > 0) androidx.compose.material3.HorizontalDivider(color = PomboColors.Overlay8)
                     val isCurrent = acc.address.equals(address, ignoreCase = true)
                     Row(

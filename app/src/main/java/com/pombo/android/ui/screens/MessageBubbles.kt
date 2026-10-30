@@ -1033,9 +1033,11 @@ private fun MessageBubble(
                         touchOffset = menuAt,
                         onDismiss = { menu = false }
                     ) {
-                        com.pombo.android.ui.ContextMenuItem(
-                            "Copy Text", icons.CopyText
-                        ) { menu = false; clipboard.setText(androidx.compose.ui.text.AnnotatedString(msg.text)) }
+                        if (!msg.isImage && msg.file == null && msg.storageFile == null) {
+                            com.pombo.android.ui.ContextMenuItem(
+                                "Copy Text", icons.CopyText
+                            ) { menu = false; clipboard.setText(androidx.compose.ui.text.AnnotatedString(msg.text)) }
+                        }
                         com.pombo.android.ui.ContextMenuItem(
                             "Copy Address", icons.Clipboard
                         ) { menu = false; clipboard.setText(androidx.compose.ui.text.AnnotatedString(msg.sender)) }
