@@ -381,31 +381,23 @@ private fun AccountPanel(vm: AppViewModel) {
             }
         }
         Row(verticalAlignment = Alignment.CenterVertically) {
+            Text(
+                address ?: "—",
+                color = PomboColors.Overlay70, fontSize = 11.sp,
+                fontFamily = androidx.compose.ui.text.font.FontFamily.Monospace,
+                maxLines = 1, softWrap = false,
+                modifier = Modifier.weight(1f)
+            )
+            Spacer(Modifier.width(4.dp))
             Box(
-                Modifier.weight(1f)
-                    .background(PomboColors.Overlay5, RoundedCornerShape(12.dp))
-                    .border(1.dp, PomboColors.Overlay10, RoundedCornerShape(12.dp))
-                    .clickableNoRipple { copyAddress() }
-                    .padding(horizontal = 14.dp, vertical = 12.dp)
-            ) {
-                Text(
-                    address ?: "—",
-                    color = PomboColors.Overlay60, fontSize = 12.sp,
-                    fontFamily = androidx.compose.ui.text.font.FontFamily.Monospace,
-                    maxLines = 1
-                )
-            }
-            Spacer(Modifier.width(8.dp))
-            Box(
-                Modifier.size(42.dp)
-                    .background(PomboColors.Overlay5, RoundedCornerShape(12.dp))
-                    .border(1.dp, PomboColors.Overlay10, RoundedCornerShape(12.dp))
+                Modifier.size(28.dp)
+                    .clip(RoundedCornerShape(8.dp))
                     .clickableNoRipple { copyAddress() },
                 contentAlignment = Alignment.Center
             ) {
                 Icon(
                     com.pombo.android.ui.PomboIcons.CopyText, contentDescription = "Copy address",
-                    tint = PomboColors.Overlay60, modifier = Modifier.size(16.dp)
+                    tint = PomboColors.Overlay40, modifier = Modifier.size(16.dp)
                 )
             }
         }
