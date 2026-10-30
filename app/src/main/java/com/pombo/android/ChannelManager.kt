@@ -1107,6 +1107,9 @@ class ChannelManager(
     /** Ids the author deleted — see [applyOverride]. Reset per channel. */
     private val deletedIds = mutableSetOf<String>()
 
+    /** Whether the open channel's author deleted [id]. */
+    fun isMessageDeleted(id: String): Boolean = synchronized(this) { id in deletedIds }
+
     private data class ReopenSnapshot(
         val messages: List<UiMessage>,
         val reactions: Map<String, Map<String, Set<String>>>,

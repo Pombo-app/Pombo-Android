@@ -159,17 +159,27 @@ fun ChatScreen(vm: AppViewModel) {
     val listState = rememberLazyListState()
     val ch = channel ?: return
 
-    // These targets point at messages of ONE channel; this composable
-    // survives channel switches, so without this reset a send in channel B
-    // would commit an edit/reply against a message that lives in channel A.
-    // The composer only clears when it holds an edit's pre-filled text —
-    // an ordinary draft survives the switch, as it always has.
-    LaunchedEffect(ch.messageStreamId) {
-        if (editTarget != null) {
-            editTarget = null
-            composerInput.clearText()
+    // The composer belongs to one conversation: this composable survives
+    // channel switches, so leaving stashes the text, reply and edit under
+    // the conversation they point at, and opening restores its own.
+    val draftAccount by vm.address.collectAsState()
+    androidx.compose.runtime.DisposableEffect(ch.messageStreamId, draftAccount) {
+        val stream = ch.messageStreamId
+        val account = draftAccount
+        vm.composerDrafts.take(account, stream) { vm.isMessageDeleted(it) }?.let { draft ->
+            replyTarget = draft.replyTo
+            editTarget = draft.editing
+            composerInput.setTextAndPlaceCursorAtEnd(draft.text)
         }
-        replyTarget = null
+        onDispose {
+            vm.composerDrafts.stash(
+                account, stream,
+                com.pombo.android.ui.ComposerDrafts.Draft(composerInput.text.toString(), replyTarget, editTarget)
+            )
+            composerInput.clearText()
+            replyTarget = null
+            editTarget = null
+        }
     }
 
     val isPreview by vm.isPreview.collectAsState()
@@ -1180,7 +1190,10 @@ fun ChatScreen(vm: AppViewModel) {
         replyTarget?.let { target ->
             Row(
                 Modifier.fillMaxWidth().background(PomboColors.Bg)
-                    .padding(start = 12.dp, end = 8.dp, top = 8.dp),
+                    .padding(start = 12.dp, end = 12.dp, top = 8.dp)
+                    .background(PomboColors.Overlay5, RoundedCornerShape(16.dp))
+                    .border(1.dp, PomboColors.Overlay8, RoundedCornerShape(16.dp))
+                    .padding(start = 14.dp, end = 6.dp, top = 8.dp, bottom = 8.dp),
                 verticalAlignment = Alignment.CenterVertically
             ) {
                 Box(Modifier.width(2.dp).height(30.dp).background(PomboColors.Overlay15))
@@ -1207,7 +1220,10 @@ fun ChatScreen(vm: AppViewModel) {
         if (editTarget != null) {
             Row(
                 Modifier.fillMaxWidth().background(PomboColors.Bg)
-                    .padding(start = 12.dp, end = 8.dp, top = 8.dp),
+                    .padding(start = 12.dp, end = 12.dp, top = 8.dp)
+                    .background(PomboColors.Overlay5, RoundedCornerShape(16.dp))
+                    .border(1.dp, PomboColors.Overlay8, RoundedCornerShape(16.dp))
+                    .padding(start = 14.dp, end = 6.dp, top = 8.dp, bottom = 8.dp),
                 verticalAlignment = Alignment.CenterVertically
             ) {
                 Box(Modifier.width(2.dp).height(30.dp).background(PomboColors.Accent.copy(alpha = 0.5f)))
@@ -1246,6 +1262,7 @@ fun ChatScreen(vm: AppViewModel) {
                     else -> "Renew to write"
                 },
                 onTyping = { vm.notifyTyping() },
+                conversation = ch.messageStreamId,
                 onPickImage = { vm.sendImage(it) },
                 onPickVideo = { vm.sendVideo(it) },
                 onPickFile = { vm.sendFile(it) },
@@ -1380,13 +1397,15 @@ private fun ChatComposer(
     onMicDenied: () -> Unit = {},
     recordingLocked: Boolean = false,
     onLockRecording: () -> Unit = {},
-    voiceLevel: () -> Float = { 0f }
+    voiceLevel: () -> Float = { 0f },
+    conversation: String? = null
 ) {
     // State-based field, NOT the legacy value/onValueChange one: only the
     // TextFieldState pipeline advertises accepted MIME types to the IME via
     // contentReceiver — with the old field, Gboard greyed its GIFs out with
     // "can't insert this content here".
-    LaunchedEffect(Unit) {
+    // Restarted per conversation: the first value is the draft restored on opening it, not typing.
+    LaunchedEffect(conversation) {
         var first = true
         androidx.compose.runtime.snapshotFlow { input.text.toString() }.collect {
             if (first) first = false else onTyping()
@@ -1414,17 +1433,20 @@ private fun ChatComposer(
     val storageFilePicker = androidx.activity.compose.rememberLauncherForActivityResult(
         androidx.activity.result.contract.ActivityResultContracts.OpenDocument()
     ) { uri -> if (uri != null) onPickStorageFile(uri) }
-    // Web #message-input-container, but on the app's pure-black surface: a 1px
-    // hairline on TOP (border-t border-white/[0.04]) mirroring the header's
-    // bottom rule, and p-3 pb-4.
+    val fieldInteraction = remember { MutableInteractionSource() }
+    val fieldFocused by fieldInteraction.collectIsFocusedAsState()
     Column(Modifier.fillMaxWidth().background(PomboColors.Bg)) {
-    androidx.compose.material3.HorizontalDivider(
-        color = PomboColors.Overlay4, thickness = 1.dp
-    )
     Row(
-        Modifier.fillMaxWidth().padding(start = 12.dp, end = 12.dp, top = 8.dp, bottom = 10.dp),
-        verticalAlignment = Alignment.CenterVertically
+        Modifier
+            .fillMaxWidth()
+            .padding(12.dp)
+            .heightIn(min = 52.dp)
+            .background(PomboColors.Overlay5, RoundedCornerShape(26.dp))
+            .border(1.dp, if (fieldFocused) PomboColors.Overlay15 else PomboColors.Overlay8, RoundedCornerShape(26.dp))
+            .padding(3.dp),
+        verticalAlignment = Alignment.Bottom
     ) {
+        if (recordingMs == null) {
         // Web input bar: attach (paperclip) + emoji, then the text field.
         // DMs get it too — the transport is the same, only the sealing
         // differs (ECDH envelope instead of the channel password).
@@ -1439,7 +1461,7 @@ private fun ChatComposer(
             IconButton(
                 onClick = { attachSubmenu = null; attachOpen = true },
                 enabled = canPost,
-                modifier = Modifier.size(38.dp)
+                modifier = Modifier.size(44.dp)
             ) {
                 Icon(Icons.Filled.AttachFile, contentDescription = "Attach", tint = PomboColors.Overlay45, modifier = Modifier.size(20.dp))
             }
@@ -1510,7 +1532,7 @@ private fun ChatComposer(
         }
         var emojiOpen by remember { mutableStateOf(false) }
         Box {
-            IconButton(onClick = { emojiOpen = true }, modifier = Modifier.size(38.dp)) {
+            IconButton(onClick = { emojiOpen = true }, modifier = Modifier.size(44.dp)) {
                 Icon(Icons.Outlined.SentimentSatisfied, contentDescription = "Emoji", tint = PomboColors.Overlay45, modifier = Modifier.size(20.dp))
             }
             DropdownMenu(
@@ -1542,8 +1564,7 @@ private fun ChatComposer(
                 }
             }
         }
-        val fieldInteraction = remember { MutableInteractionSource() }
-        val fieldFocused by fieldInteraction.collectIsFocusedAsState()
+        }
         var slideDx by remember { mutableStateOf(0f) }
         if (recordingMs != null) VoiceRecordingBar(
             recordingMs, slideDx, recordingLocked, voiceLevel,
@@ -1554,25 +1575,16 @@ private fun ChatComposer(
             state = input,
             enabled = canPost,
             interactionSource = fieldInteraction,
-            lineLimits = TextFieldLineLimits.MultiLine(1, 4),
+            lineLimits = TextFieldLineLimits.MultiLine(1, 5),
             textStyle = androidx.compose.ui.text.TextStyle(
                 color = PomboColors.TextPrimary, fontSize = 16.sp
             ),
             cursorBrush = androidx.compose.ui.graphics.SolidColor(PomboColors.Accent),
-            // Rebuilt OutlinedTextField look (pomboFieldColors + 24dp shape).
             decorator = { inner ->
-                // Web #message-input: bg-white/[0.05], rounded-2xl, border-white/[0.08].
                 Box(
                     Modifier
-                        .background(PomboColors.Overlay5, RoundedCornerShape(16.dp))
-                        .border(
-                            1.dp,
-                            // Focus is a faint GREY lift, not an orange rule —
-                            // the web uses focus:ring-1 ring-white/10.
-                            if (fieldFocused) Color.White.copy(alpha = 0.16f) else PomboColors.Overlay8,
-                            RoundedCornerShape(16.dp)
-                        )
-                        .padding(horizontal = 16.dp, vertical = 10.dp),
+                        .heightIn(min = 44.dp)
+                        .padding(horizontal = 8.dp, vertical = 11.dp),
                     contentAlignment = Alignment.CenterStart
                 ) {
                     if (input.text.isEmpty()) {
@@ -1602,11 +1614,6 @@ private fun ChatComposer(
                 }
             }
         )
-        Spacer(Modifier.width(8.dp))
-        // Web #send-message-btn: no button chrome at all, just the outline
-        // paper-plane in the accent amber, sized to stand level with the input
-        // field (16sp line + 10dp padding top/bottom). One single appearance —
-        // there is no filled/empty state, the glyph never changes.
         // A Box, NOT an IconButton: Material3 clips IconButton's content to a
         // circle, which sliced the plane's nose and tail corners off once the
         // glyph grew to fill the box.
@@ -1620,7 +1627,7 @@ private fun ChatComposer(
         ) { granted -> if (!granted) onMicDenied() }
         if (canPost && (recordingMs != null || input.text.isEmpty())) Box(
             Modifier
-                .size(40.dp)
+                .size(44.dp)
                 .background(if (recordingMs != null) PomboColors.Overlay8 else Color.Transparent, CircleShape)
                 .pointerInput(Unit) {
                     val cancelPx = SLIDE_TO_CANCEL.toPx()
@@ -1688,7 +1695,7 @@ private fun ChatComposer(
             }
         } else Box(
             Modifier
-                .size(40.dp)
+                .size(44.dp)
                 // Stays clickable while the channel is writable and simply no-ops
                 // on an empty box — nothing about the button reflects whether
                 // there is text.
@@ -1738,8 +1745,8 @@ private fun VoiceRecordingBar(
     }
     Row(
         modifier
-            .background(PomboColors.Overlay5, RoundedCornerShape(16.dp))
-            .padding(horizontal = 14.dp, vertical = 10.dp),
+            .heightIn(min = 44.dp)
+            .padding(horizontal = 10.dp),
         verticalAlignment = Alignment.CenterVertically
     ) {
         if (locked) {
