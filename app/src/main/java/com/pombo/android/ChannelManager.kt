@@ -826,7 +826,8 @@ class ChannelManager(
 
     /** Re-reads the list after the storage scope changes (account switch/guest). */
     fun reloadChannels() {
-        scope.launch { channelSwitchMutex.withLock { closeCurrentInternal(); clearReopenSnapshots() } }
+        // The preview scope already belongs to the next account: nothing of this one may land in it.
+        scope.launch { channelSwitchMutex.withLock { closeCurrentInternal(previewScope = null); clearReopenSnapshots() } }
         _channels.value = store.load().distinctBy { it.messageStreamId }
         persisted = _channels.value.associateBy { it.messageStreamId }
         _channelOrder.value = store.loadOrder()
@@ -2628,71 +2629,161 @@ class ChannelManager(
         password: String? = null
     ): com.pombo.android.core.LatestMessageStore.Preview? {
         val known = channelByStream(messageStreamId)
-        val isDmStream = known?.type == "dm"
-        // Gated entries are epoch envelopes and never render as a preview,
-        // and a storage node with signed reads refuses the read to anyone
-        // without access: nothing to fetch.
+        // A storage node with signed reads refuses a gated read to anyone
+        // without access; members get theirs from [scanChannelActivity].
         if (known?.type == "gated") return null
         return try {
             // Resends need a live client; without this the call fails instantly
             // on a cold start and the preview silently never appears.
             bridge.awaitConnected()
-            // P0 carries messages AND reactions AND image chunks, so last:1
-            // usually lands on something unrenderable. The web fetches a window
-            // (config.channels.latestMessageFetchLast = 10) and picks the
-            // newest entry it can actually show.
-            val args = JSONObject()
-                .put("streamId", messageStreamId)
-                .put("partition", StreamConstants.P_MESSAGES)
-                .put("last", LATEST_PREVIEW_FETCH)
-                .put("budgetMs", 12_000)
-            password?.let { args.put("password", it) }
-            val res = bridge.call("resend", args, 20_000)
-            val arr = res.optJSONArray("messages") ?: return null
-            // Password channels seal each payload as a base64 STRING — reading it
-            // as a JSONObject skipped every entry, so private channels never got
-            // a preview at all. Same batch decrypt the history page uses.
-            val decrypted = predecrypt(arr, password)
-            var best: com.pombo.android.core.LatestMessageStore.Preview? = null
-            for (i in 0 until arr.length()) {
-                val entry = arr.optJSONObject(i) ?: continue
-                val content = decrypted.getOrNull(i) as? JSONObject ?: continue
-                val ts = entry.optJSONObject("meta")?.optLong("timestamp") ?: 0L
-                // Same forged-timestamp clamp the ingest funnel applies — this resend does
-                // not pass through it, and a dropped message must not surface
-                // through the preview line either.
-                val pTs = content.optLong("timestamp", 0L)
-                if (pTs > 0 && (pTs > System.currentTimeMillis() + TIMESTAMP_TOLERANCE_MS ||
-                        (ts > 0 && pTs > ts + TIMESTAMP_TOLERANCE_MS))) continue
-                // account = proof ? recovered wallet : publisherId — covers all
-                // three eras: new messages (proof), legacy (publisherId = the
-                // wallet) and reactions (no sender field at all). The legacy
-                // payload `sender` only matters when meta carried no publisher.
-                val senderAddr = attachAccount(
-                    content, entry.optJSONObject("meta")?.optString("publisherId")
-                ) ?: content.optString("sender")
-                val sender = previewSenderLabel(senderAddr, content.optStringOrNull("senderName"))
-                val body = when (content.optString("type")) {
-                    "text" -> content.optString("text")
-                    "image" -> "[image]"
-                    "audio" -> AUDIO_FALLBACK_TEXT
-                    "video_announce" -> "[video]"
-                    "file_announce", "storage_file_announce" -> "[file]"
-                    // A reaction is not what was said here last, and on a
-                    // channel with a -5 this window never holds one anyway.
-                    // DMs keep theirs: no -5 there, and the local path is the
-                    // only one that feeds them. Removals are never previewable.
-                    "reaction" -> if (!isDmStream
-                        || content.optString("action") == "remove") null
-                        else "reacted with ${content.optString("emoji")}"
-                    else -> null
-                } ?: continue
-                if (best == null || ts > best.ts) {
-                    best = com.pombo.android.core.LatestMessageStore.Preview(sender, body, ts, senderAddr)
+            val arr = resendPreviewWindow(messageStreamId, StreamConstants.P_MESSAGES, password) ?: return null
+            val rows = openPreviewRows(known, messageStreamId, arr, password)
+            if (rows.isEmpty()) return null
+            pickPreview(rows, latestOverrides(known, messageStreamId, password), known?.type == "dm")
+        } catch (e: Exception) { null }
+    }
+
+    /**
+     * P0 carries messages AND reactions AND image chunks, so last:1 usually
+     * lands on something unrenderable. The web fetches a window
+     * (config.channels.latestMessageFetchLast = 10) and picks the newest entry
+     * it can actually show.
+     */
+    private suspend fun resendPreviewWindow(
+        streamId: String, partition: Int, password: String?, last: Int = LATEST_PREVIEW_FETCH
+    ): JSONArray? {
+        val args = JSONObject()
+            .put("streamId", streamId)
+            .put("partition", partition)
+            .put("last", last)
+            .put("budgetMs", 12_000)
+        password?.let { args.put("password", it) }
+        return bridge.call("resend", withSignerRecovery(args, streamId), 20_000).optJSONArray("messages")
+    }
+
+    /** A stored row opened for a preview: payload with its account attached, and the envelope time. */
+    private class PreviewRow(val data: JSONObject, val author: String, val ts: Long)
+
+    /**
+     * Opens a resend window as [handleContent] opens history, without touching
+     * the timeline: password and epoch envelopes, the sealed authorship
+     * wrapper, the gated signer and the same forgery clamps. A row the
+     * timeline would drop is left out.
+     */
+    private suspend fun openPreviewRows(
+        channel: Channel?, streamId: String, arr: JSONArray, password: String?
+    ): List<PreviewRow> {
+        val decrypted = predecrypt(arr, password)
+        val now = System.currentTimeMillis()
+        val rows = ArrayList<PreviewRow>()
+        for (i in 0 until arr.length()) {
+            val meta = arr.optJSONObject(i)?.optJSONObject("meta") ?: JSONObject()
+            var data = decrypted.getOrNull(i) as? JSONObject ?: continue
+            val ts = meta.optLong("timestamp", 0L)
+            if (ts > now + TIMESTAMP_TOLERANCE_MS) continue
+            if (com.pombo.android.core.StoredAt.forwardDated(meta, TIMESTAMP_TOLERANCE_MS)) continue
+            var innerAuthor: String? = null
+            if (com.pombo.android.core.EpochKeyCrypto.isEpochEnvelope(data)) {
+                if (channel == null || !isEpochChannel(channel)) continue
+                val keysId = channel.keysStreamId.ifEmpty {
+                    StreamConstants.deriveKeysId(channel.messageStreamId)
+                }
+                // A background preview never asks for a key it lacks; opening the channel does.
+                data = epochKeys.tryDecrypt(
+                    channel.messageStreamId, keysId, data,
+                    gated = channel.type == "gated", live = false,
+                    timestamp = com.pombo.android.core.StoredAt.judgeTime(meta),
+                    requestMissing = false) ?: continue
+                if (channel.wireIdentity == "sealed") {
+                    val opened = com.pombo.android.core.Authorship.open(channel.messageStreamId, data)
+                        ?: continue
+                    innerAuthor = opened.author
+                    data = opened.payload
                 }
             }
-            best
-        } catch (e: Exception) { null }
+            val pTs = data.optLong("timestamp", 0L)
+            if (pTs > 0 && (pTs > now + TIMESTAMP_TOLERANCE_MS ||
+                    (ts > 0 && pTs > ts + TIMESTAMP_TOLERANCE_MS))) continue
+            val transport = innerAuthor
+                ?: if (channel?.type == "gated") (gatedAuthor(channel, streamId, meta) ?: continue)
+                else meta.optString("publisherId")
+            // account = proof ? recovered wallet : publisherId — new messages,
+            // legacy ones and reactions alike. The payload `sender` only
+            // matters when meta carried no publisher.
+            val author = attachAccount(data, transport.ifEmpty { null }) ?: data.optString("sender")
+            rows.add(PreviewRow(data, author, ts))
+        }
+        return rows
+    }
+
+    /** The newest edit or delete per target in the control partition's window. */
+    private suspend fun latestOverrides(
+        channel: Channel?, streamId: String, password: String?
+    ): Map<String, PreviewRow> {
+        val arr = try {
+            resendPreviewWindow(streamId, StreamConstants.P_CONTROL, password, LATEST_PREVIEW_FETCH * 2)
+        } catch (e: Exception) { null } ?: return emptyMap()
+        val latest = HashMap<String, PreviewRow>()
+        for (row in openPreviewRows(channel, streamId, arr, password)) {
+            val type = row.data.optString("type")
+            if (type != "edit" && type != "delete") continue
+            val target = row.data.optString("targetId").ifEmpty { null } ?: continue
+            if ((latest[target]?.ts ?: -1L) >= row.ts) continue
+            latest[target] = row
+        }
+        return latest
+    }
+
+    /**
+     * The newest row a preview can show, after its author's own edit or
+     * delete. An override from anyone else is ignored, as in the timeline.
+     */
+    private fun pickPreview(
+        rows: List<PreviewRow>, overrides: Map<String, PreviewRow>, isDm: Boolean
+    ): com.pombo.android.core.LatestMessageStore.Preview? {
+        for (row in rows.sortedByDescending { it.ts }) {
+            var body = previewBody(row.data, isDm) ?: continue
+            val override = row.data.optString("id").ifEmpty { null }?.let { overrides[it] }
+            if (override != null && override.author.equals(row.author, ignoreCase = true)) {
+                if (override.data.optString("type") == "delete") continue
+                val edited = override.data.optString("text")
+                if (edited.isNotEmpty() && row.data.optString("type") == "text") body = edited
+            }
+            return com.pombo.android.core.LatestMessageStore.Preview(
+                previewSenderLabel(row.author, row.data.optStringOrNull("senderName")), body, row.ts, row.author
+            )
+        }
+        return null
+    }
+
+    /** The preview line for a payload (web formatPreviewBody); null when there is nothing to show. */
+    private fun previewBody(data: JSONObject, isDm: Boolean): String? = when (data.optString("type")) {
+        "text" -> data.optString("text")
+        "image" -> com.pombo.android.core.PreviewLabels.IMAGE
+        "audio" -> AUDIO_FALLBACK_TEXT
+        "video_announce" -> com.pombo.android.core.PreviewLabels.VIDEO
+        "file_announce", "storage_file_announce" -> data.optJSONObject("metadata").let { md ->
+            com.pombo.android.core.PreviewLabels.file(
+                md?.optString("fileType").orEmpty(), md?.optString("fileName").orEmpty()
+            )
+        }
+        // A reaction is not what was said here last, and on a channel with a
+        // -5 this window never holds one anyway. DMs keep theirs: no -5 there,
+        // and the local path is the only one that feeds them. Removals are
+        // never previewable.
+        "reaction" -> if (!isDm || data.optString("action") == "remove") null
+            else "reacted with ${data.optString("emoji")}"
+        else -> null
+    }
+
+    /** The same line for a timeline message. */
+    private fun previewBody(m: UiMessage): String = when {
+        m.isImage -> com.pombo.android.core.PreviewLabels.IMAGE
+        m.isAudio -> AUDIO_FALLBACK_TEXT
+        m.storageFile != null ->
+            com.pombo.android.core.PreviewLabels.file(m.storageFile.fileType, m.storageFile.fileName)
+        m.file != null -> com.pombo.android.core.PreviewLabels.file(m.file.fileType, m.file.fileName)
+        else -> m.text
     }
 
     /**
@@ -2714,79 +2805,40 @@ class ChannelManager(
         val previewScope = previewStore.generation()
         try {
             bridge.awaitConnected()
-            val args = JSONObject()
-                .put("streamId", streamId)
-                .put("partition", StreamConstants.P_MESSAGES)
-                .put("last", LATEST_PREVIEW_FETCH)
-                .put("budgetMs", 12_000)
-            channel.password?.let { args.put("password", it) }
-            val res = bridge.call("resend", args, 20_000)
-            val arr = res.optJSONArray("messages") ?: return
+            val arr = resendPreviewWindow(streamId, StreamConstants.P_MESSAGES, channel.password) ?: return
             val since = unreadStore.watermark(streamId)
             val me = myAddress()
-            // Password channels seal P0 payloads — decrypt before reading, or this
-            // scan finds nothing (no preview AND no unread count for them).
-            val decrypted = predecrypt(arr, channel.password)
 
-            var best: com.pombo.android.core.LatestMessageStore.Preview? = null
-            var newContent = 0
+            // Advance the watermark past ANY newer item, content or not, so
+            // a window full of reactions cannot make the next scan reread
+            // the same entries forever (web does the same). A row dated ahead
+            // of the clock would push it past every real message to come.
             var maxTs = since
-
+            val latestAllowed = System.currentTimeMillis() + TIMESTAMP_TOLERANCE_MS
             for (i in 0 until arr.length()) {
-                val entry = arr.optJSONObject(i) ?: continue
-                val content = decrypted.getOrNull(i) as? JSONObject ?: continue
-                val meta = entry.optJSONObject("meta")
-                val ts = meta?.optLong("timestamp") ?: 0L
-                val type = content.optString("type")
+                val ts = arr.optJSONObject(i)?.optJSONObject("meta")?.optLong("timestamp") ?: 0L
+                if (ts in (maxTs + 1)..latestAllowed) maxTs = ts
+            }
 
-                // Advance the watermark past ANY newer item, content or not, so
-                // a window full of reactions cannot make the next scan reread
-                // the same entries forever (web does the same).
-                if (ts > maxTs) maxTs = ts
-
-                // Forged-timestamp clamp — a message the ingest funnel would drop must not
-                // count for the preview or the unread badge.
-                val pTs = content.optLong("timestamp", 0L)
-                if (pTs > 0 && (pTs > System.currentTimeMillis() + TIMESTAMP_TOLERANCE_MS ||
-                        (ts > 0 && pTs > ts + TIMESTAMP_TOLERANCE_MS))) continue
-
-                // Same rule as fetchLatestPreview: identity from the proof-
-                // resolved account, publisherId fallback for the legacy eras.
-                val senderAddr = attachAccount(content, meta?.optString("publisherId"))
-                    ?: content.optString("sender")
-
-                // --- preview candidate (reactions allowed) ---
-                val body = when (type) {
-                    "text" -> content.optString("text")
-                    "image" -> "[image]"
-                    "audio" -> AUDIO_FALLBACK_TEXT
-                    "video_announce" -> "[video]"
-                    "file_announce", "storage_file_announce" -> "[file]"
-                    // Same rule as the preview above: DMs only.
-                    "reaction" -> if (channel.type != "dm"
-                        || content.optString("action") == "remove") null
-                        else "reacted with ${content.optString("emoji")}"
-                    else -> null
-                }
-                if (body != null && (best == null || ts > best.ts)) {
-                    best = com.pombo.android.core.LatestMessageStore.Preview(
-                        previewSenderLabel(senderAddr, content.optStringOrNull("senderName")), body, ts, senderAddr
-                    )
-                }
-
-                // --- unread candidate (content only, and not my own) ---
-                if (ts <= since) continue
-                if (senderAddr.equals(me, ignoreCase = true)) continue
-                val isContent = when (type) {
+            val rows = openPreviewRows(channel, streamId, arr, channel.password)
+            var newContent = 0
+            for (row in rows) {
+                // Unread: content only, and not my own.
+                if (row.ts <= since) continue
+                if (row.author.equals(me, ignoreCase = true)) continue
+                val isContent = when (row.data.optString("type")) {
                     "text", "message" -> true
-                    "image", "audio" -> content.optStringOrNull("imageId") != null
-                    "video_announce" -> content.opt("metadata") != null
+                    "image", "audio" -> row.data.optStringOrNull("imageId") != null
+                    "video_announce" -> row.data.opt("metadata") != null
                     else -> false
                 }
                 if (isContent) newContent++
             }
 
-            best?.let { previewStore.put(streamId, it, previewScope) }
+            if (rows.isNotEmpty()) {
+                pickPreview(rows, latestOverrides(channel, streamId, channel.password), channel.type == "dm")
+                    ?.let { previewStore.put(streamId, it, previewScope) }
+            }
             if (newContent > 0) unreadStore.add(streamId, newContent)
             if (maxTs > since) unreadStore.setWatermark(streamId, maxTs)
         } catch (e: Exception) {
@@ -3688,8 +3740,9 @@ class ChannelManager(
                 channel.messageStreamId,
                 com.pombo.android.core.LatestMessageStore.Preview(
                     sender = sender,
-                    text = msg.text.ifEmpty { if (msg.file != null || msg.storageFile != null) "[file]" else "[image]" },
-                    ts = msg.timestamp
+                    text = previewBody(msg),
+                    ts = msg.timestamp,
+                    senderAddress = sender
                 )
             )
         }
@@ -5314,7 +5367,11 @@ class ChannelManager(
             generation
         }
 
-    fun closeCurrent() { scope.launch { channelSwitchMutex.withLock { closeCurrentInternal() } } }
+    fun closeCurrent() {
+        // Captured now: an account switch right after this call must not receive this channel's preview.
+        val previewScope = previewStore.generation()
+        scope.launch { channelSwitchMutex.withLock { closeCurrentInternal(previewScope) } }
+    }
 
     @Synchronized
     private fun saveReopenSnapshot(channel: Channel) {
@@ -5342,9 +5399,22 @@ class ChannelManager(
     @Synchronized
     private fun clearReopenSnapshots() = reopenSnapshots.clear()
 
-    private suspend fun closeCurrentInternal() {
+    private suspend fun closeCurrentInternal(previewScope: Int? = previewStore.generation()) {
         val channel = _current.value ?: return
         saveReopenSnapshot(channel)
+        if (previewScope != null) _messages.value.filter { !it.failed }
+            .maxByOrNull { it.envelopeTs.takeIf { ts -> ts > 0 } ?: it.timestamp }
+            ?.let { m ->
+                previewStore.put(
+                    channel.messageStreamId,
+                    com.pombo.android.core.LatestMessageStore.Preview(
+                        previewSenderLabel(m.sender, m.senderName), previewBody(m),
+                        m.envelopeTs.takeIf { it > 0 } ?: m.timestamp, m.sender
+                    ),
+                    previewScope,
+                    replace = true
+                )
+            }
         // Closing ends the viewing session too, so work in flight for this
         // channel cannot land after we reopen the very same channel.
         val generation = ++switchGeneration

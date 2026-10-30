@@ -20,6 +20,23 @@ import java.io.File
 /** How long a preview may be newer than storage before it stops being an echo. */
 private const val ECHO_GRACE_MS = 5 * 60 * 1000L
 
+/** Clock skew tolerated before a preview counts as dated ahead (ChannelManager.TIMESTAMP_TOLERANCE_MS). */
+private const val AHEAD_TOLERANCE_MS = 5 * 60 * 1000L
+
+private fun isAhead(ts: Long) = ts > System.currentTimeMillis() + AHEAD_TOLERANCE_MS
+
+/** Media labels shared by the stored and the live previews (web formatPreviewBody). */
+object PreviewLabels {
+    const val IMAGE = "🖼️ Image"
+    const val VIDEO = "🎬 Video"
+
+    fun file(mime: String, fileName: String): String = when {
+        mime.startsWith("video/") -> VIDEO
+        mime.startsWith("image/") -> IMAGE
+        else -> "📎 " + fileName.ifEmpty { "File" }
+    }
+}
+
 class LatestMessageStore(context: Context) {
 
     /**
@@ -120,6 +137,7 @@ class LatestMessageStore(context: Context) {
                 // was cached with. Dropping one wrongly costs a preview until
                 // the next scan, which is seconds.
                 if (!key.endsWith("/Pombo-DM-1") && text.startsWith("reacted with ")) return@forEach
+                if (isAhead(o.optLong("ts"))) return@forEach
                 loaded[key] = Preview(
                     o.optString("sender"), text, o.optLong("ts"), o.optString("senderAddress")
                 )
@@ -133,7 +151,12 @@ class LatestMessageStore(context: Context) {
 
     fun cached(streamId: String): Preview? = _previews.value[streamId]
 
-    suspend fun put(streamId: String, preview: Preview, startedAt: Int = generation()) {
+    /**
+     * [replace] is for the open channel's own timeline, which already applied
+     * what was sent, edited or deleted there and outranks any stored line.
+     */
+    suspend fun put(streamId: String, preview: Preview, startedAt: Int = generation(), replace: Boolean = false) {
+        if (isAhead(preview.ts)) return
         val (snapshot, file) = synchronized(lock) {
             if (startedAt != generation) return
             // Never let an older message overwrite a newer one (the live path in
@@ -141,7 +164,7 @@ class LatestMessageStore(context: Context) {
             // newer one has outlived what the stream serves, which is what pinned
             // a refused message on a read-only card for good.
             val existing = _previews.value[streamId]
-            if (existing != null && existing.ts > preview.ts
+            if (!replace && existing != null && existing.ts > preview.ts && !isAhead(existing.ts)
                 && System.currentTimeMillis() - existing.ts < ECHO_GRACE_MS) return
             _previews.value = _previews.value + (streamId to preview)
             _previews.value to currentFile()

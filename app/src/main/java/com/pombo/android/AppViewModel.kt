@@ -3293,9 +3293,11 @@ class AppViewModel(app: Application) : AndroidViewModel(app), PomboBridge.Listen
                         // a preview; a storage node with signed reads refuses
                         // the read to a non-member anyway.
                         if (info.type == "gated") return@launch
-                        val preview = previewStore.dedup(info.streamId) {
+                        val fetched = previewStore.dedup(info.streamId) {
                             manager.fetchLatestPreview(info.streamId)
-                        } ?: return@launch
+                        }
+                        // The store may have kept a newer line than this fetch; the card shows the same one as the Home.
+                        val preview = previewStore.cached(info.streamId) ?: fetched ?: return@launch
                         _explore.value = _explore.value.map {
                             if (it.messageStreamId == info.streamId)
                                 it.copy(

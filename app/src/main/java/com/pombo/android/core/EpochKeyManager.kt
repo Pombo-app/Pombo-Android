@@ -2385,7 +2385,8 @@ class EpochKeyManager(
      */
     suspend fun tryDecrypt(
         messageStreamId: String, keysStreamId: String, envelope: JSONObject,
-        gated: Boolean = false, live: Boolean = true, timestamp: Long = 0L
+        gated: Boolean = false, live: Boolean = true, timestamp: Long = 0L,
+        requestMissing: Boolean = true
     ): JSONObject? {
         val kid = envelope.optString("k")
         var known = 0
@@ -2406,7 +2407,7 @@ class EpochKeyManager(
             }
         }
         if (lookup == null) {
-            noteMissingKid(messageStreamId, keysStreamId, kid)
+            if (requestMissing) noteMissingKid(messageStreamId, keysStreamId, kid)
             return null
         }
         if (!lookup.second) {
