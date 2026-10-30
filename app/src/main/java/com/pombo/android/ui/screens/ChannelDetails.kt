@@ -106,7 +106,14 @@ internal fun ChannelSettingsSheet(vm: AppViewModel, channel: Channel, canModerat
         // level entirely — from Members straight out of Channel Details. Same
         // rule as the header arrow: leave the sub-panel first.
         androidx.activity.compose.BackHandler(enabled = sub != null) { sub = null }
-        com.pombo.android.ui.DialogBackdropBlur()
+        // On API 29 the Dialog frame leaves the system bars uncovered; a full dim keeps the chat from showing there.
+        val dialogView = androidx.compose.ui.platform.LocalView.current
+        androidx.compose.runtime.SideEffect {
+            (dialogView.parent as? androidx.compose.ui.window.DialogWindowProvider)?.window?.apply {
+                addFlags(android.view.WindowManager.LayoutParams.FLAG_DIM_BEHIND)
+                setDimAmount(1f)
+            }
+        }
         // Minimum bottom clearance, as in CreateChannelDialog: a phone using
         // gesture navigation with no gesture bar reports a 0 bottom inset and
         // the panel would sit flush against the screen edge.
