@@ -49,12 +49,15 @@ import java.util.Date
 import java.util.Locale
 
 /** The type a reader recognises: the gate mode decides for gated channels (web channelTypeLabel). */
-internal fun exploreTypeLabel(type: String, gateMode: Int?): String = when {
-    type == "password" -> "Password"
-    type != "gated" -> "Open"
-    gateMode == GateModes.PAID -> "Paid"
-    gateMode == GateModes.NONE -> "Closed"
-    else -> "Gated"
+internal fun exploreTypeLabel(type: String, gateMode: Int?, readOnly: Boolean = false): String {
+    val base = when {
+        type == "password" -> "Password"
+        type != "gated" -> "Open"
+        gateMode == GateModes.PAID -> "Paid"
+        gateMode == GateModes.NONE -> "Closed"
+        else -> "Gated"
+    }
+    return if (readOnly) "$base · Read-Only" else base
 }
 
 /** Everything the directory knows about a channel the viewer has not joined. */
@@ -116,7 +119,7 @@ internal fun ExploreDetailsSheet(
             }
             Spacer(Modifier.height(16.dp))
 
-            DetailsRow("Type") { DetailsValue(exploreTypeLabel(ch.type, ch.gateMode)) }
+            DetailsRow("Type") { DetailsValue(exploreTypeLabel(ch.type, ch.gateMode, ch.readOnly)) }
             if (ch.type == "gated" && ch.gateVerb != null) {
                 DetailsRow("Access") {
                     DetailsValue(listOfNotNull(ch.gateVerb, ch.gateValue, ch.gateQualifier).joinToString(" "))
