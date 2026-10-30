@@ -111,13 +111,14 @@ private fun SettingsHeader(title: String, onBack: (() -> Unit)? = null) {
  * without hard-coding positions.
  */
 internal enum class SettingsPanel(val label: String, val icon: ImageVector, val section: Int) {
-    ACCOUNT("Account", Icons.Outlined.Person, 0),
-    NOTIFICATIONS("Notifications", Icons.Outlined.Notifications, 0),
-    NETWORKS("Networks", Icons.Outlined.Link, 0),
-    CONTENT("Content", Icons.Outlined.SmartDisplay, 0),
-    PRIVACY("Privacy", Icons.Outlined.Block, 1),
-    SECURITY("Security", Icons.Outlined.Key, 1),
-    DM_INBOX("DM Inbox", Icons.Outlined.MailOutline, 1)
+    ACCOUNT("Profile", Icons.Outlined.Person, 0),
+    SECURITY("Account", Icons.Outlined.Key, 0),
+    DEVICE_SYNC("Device Sync", Icons.Outlined.Sync, 0),
+    NOTIFICATIONS("Notifications", Icons.Outlined.Notifications, 1),
+    DM_INBOX("DM Inbox", Icons.Outlined.MailOutline, 1),
+    PRIVACY("Blocked Users", Icons.Outlined.Block, 1),
+    CONTENT("Content", Icons.Outlined.SmartDisplay, 2),
+    NETWORKS("Networks", Icons.Outlined.Link, 2)
     // ABOUT lives on the Profile screen.
 }
 
@@ -132,7 +133,7 @@ internal fun SettingsTab(
     onBack: () -> Unit
 ) {
     if (panel == null) {
-        SettingsIndex(vm, onOpen)
+        SettingsIndex(onOpen)
         return
     }
     // Any tap outside a text field drops its focus, which is also what
@@ -157,6 +158,7 @@ internal fun SettingsTab(
         ) {
             when (panel) {
                 SettingsPanel.ACCOUNT -> AccountPanel(vm)
+                SettingsPanel.DEVICE_SYNC -> DeviceSyncPanel(vm)
                 SettingsPanel.NOTIFICATIONS -> NotificationsSection(vm)
                 SettingsPanel.SECURITY -> SecurityPanel(vm)
                 SettingsPanel.DM_INBOX -> DmInboxPanel(vm)
@@ -168,10 +170,9 @@ internal fun SettingsTab(
     }
 }
 
-/** Web #settings-panel-index: one row per section, Sync Devices as an action at the end. */
+/** Web #settings-panel-index: one row per section. */
 @Composable
-private fun SettingsIndex(vm: AppViewModel, onOpen: (SettingsPanel) -> Unit) {
-    val isGuest by vm.isGuest.collectAsState()
+private fun SettingsIndex(onOpen: (SettingsPanel) -> Unit) {
     Column(Modifier.fillMaxSize()) {
         SettingsHeader("Settings")
         Column(
@@ -181,54 +182,100 @@ private fun SettingsIndex(vm: AppViewModel, onOpen: (SettingsPanel) -> Unit) {
             SettingsPanel.entries.forEachIndexed { i, panel ->
                 val previous = SettingsPanel.entries.getOrNull(i - 1)
                 if (previous != null && previous.section != panel.section) SettingsIndexDivider()
-                SettingsIndexRow(panel.label, panel.icon, chevron = true) { onOpen(panel) }
-            }
-            // Guests have no inbox to sync to.
-            if (!isGuest) {
-                SettingsIndexDivider()
-                val syncing by vm.sync.syncing.collectAsState()
-                SettingsIndexRow(
-                    if (syncing) "Syncing your data" else "Sync Devices",
-                    Icons.Outlined.Sync, chevron = false, busy = syncing
-                ) { if (!syncing) vm.syncNow() }
+                SettingsIndexRow(panel.label, panel.icon) { onOpen(panel) }
             }
         }
     }
 }
 
+/**
+ * Moves this account's state between the user's own devices — separate from
+ * which endpoints the client talks to (Networks). Web #settings-panel-devicesync.
+ */
 @Composable
-private fun SettingsIndexRow(
-    label: String,
-    icon: ImageVector,
-    chevron: Boolean,
-    busy: Boolean = false,
-    onClick: () -> Unit
-) {
+private fun DeviceSyncPanel(vm: AppViewModel) {
+    val isGuest by vm.isGuest.collectAsState()
+    val hasDmInbox by vm.hasDmInbox.collectAsState()
+    val syncMode by vm.syncMode.collectAsState()
+    val syncing by vm.sync.syncing.collectAsState()
+    LaunchedEffect(Unit) { vm.refreshDmInbox() }
+    // Sync publishes to the account's own DM inbox (partition 1): without one
+    // the choices are shown but cannot be made.
+    val available = !isGuest && hasDmInbox == true
+
+    SettingsSection {
+        Text(
+            "Sync your app state, including sent DMs from other devices",
+            color = PomboColors.Overlay40, fontSize = 12.sp
+        )
+        Spacer(Modifier.height(14.dp))
+        if (!available) {
+            Text(
+                if (isGuest) "Sync belongs to a real account. Connect a wallet to move your state between devices."
+                else "Sync travels through your own DM inbox. Create it first to turn these options on.",
+                color = PomboColors.Overlay40, fontSize = 12.sp, lineHeight = 17.sp,
+                modifier = Modifier.fillMaxWidth()
+                    .background(PomboColors.Overlay3, RoundedCornerShape(12.dp))
+                    .border(1.dp, PomboColors.Overlay5, RoundedCornerShape(12.dp))
+                    .padding(horizontal = 14.dp, vertical = 12.dp)
+            )
+            Spacer(Modifier.height(10.dp))
+        }
+        Column(
+            Modifier.fillMaxWidth()
+                .background(PomboColors.Overlay3, RoundedCornerShape(12.dp))
+                .border(1.dp, PomboColors.Overlay5, RoundedCornerShape(12.dp))
+                .padding(vertical = 4.dp)
+                .alpha(if (available) 1f else 0.4f)
+        ) {
+            com.pombo.android.data.SyncMode.entries.forEach { mode ->
+                Row(
+                    Modifier.fillMaxWidth()
+                        .clickableNoRipple { if (available) vm.setSyncMode(mode) }
+                        .padding(end = 12.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    androidx.compose.material3.RadioButton(
+                        selected = syncMode == mode,
+                        onClick = { vm.setSyncMode(mode) },
+                        enabled = available,
+                        colors = androidx.compose.material3.RadioButtonDefaults.colors(
+                            selectedColor = PomboColors.Accent,
+                            unselectedColor = PomboColors.Overlay30
+                        )
+                    )
+                    Text(
+                        mode.label,
+                        color = PomboColors.Overlay85,
+                        fontSize = 13.sp, fontWeight = FontWeight.Medium
+                    )
+                }
+            }
+        }
+        Spacer(Modifier.height(16.dp))
+        BackupButton(
+            label = if (syncing) "Syncing your data" else "Sync Now", icon = Icons.Outlined.Sync,
+            emphasized = true, enabled = available && !syncing, modifier = Modifier.fillMaxWidth()
+        ) { vm.syncNow() }
+    }
+}
+
+@Composable
+private fun SettingsIndexRow(label: String, icon: ImageVector, onClick: () -> Unit) {
     Row(
         Modifier.fillMaxWidth().clickableNoRipple(onClick).padding(horizontal = 6.dp, vertical = 14.dp),
         verticalAlignment = Alignment.CenterVertically
     ) {
-        if (busy) {
-            androidx.compose.material3.CircularProgressIndicator(
-                modifier = Modifier.size(20.dp),
-                color = PomboColors.Accent,
-                trackColor = PomboColors.Accent.copy(alpha = 0.16f),
-                strokeWidth = 2.5.dp
-            )
-        } else {
-            Icon(icon, contentDescription = null, tint = PomboColors.Overlay50, modifier = Modifier.size(20.dp))
-        }
+        Icon(icon, contentDescription = null, tint = PomboColors.Overlay50, modifier = Modifier.size(20.dp))
         Spacer(Modifier.width(14.dp))
         Text(
             label, color = PomboColors.Overlay85, fontSize = 15.sp,
             fontWeight = FontWeight.Medium, modifier = Modifier.weight(1f)
         )
-        if (chevron) {
-            Icon(
-                Icons.Outlined.ChevronRight, contentDescription = null,
-                tint = PomboColors.Overlay30, modifier = Modifier.size(20.dp)
-            )
-        }
+        Icon(
+            Icons.Outlined.ChevronRight, contentDescription = null,
+            tint = PomboColors.Overlay30, modifier = Modifier.size(20.dp)
+        )
     }
 }
 
@@ -250,7 +297,6 @@ private fun AccountPanel(vm: AppViewModel) {
     val username by vm.username.collectAsState()
     val address by vm.address.collectAsState()
     val ensAvatars by vm.ensAvatars.collectAsState()
-    val isGuest by vm.isGuest.collectAsState()
     val clipboard = androidx.compose.ui.platform.LocalClipboardManager.current
 
     // A primary ENS name takes over the display name entirely (web
@@ -264,53 +310,6 @@ private fun AccountPanel(vm: AppViewModel) {
     LaunchedEffect(address) { vm.refreshDmInbox() }
     val ensName = address?.let { ensNames[it.lowercase()] }
     var editing by remember(username, ensName) { mutableStateOf(ensName ?: username ?: "") }
-
-    // Export: ask for a password, then pick where to save. The password (and
-    // the media choice) ride in state between the two steps because SAF
-    // answers via callback.
-    var askExportPassword by remember { mutableStateOf(false) }
-    var exportPassword by remember { mutableStateOf<String?>(null) }
-    var exportIncludeMedia by remember { mutableStateOf(true) }
-    var importUri by remember { mutableStateOf<android.net.Uri?>(null) }
-
-    val exportLauncher = androidx.activity.compose.rememberLauncherForActivityResult(
-        androidx.activity.result.contract.ActivityResultContracts.CreateDocument("application/json")
-    ) { uri ->
-        val pwd = exportPassword
-        exportPassword = null
-        if (uri != null && pwd != null) vm.exportBackupTo(uri, pwd, exportIncludeMedia)
-    }
-    val importLauncher = androidx.activity.compose.rememberLauncherForActivityResult(
-        androidx.activity.result.contract.ActivityResultContracts.OpenDocument()
-    ) { uri -> if (uri != null) importUri = uri }
-
-    if (askExportPassword) BackupPasswordDialog(
-        title = "Export Account Backup",
-        hint = "Choose a password to protect the backup (min 8 characters). You will need it to restore, on Android or on the web.",
-        confirmLabel = "Export",
-        minLength = 8,
-        toggleLabel = "Include sent DM media",
-        confirmPassword = true,
-        onDismiss = { askExportPassword = false }
-    ) { pwd, includeMedia ->
-        askExportPassword = false
-        exportPassword = pwd
-        exportIncludeMedia = includeMedia
-        val stamp = java.text.SimpleDateFormat("yyyy-MM-dd", java.util.Locale.US)
-            .format(java.util.Date())
-        exportLauncher.launch("pombo-account-backup-$stamp.json")
-    }
-    importUri?.let { uri ->
-        BackupPasswordDialog(
-            title = "Restore Account Backup",
-            hint = "Enter the password this backup was created with.",
-            confirmLabel = "Restore",
-            onDismiss = { importUri = null }
-        ) { pwd, _ ->
-            importUri = null
-            vm.importBackupFrom(uri, pwd)
-        }
-    }
 
     SettingsSection {
         // Web: name field capped at 180px with the 56px avatar beside it.
@@ -411,92 +410,86 @@ private fun AccountPanel(vm: AppViewModel) {
             }
         }
 
-        // Sync publishes to the account's own DM inbox (partition 1);
-        // pushSync/pullSync both bail on `inboxExists()`, so without an inbox
-        // the whole block is absent rather than disabled.
-        val hasDmInbox by vm.hasDmInbox.collectAsState()
-        if (hasDmInbox == true) {
-            Spacer(Modifier.height(20.dp))
-            Box(Modifier.fillMaxWidth().height(1.dp).background(PomboColors.Overlay5))
-            Spacer(Modifier.height(20.dp))
+    }
+}
 
-            // Moves this account's state between the user's own devices —
-            // separate from which endpoints the client talks to (API panel).
+/** Export and restore an encrypted backup of the account (web Backup & Restore). */
+@Composable
+private fun BackupSection(vm: AppViewModel) {
+    val isGuest by vm.isGuest.collectAsState()
+    // Export: ask for a password, then pick where to save. The password (and
+    // the media choice) ride in state between the two steps because SAF
+    // answers via callback.
+    var askExportPassword by remember { mutableStateOf(false) }
+    var exportPassword by remember { mutableStateOf<String?>(null) }
+    var exportIncludeMedia by remember { mutableStateOf(true) }
+    var importUri by remember { mutableStateOf<android.net.Uri?>(null) }
+
+    val exportLauncher = androidx.activity.compose.rememberLauncherForActivityResult(
+        androidx.activity.result.contract.ActivityResultContracts.CreateDocument("application/json")
+    ) { uri ->
+        val pwd = exportPassword
+        exportPassword = null
+        if (uri != null && pwd != null) vm.exportBackupTo(uri, pwd, exportIncludeMedia)
+    }
+    val importLauncher = androidx.activity.compose.rememberLauncherForActivityResult(
+        androidx.activity.result.contract.ActivityResultContracts.OpenDocument()
+    ) { uri -> if (uri != null) importUri = uri }
+
+    if (askExportPassword) BackupPasswordDialog(
+        title = "Export Account Backup",
+        hint = "Choose a password to protect the backup (min 8 characters). You will need it to restore, on Android or on the web.",
+        confirmLabel = "Export",
+        minLength = 8,
+        toggleLabel = "Include sent DM media",
+        confirmPassword = true,
+        onDismiss = { askExportPassword = false }
+    ) { pwd, includeMedia ->
+        askExportPassword = false
+        exportPassword = pwd
+        exportIncludeMedia = includeMedia
+        val stamp = java.text.SimpleDateFormat("yyyy-MM-dd", java.util.Locale.US)
+            .format(java.util.Date())
+        exportLauncher.launch("pombo-account-backup-$stamp.json")
+    }
+    importUri?.let { uri ->
+        BackupPasswordDialog(
+            title = "Restore Account Backup",
+            hint = "Enter the password this backup was created with.",
+            confirmLabel = "Restore",
+            onDismiss = { importUri = null }
+        ) { pwd, _ ->
+            importUri = null
+            vm.importBackupFrom(uri, pwd)
+        }
+    }
+
+    Column {
             Row(verticalAlignment = Alignment.CenterVertically) {
                 Icon(
-                    Icons.Outlined.Sync, contentDescription = null,
+                    com.pombo.android.ui.PomboIcons.Database, contentDescription = null,
                     tint = PomboColors.Overlay80, modifier = Modifier.size(16.dp)
                 )
                 Spacer(Modifier.width(8.dp))
-                Text("Device Sync", color = PomboColors.Overlay80, fontSize = 14.sp, fontWeight = FontWeight.Medium)
+                Text("Backup & Restore", color = PomboColors.Overlay80, fontSize = 14.sp, fontWeight = FontWeight.Medium)
             }
             Spacer(Modifier.height(4.dp))
-            Text(
-                "Sync your app state, including sent DMs from other devices",
-                color = PomboColors.Overlay40, fontSize = 12.sp
-            )
+            Text("Export data to restore on another device", color = PomboColors.Overlay40, fontSize = 12.sp)
             Spacer(Modifier.height(14.dp))
-            val syncMode by vm.syncMode.collectAsState()
-            Column(
-                Modifier.fillMaxWidth()
-                    .background(PomboColors.Overlay3, RoundedCornerShape(12.dp))
-                    .border(1.dp, PomboColors.Overlay5, RoundedCornerShape(12.dp))
-                    .padding(vertical = 4.dp)
-            ) {
-                com.pombo.android.data.SyncMode.entries.forEach { mode ->
-                    Row(
-                        Modifier.fillMaxWidth()
-                            .clickableNoRipple { vm.setSyncMode(mode) }
-                            .padding(end = 12.dp),
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        androidx.compose.material3.RadioButton(
-                            selected = syncMode == mode,
-                            onClick = { vm.setSyncMode(mode) },
-                            colors = androidx.compose.material3.RadioButtonDefaults.colors(
-                                selectedColor = PomboColors.Accent,
-                                unselectedColor = PomboColors.Overlay30
-                            )
-                        )
-                        Text(
-                            mode.label,
-                            color = PomboColors.Overlay85,
-                            fontSize = 13.sp, fontWeight = FontWeight.Medium
-                        )
-                    }
-                }
+            Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                BackupButton(
+                    label = "Export", icon = Icons.Outlined.FileUpload,
+                    emphasized = true, enabled = !isGuest, modifier = Modifier.weight(1f)
+                ) { askExportPassword = true }
+                BackupButton(
+                    label = "Import", icon = Icons.Outlined.FileDownload,
+                    emphasized = false, enabled = true, modifier = Modifier.weight(1f)
+                ) { importLauncher.launch(arrayOf("application/json")) }
             }
-        }
-
-        Spacer(Modifier.height(20.dp))
-        Box(Modifier.fillMaxWidth().height(1.dp).background(PomboColors.Overlay5))
-        Spacer(Modifier.height(20.dp))
-
-        Row(verticalAlignment = Alignment.CenterVertically) {
-            Icon(
-                com.pombo.android.ui.PomboIcons.Database, contentDescription = null,
-                tint = PomboColors.Overlay80, modifier = Modifier.size(16.dp)
-            )
-            Spacer(Modifier.width(8.dp))
-            Text("Backup & Restore", color = PomboColors.Overlay80, fontSize = 14.sp, fontWeight = FontWeight.Medium)
-        }
-        Spacer(Modifier.height(4.dp))
-        Text("Export data to restore on another device", color = PomboColors.Overlay40, fontSize = 12.sp)
-        Spacer(Modifier.height(14.dp))
-        Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-            BackupButton(
-                label = "Export", icon = Icons.Outlined.FileUpload,
-                emphasized = true, enabled = !isGuest, modifier = Modifier.weight(1f)
-            ) { askExportPassword = true }
-            BackupButton(
-                label = "Import", icon = Icons.Outlined.FileDownload,
-                emphasized = false, enabled = true, modifier = Modifier.weight(1f)
-            ) { importLauncher.launch(arrayOf("application/json")) }
-        }
-        // Channel passwords are included: Channel.toJson() carries `password`,
-        // and the backup payload is exportSyncState(), which builds `channels`
-        // from it — the whole file is scrypt/AES-GCM sealed with the export
-        // password anyway.
+            // Channel passwords are included: Channel.toJson() carries `password`,
+            // and the backup payload is exportSyncState(), which builds `channels`
+            // from it — the whole file is scrypt/AES-GCM sealed with the export
+            // password anyway.
     }
 }
 
@@ -511,7 +504,7 @@ private fun SettingsFieldLabel(text: String) {
     Spacer(Modifier.height(8.dp))
 }
 
-/** The web's Export (bright) / Import (dim) pair of bordered buttons. */
+/** The web's bordered settings buttons: Export (bright) / Import (dim), Sync Now. */
 @Composable
 private fun BackupButton(
     label: String,
@@ -751,9 +744,11 @@ private fun DmInboxPanel(vm: AppViewModel) {
     val health by vm.inboxHealth.collectAsState()
     val storage by vm.inboxStorage.collectAsState()
     var showDmSetup by remember { mutableStateOf(false) }
-    // Storage shows on open, not gated behind a Diagnose (like the channel
-    // storage panel).
-    LaunchedEffect(Unit) { vm.loadInboxStorage() }
+    // Storage and health both load on open; nothing waits behind a button.
+    LaunchedEffect(Unit) {
+        vm.loadInboxStorage()
+        vm.diagnoseInbox()
+    }
 
     if (showDmSetup) CreateDmInboxDialog(
         vm,
@@ -815,13 +810,20 @@ private fun DmInboxPanel(vm: AppViewModel) {
                     Text(title, color = PomboColors.Overlay70, fontSize = 14.sp)
                     Spacer(Modifier.height(2.dp))
                     Text(detail, color = PomboColors.Overlay30, fontSize = 12.sp, lineHeight = 16.sp)
+                    if (health is AppViewModel.InboxHealth.Failed) {
+                        Spacer(Modifier.height(6.dp))
+                        Text(
+                            "Check again", color = PomboColors.Overlay50, fontSize = 12.sp,
+                            modifier = Modifier.clickableNoRipple { vm.diagnoseInbox() }
+                        )
+                    }
                 }
             }
             Spacer(Modifier.height(14.dp))
         }
 
         val busyNow = health is AppViewModel.InboxHealth.Loading || health is AppViewModel.InboxHealth.Repairing
-        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+        if (health is AppViewModel.InboxHealth.NoInbox || health is AppViewModel.InboxHealth.Issues) Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
             if (health is AppViewModel.InboxHealth.NoInbox) {
                 // Web: the primary action morphs into "Create DM Inbox".
                 Row(
@@ -838,19 +840,6 @@ private fun DmInboxPanel(vm: AppViewModel) {
                     Text("Create DM Inbox", color = Color.White, fontSize = 13.sp, fontWeight = FontWeight.Medium)
                 }
             } else {
-                Row(
-                    Modifier.weight(1f)
-                        .background(PomboColors.Overlay5, RoundedCornerShape(8.dp))
-                        .border(1.dp, PomboColors.Overlay10, RoundedCornerShape(8.dp))
-                        .clickableNoRipple { if (!busyNow) vm.diagnoseInbox() }
-                        .padding(vertical = 8.dp),
-                    horizontalArrangement = Arrangement.Center,
-                    verticalAlignment = Alignment.CenterVertically
-                ) {
-                    Icon(Icons.Outlined.Search, contentDescription = null, tint = PomboColors.Overlay70, modifier = Modifier.size(13.dp))
-                    Spacer(Modifier.width(6.dp))
-                    Text("Diagnose", color = PomboColors.Overlay70, fontSize = 12.sp)
-                }
                 if (health is AppViewModel.InboxHealth.Issues) {
                     Row(
                         Modifier.weight(1f)
@@ -1626,6 +1615,12 @@ private fun SecurityPanel(vm: AppViewModel) {
         }
 
         Spacer(Modifier.height(20.dp))
+        Box(Modifier.fillMaxWidth().height(1.dp).background(PomboColors.Overlay5))
+        Spacer(Modifier.height(20.dp))
+        BackupSection(vm)
+        Spacer(Modifier.height(20.dp))
+        Box(Modifier.fillMaxWidth().height(1.dp).background(PomboColors.Overlay5))
+        Spacer(Modifier.height(20.dp))
 
         DangerCard(title = "Delete Account", hint = "Permanently delete this account and all its data") {
             if (!deleteVerified) {
@@ -1678,15 +1673,7 @@ private fun PrivacyPanel(vm: AppViewModel) {
 
     // No scroller of its own — the settings pager scrolls every panel.
     Column(Modifier.fillMaxSize()) {
-        Text(
-            "BLOCKED USERS", color = PomboColors.Overlay70,
-            fontSize = 12.sp, fontWeight = FontWeight.Medium, letterSpacing = 0.8.sp
-        )
-        Spacer(Modifier.height(4.dp))
-        Text(
-            "Messages from these accounts are ignored before they are decrypted.",
-            color = PomboColors.Overlay30, fontSize = 12.sp
-        )
+        Text("Messages are hidden but copies remain in storage until you erase them.", color = PomboColors.Overlay40, fontSize = 12.sp)
         Spacer(Modifier.height(14.dp))
         if (blocked.isEmpty()) {
             Text("No blocked users.", color = PomboColors.Overlay30, fontSize = 14.sp)
