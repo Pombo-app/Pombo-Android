@@ -3,6 +3,8 @@ package com.pombo.android.core.channels
 import android.util.Log
 import com.pombo.android.ChannelManager
 import com.pombo.android.ChannelManager.Companion.ASSEMBLY_TTL_MS
+import com.pombo.android.ChannelManager.Companion.AUDIO_FALLBACK_TEXT
+import com.pombo.android.ChannelManager.Companion.AUDIO_MAX_ASSEMBLED_BYTES
 import com.pombo.android.ChannelManager.Companion.CHUNK_RECOVERY_DELAY_MS
 import com.pombo.android.ChannelManager.Companion.CHUNK_RECOVERY_MAX_ATTEMPTS
 import com.pombo.android.ChannelManager.Companion.CHUNK_RECOVERY_WINDOW_MS
@@ -420,6 +422,121 @@ internal class ChannelImages(private val manager: ChannelManager) {
         }
     }
 
+    suspend fun sendAudio(bytes: ByteArray, mime: String, durationMs: Long) {
+        val channel = _current.value ?: return
+        val sender = myAddress() ?: return
+        require(bytes.isNotEmpty() && bytes.size <= AUDIO_MAX_ASSEMBLED_BYTES) { "Voice message is larger than 1MB" }
+        require(mime.startsWith("audio/") && durationMs > 0) { "Invalid voice message" }
+        if (channel.type == "dm") {
+            val peer = channel.peerAddress
+                ?: throw IllegalStateException("DM conversation has no peer")
+            peerPubKey(peer) ?: throw IllegalStateException(
+                "Cannot send voice message: peer public key not available"
+            )
+        }
+        manager.settleOwedRotation(channel.messageStreamId)
+
+        val id = Protocol.generateMessageId()
+        val imageId = Protocol.generateMessageId()
+        val timestamp = System.currentTimeMillis()
+        val cut = withContext(Dispatchers.Default) { cutAudio(channel, bytes) }
+        val manifest = audioManifest(id, imageId, sender, timestamp, mime, bytes.size, durationMs, cut)
+
+        mergeMessages(listOf(UiMessage(
+            id = id, text = AUDIO_FALLBACK_TEXT, sender = sender, senderName = myUsername(),
+            timestamp = timestamp, mine = true, pending = true, verified = true,
+            isAudio = true, imageId = imageId, imageBytes = bytes, imageMime = mime,
+            audioDurationMs = durationMs,
+            ensName = ensStore.cachedName(sender),
+            ensAvatar = ensStore.cachedAvatar(sender)
+        )))
+        blobStore.save(
+            imageId, channel.messageStreamId,
+            com.pombo.android.core.ImageBlobStore.toDataUrl(bytes, mime),
+            synced = false
+        )
+        publishAudio(channel, id, manifest, cut)
+    }
+
+    suspend fun resendAudio(channel: Channel, msg: UiMessage) {
+        val imageId = msg.imageId ?: return
+        val mime = msg.imageMime ?: return
+        manager.markSending(msg.id)
+        val bytes = try {
+            msg.imageBytes
+                ?: blobStore.load(imageId)?.let { com.pombo.android.core.ImageBlobStore.fromDataUrl(it)?.first }
+                ?: throw IllegalStateException("Voice message data is no longer available")
+        } catch (e: Exception) {
+            manager.markFailed(msg.id, e.message)
+            throw e
+        }
+        manager.settleOwedRotation(channel.messageStreamId)
+        // Cut again: the sealed sizes depend on the channel as it is now.
+        val cut = withContext(Dispatchers.Default) { cutAudio(channel, bytes) }
+        val manifest = audioManifest(msg.id, imageId, msg.sender, msg.timestamp, mime, bytes.size, msg.audioDurationMs, cut)
+        publishAudio(channel, msg.id, manifest, cut)
+    }
+
+    private class AudioCut(val chunks: List<ByteArray>, val hashes: List<String>, val sha256: String)
+
+    private fun sha256Hex(bytes: ByteArray): String =
+        java.security.MessageDigest.getInstance("SHA-256").digest(bytes).joinToString("") { "%02x".format(it) }
+
+    private fun cutAudio(channel: Channel, bytes: ByteArray): AudioCut {
+        // Sealed transports base64 the chunk a second time inside their
+        // envelope, so they cut smaller to stay under the wire ceiling.
+        val sealed = channel.type == "dm" || channel.password != null
+            || channel.type == "gated" || !channel.gateAddress.isNullOrEmpty()
+        val size = if (sealed) com.pombo.android.core.MediaEncoder.CHUNK_RAW_SEALED
+            else com.pombo.android.core.MediaEncoder.CHUNK_RAW
+        val chunks = (bytes.indices step size).map { bytes.copyOfRange(it, minOf(it + size, bytes.size)) }
+        return AudioCut(chunks, chunks.map { sha256Hex(it) }, sha256Hex(bytes))
+    }
+
+    private fun audioManifest(
+        id: String, imageId: String, sender: String, timestamp: Long, mime: String,
+        size: Int, durationMs: Long, cut: AudioCut
+    ): JSONObject = JSONObject()
+        .put("type", "audio").put("transport", "chunked").put("v", 2)
+        .put("id", id).put("imageId", imageId)
+        .put("text", AUDIO_FALLBACK_TEXT)
+        .put("sender", sender)
+        .put("senderName", myUsername() ?: JSONObject.NULL)
+        .put("timestamp", timestamp)
+        .put("finalMime", mime).put("finalSizeBytes", size)
+        .put("durationMs", durationMs)
+        .put("chunkCount", cut.chunks.size)
+        .put("chunkHashes", JSONArray(cut.hashes))
+        .put("assembledSha256", cut.sha256)
+
+    private suspend fun publishAudio(channel: Channel, id: String, manifest: JSONObject, cut: AudioCut) {
+        try {
+            if (!manager.isOnline()) throw IllegalStateException(ChannelManager.NO_NETWORK)
+            // Chunks first, manifest last: the manifest tells receivers how many to expect.
+            for ((index, piece) in cut.chunks.withIndex()) {
+                val chunkMsg = JSONObject()
+                    .put("type", "image_chunk").put("v", 2)
+                    .put("imageId", manifest.getString("imageId")).put("chunkIndex", index)
+                    .put("timestamp", System.currentTimeMillis())
+                    .put("chunkHash", cut.hashes[index])
+                    .put("data", android.util.Base64.encodeToString(piece, android.util.Base64.NO_WRAP))
+                publishForChannel(channel, channel.messageStreamId, StreamConstants.P_MESSAGES, chunkMsg)
+            }
+            publishForChannel(channel, channel.messageStreamId, StreamConstants.P_MESSAGES, manifest)
+        } catch (e: Exception) {
+            manager.markFailed(id, e.message)
+            manager.keepForRetry(channel.messageStreamId, manifest, manifest.optString("sender"), e.message)
+            throw e
+        }
+        manager.confirmMessage(id)
+        manager.forgetFailed(channel.messageStreamId, id)
+        if (channel.type == "dm") {
+            sentDmStore.add(channel.messageStreamId, manifest)
+            onLocalStateChanged()
+        }
+        manager.sendWakeSignal(channel)
+    }
+
     /**
      * Repaints any on-screen placeholders whose blobs just landed (called by
      * the sync pipeline after a blob import). A no-op for ids that belong to
@@ -459,8 +576,16 @@ internal class ChannelImages(private val manager: ChannelManager) {
         // enforces the same ceiling at assembly time). A hostile peer must not
         // be able to make us buffer an arbitrary number of bytes.
         val finalMime = data.optString("finalMime", "image/jpeg")
+        val isAudio = data.optString("type") == "audio"
+        // A recorded WebM carries no duration, so an audio manifest must.
+        val durationMs = data.optLong("durationMs", 0L)
+        if (isAudio && (!finalMime.startsWith("audio/") || durationMs <= 0)) return
         val declaredSize = data.optInt("finalSizeBytes")
-        val sizeLimit = if (finalMime == "image/gif") GIF_MAX_ASSEMBLED_BYTES else IMAGE_MAX_ASSEMBLED_BYTES
+        val sizeLimit = when {
+            isAudio -> AUDIO_MAX_ASSEMBLED_BYTES
+            finalMime == "image/gif" -> GIF_MAX_ASSEMBLED_BYTES
+            else -> IMAGE_MAX_ASSEMBLED_BYTES
+        }
         if (declaredSize <= 0 || declaredSize > sizeLimit) return
         if (chunkCount > MAX_CHUNKS) return
 
@@ -469,10 +594,11 @@ internal class ChannelImages(private val manager: ChannelManager) {
         // Placeholder bubble (image loading) keyed by the message id.
         if (showBubble && _messages.value.none { it.id == messageId }) {
             mergeMessages(listOf(UiMessage(
-                id = messageId, text = "", sender = sender,
+                id = messageId, text = if (isAudio) data.optString("text") else "", sender = sender,
                 senderName = data.optStringOrNull("senderName"),
                 timestamp = data.messageTime(), mine = mine,
-                isImage = true, imageId = imageId, imageMime = data.optString("finalMime", "image/jpeg"),
+                isImage = !isAudio, imageId = imageId, imageMime = finalMime,
+                isAudio = isAudio, audioDurationMs = if (isAudio) durationMs else 0L,
                 // Same ENS treatment as handleText: seed from the cache and
                 // resolve below. Without both, a sender whose only message on
                 // screen is an image never showed a name or avatar at all —

@@ -915,6 +915,9 @@ private fun MessageBubble(
                             mine = msg.mine,
                             textColor = bubbleTextColor
                         )
+                    } else if (msg.isAudio) {
+                        com.pombo.android.ui.AudioBubbleContent(msg, textColor = bubbleTextColor)
+                        if (metaInline) MessageMeta(msg, onRetry, modifier = Modifier.align(Alignment.End).padding(top = 2.dp))
                     } else if (msg.isImage) {
                         Box {
                             ImageBubbleContent(msg, onOpen = { lightbox = true })
@@ -1062,7 +1065,7 @@ private fun MessageBubble(
                         // isSelf && !isAdminUser, MessageContextMenuUI.js:231).
                         // Web: showEdit = isSelf && dataset.type === 'text' — files
                         // and images are excluded too, not just images.
-                        val showEdit = msg.mine && !msg.isImage && msg.file == null && msg.storageFile == null
+                        val showEdit = msg.mine && !msg.isImage && !msg.isAudio && msg.file == null && msg.storageFile == null
                         val showOwnerDelete = msg.mine && !canModerate && !moderatesGate
                         if (showEdit || showOwnerDelete) {
                             com.pombo.android.ui.ContextMenuDivider()

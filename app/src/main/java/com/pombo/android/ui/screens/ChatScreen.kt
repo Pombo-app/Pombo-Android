@@ -50,6 +50,9 @@ import androidx.compose.material.icons.automirrored.filled.Send
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.AttachFile
 import androidx.compose.material.icons.outlined.SentimentSatisfied
+import androidx.compose.material.icons.outlined.Mic
+import androidx.compose.foundation.gestures.awaitEachGesture
+import androidx.compose.foundation.gestures.awaitFirstDown
 import androidx.compose.material.icons.filled.Gavel
 import androidx.compose.material.icons.filled.Lock
 import androidx.compose.material.icons.filled.Tag
@@ -1249,6 +1252,10 @@ fun ChatScreen(vm: AppViewModel) {
                 onPickVideo = { vm.sendVideo(it) },
                 onPickFile = { vm.sendFile(it) },
                 onPickStorageFile = { vm.sendStorageFile(it) },
+                recordingMs = vm.recordingMs.collectAsState().value,
+                onStartRecording = { vm.startVoiceRecording() },
+                onFinishRecording = { send -> vm.finishVoiceRecording(send) },
+                onMicDenied = { vm.toast("Microphone access denied", com.pombo.android.ui.ToastKind.ERROR) },
                 onSend = { text ->
                     val et = editTarget
                     if (et != null) {
@@ -1364,7 +1371,12 @@ private fun ChatComposer(
     onPickVideo: (android.net.Uri) -> Unit,
     onPickFile: (android.net.Uri) -> Unit,
     onPickStorageFile: (android.net.Uri) -> Unit,
-    onSend: (String) -> Unit
+    onSend: (String) -> Unit,
+    /** Elapsed recording time, null when not recording. */
+    recordingMs: Long? = null,
+    onStartRecording: () -> Boolean = { false },
+    onFinishRecording: (send: Boolean) -> Unit = {},
+    onMicDenied: () -> Unit = {}
 ) {
     // State-based field, NOT the legacy value/onValueChange one: only the
     // TextFieldState pipeline advertises accepted MIME types to the IME via
@@ -1528,7 +1540,9 @@ private fun ChatComposer(
         }
         val fieldInteraction = remember { MutableInteractionSource() }
         val fieldFocused by fieldInteraction.collectIsFocusedAsState()
-        androidx.compose.foundation.text.BasicTextField(
+        var slideDx by remember { mutableStateOf(0f) }
+        if (recordingMs != null) VoiceRecordingBar(recordingMs, slideDx, Modifier.weight(1f))
+        else androidx.compose.foundation.text.BasicTextField(
             state = input,
             enabled = canPost,
             interactionSource = fieldInteraction,
@@ -1588,7 +1602,50 @@ private fun ChatComposer(
         // A Box, NOT an IconButton: Material3 clips IconButton's content to a
         // circle, which sliced the plane's nose and tail corners off once the
         // glyph grew to fill the box.
-        Box(
+        val context = androidx.compose.ui.platform.LocalContext.current
+        val startRecording by androidx.compose.runtime.rememberUpdatedState(onStartRecording)
+        val finishRecording by androidx.compose.runtime.rememberUpdatedState(onFinishRecording)
+        val micPermission = androidx.activity.compose.rememberLauncherForActivityResult(
+            androidx.activity.result.contract.ActivityResultContracts.RequestPermission()
+        ) { granted -> if (!granted) onMicDenied() }
+        if (canPost && (recordingMs != null || input.text.isEmpty())) Box(
+            Modifier
+                .size(40.dp)
+                .background(if (recordingMs != null) PomboColors.Overlay8 else Color.Transparent, CircleShape)
+                .pointerInput(Unit) {
+                    val cancelPx = SLIDE_TO_CANCEL.toPx()
+                    awaitEachGesture {
+                        val down = awaitFirstDown()
+                        down.consume()
+                        val granted = androidx.core.content.ContextCompat.checkSelfPermission(
+                            context, android.Manifest.permission.RECORD_AUDIO
+                        ) == android.content.pm.PackageManager.PERMISSION_GRANTED
+                        if (!granted) {
+                            micPermission.launch(android.Manifest.permission.RECORD_AUDIO)
+                            return@awaitEachGesture
+                        }
+                        if (!startRecording()) return@awaitEachGesture
+                        var send = true
+                        while (true) {
+                            val change = awaitPointerEvent().changes.firstOrNull { it.id == down.id } ?: break
+                            if (!change.pressed) break
+                            change.consume()
+                            slideDx = (down.position.x - change.position.x).coerceAtLeast(0f)
+                            if (slideDx >= cancelPx) { send = false; break }
+                        }
+                        slideDx = 0f
+                        finishRecording(send)
+                    }
+                },
+            contentAlignment = Alignment.Center
+        ) {
+            Icon(
+                Icons.Outlined.Mic,
+                contentDescription = "Hold to record a voice message",
+                tint = if (recordingMs != null) PomboColors.Danger else PomboColors.Accent,
+                modifier = Modifier.size(26.dp)
+            )
+        } else Box(
             Modifier
                 .size(40.dp)
                 // Stays clickable while the channel is writable and simply no-ops
@@ -1612,6 +1669,32 @@ private fun ChatComposer(
             )
         }
     }
+    }
+}
+
+private val SLIDE_TO_CANCEL = 100.dp
+
+@Composable
+private fun VoiceRecordingBar(elapsedMs: Long, slideDx: Float, modifier: Modifier = Modifier) {
+    Row(
+        modifier
+            .background(PomboColors.Overlay5, RoundedCornerShape(16.dp))
+            .padding(horizontal = 16.dp, vertical = 12.dp),
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        Box(Modifier.size(10.dp).background(PomboColors.Danger, CircleShape))
+        Spacer(Modifier.width(8.dp))
+        Text(com.pombo.android.ui.formatAudioTime(elapsedMs), color = PomboColors.TextPrimary, fontSize = 14.sp)
+        Text(
+            " / ${com.pombo.android.ui.formatAudioTime(ChannelManager.AUDIO_MAX_DURATION_MS)}",
+            color = PomboColors.Overlay40, fontSize = 14.sp
+        )
+        Spacer(Modifier.weight(1f))
+        Text(
+            "‹ Slide to cancel",
+            color = PomboColors.Overlay40, fontSize = 13.sp,
+            modifier = Modifier.offset { androidx.compose.ui.unit.IntOffset(-slideDx.toInt().coerceAtMost(SLIDE_TO_CANCEL.roundToPx()), 0) }
+        )
     }
 }
 
