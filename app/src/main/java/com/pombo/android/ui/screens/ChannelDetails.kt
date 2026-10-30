@@ -456,18 +456,6 @@ private fun ChannelDetailsMain(
         Box(Modifier.fillMaxWidth().height(1.dp).background(PomboColors.Overlay5))
         Spacer(Modifier.height(20.dp))
     }
-    if (isGated) {
-        ChannelNavRow("Members", leadingIcon = Icons.Outlined.People) { onOpenSub(ChannelSubPanel.MEMBERS) }
-        Spacer(Modifier.height(8.dp))
-    }
-    if (canModerate) {
-        ChannelNavRow("Moderation", leadingIcon = Icons.Outlined.VerifiedUser) { onOpenSub(ChannelSubPanel.MODERATION) }
-        Spacer(Modifier.height(8.dp))
-    }
-    if (channel.type != "dm") {
-        ChannelNavRow("Storage", leadingIcon = com.pombo.android.ui.PomboIcons.Database) { onOpenSub(ChannelSubPanel.STORAGE) }
-        Spacer(Modifier.height(8.dp))
-    }
     if (isGated && canModerate) {
         // Key responder: THIS device keeps answering key requests for the
         // channel — foreground sweep plus the background worker.
@@ -491,12 +479,20 @@ private fun ChannelDetailsMain(
                 fontSize = 14.sp, modifier = Modifier.weight(1f)
             )
             Spacer(Modifier.width(12.dp))
-            Text(
-                if (responderOn) "ON" else "OFF",
-                color = if (responderOn) Color(0xFF34D399) else PomboColors.Overlay30,
-                fontSize = 12.sp, fontWeight = FontWeight.Medium
-            )
+            com.pombo.android.ui.PomboSwitch(checked = responderOn, onCheckedChange = { vm.setKeyResponder(channel, it) })
         }
+        Spacer(Modifier.height(8.dp))
+    }
+    if (isGated) {
+        ChannelNavRow("Members", leadingIcon = Icons.Outlined.People) { onOpenSub(ChannelSubPanel.MEMBERS) }
+        Spacer(Modifier.height(8.dp))
+    }
+    if (canModerate) {
+        ChannelNavRow("Moderation", leadingIcon = Icons.Outlined.VerifiedUser) { onOpenSub(ChannelSubPanel.MODERATION) }
+        Spacer(Modifier.height(8.dp))
+    }
+    if (channel.type != "dm") {
+        ChannelNavRow("Storage", leadingIcon = com.pombo.android.ui.PomboIcons.Database) { onOpenSub(ChannelSubPanel.STORAGE) }
         Spacer(Modifier.height(8.dp))
     }
     if (canModerate) {
