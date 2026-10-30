@@ -1699,6 +1699,12 @@ private fun PrivacyPanel(vm: AppViewModel) {
                     ) { Text("Unblock", color = PomboColors.Overlay70, fontSize = 13.sp) }
                 }
             }
+            val erasing by vm.erasingBlocked.collectAsState()
+            Spacer(Modifier.height(20.dp))
+            HoldToConfirmButton(
+                if (erasing) "Erasing..." else "Erase all data from blocked users",
+                soft = true, enabled = !erasing
+            ) { vm.eraseBlockedData() }
         }
         Spacer(Modifier.height(24.dp))
     }
@@ -1741,10 +1747,11 @@ private fun DangerButton(label: String, enabled: Boolean = true, onClick: () -> 
 
 /**
  * Hold-to-confirm for irreversible actions. A tap does nothing: the 2-second
- * hold is the confirmation, so none of them can happen by accident.
+ * hold is the confirmation, so none of them can happen by accident. [soft] is
+ * the tinted red of an action that stays on screen (web Blocked Users erase).
  */
 @Composable
-internal fun HoldToConfirmButton(label: String, onConfirm: () -> Unit) {
+internal fun HoldToConfirmButton(label: String, soft: Boolean = false, enabled: Boolean = true, onConfirm: () -> Unit) {
     var holding by remember { mutableStateOf(false) }
     val progress by androidx.compose.animation.core.animateFloatAsState(
         targetValue = if (holding) 1f else 0f,
@@ -1761,9 +1768,12 @@ internal fun HoldToConfirmButton(label: String, onConfirm: () -> Unit) {
     }
     Box(
         Modifier.fillMaxWidth()
+            .alpha(if (enabled) 1f else 0.7f)
             .clip(RoundedCornerShape(12.dp))
-            .background(Color(0xFFDC2626).copy(alpha = 0.90f))
-            .pointerInput(Unit) {
+            .background(if (soft) PomboColors.Danger.copy(alpha = 0.10f) else Color(0xFFDC2626).copy(alpha = 0.90f))
+            .then(if (soft) Modifier.border(1.dp, PomboColors.Danger.copy(alpha = 0.20f), RoundedCornerShape(12.dp)) else Modifier)
+            .pointerInput(enabled) {
+                if (!enabled) return@pointerInput
                 detectTapGestures(
                     onPress = {
                         holding = true
@@ -1780,10 +1790,10 @@ internal fun HoldToConfirmButton(label: String, onConfirm: () -> Unit) {
             Modifier
                 .fillMaxWidth(progress)
                 .height(40.dp)
-                .background(PomboColors.Danger.copy(alpha = 0.40f))
+                .background(PomboColors.Danger.copy(alpha = if (soft) 0.30f else 0.40f))
         )
         Box(Modifier.fillMaxWidth().height(40.dp), contentAlignment = Alignment.Center) {
-            Text(if (holding) "Hold (2s)" else label, color = Color.White, fontSize = 14.sp, fontWeight = FontWeight.Medium)
+            Text(if (holding) "Hold (2s)" else label, color = if (soft) PomboColors.Danger else Color.White, fontSize = 14.sp, fontWeight = FontWeight.Medium)
         }
     }
 }

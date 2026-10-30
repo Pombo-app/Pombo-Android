@@ -222,6 +222,41 @@ class AppViewModel(app: Application) : AndroidViewModel(app), PomboBridge.Listen
         sync.scheduleAutoPush()
     }
 
+    private val _erasingBlocked = MutableStateFlow(false)
+    val erasingBlocked: StateFlow<Boolean> = _erasingBlocked.asStateFlow()
+
+    /** Erase what blocked users left in the own inbox, saying how much left where (web Blocked Users erase). */
+    fun eraseBlockedData() {
+        if (_erasingBlocked.value) return
+        _erasingBlocked.value = true
+        viewModelScope.launch {
+            var loading = toast(
+                "Erasing from storage…", com.pombo.android.ui.ToastKind.LOADING, Long.MAX_VALUE,
+                subtitle = "Locating their messages and files"
+            )
+            try {
+                val result = manager.eraseBlockedData(settingsStore.blockedPeers) { messages, files ->
+                    dismissToast(loading)
+                    loading = toast(
+                        "Erasing from storage…", com.pombo.android.ui.ToastKind.LOADING, Long.MAX_VALUE,
+                        subtitle = com.pombo.android.core.BlockedErase.erasing(messages, files)
+                    )
+                }
+                val (text, tone) = com.pombo.android.core.BlockedErase.describe(result)
+                toast(text, when (tone) {
+                    com.pombo.android.core.BlockedErase.Tone.SUCCESS -> com.pombo.android.ui.ToastKind.SUCCESS
+                    com.pombo.android.core.BlockedErase.Tone.WARNING -> com.pombo.android.ui.ToastKind.WARNING
+                    com.pombo.android.core.BlockedErase.Tone.INFO -> com.pombo.android.ui.ToastKind.INFO
+                }, 6000L)
+            } catch (e: Exception) {
+                toast("Erase failed: ${e.message}", com.pombo.android.ui.ToastKind.ERROR, 6000L)
+            } finally {
+                dismissToast(loading)
+                _erasingBlocked.value = false
+            }
+        }
+    }
+
     /**
      * Erase this account: keystore entry, channels, contacts and caches.
      *

@@ -6583,6 +6583,79 @@ class ChannelManager(
         return outcome
     }
 
+    /**
+     * Erase what blocked accounts left in the own inbox, as its owner: their
+     * messages and invites, and the chunks of the files they sent, on every
+     * provider that purges. The inbox is read back from storage, so rows this
+     * device never loaded are reached too; chunks are recognised by opening
+     * with each blocked pair's key, so a file whose announce never went out is
+     * found as well. Blocking already left their conversations; their
+     * previews and cached bubbles go here.
+     */
+    suspend fun eraseBlockedData(
+        blocked: Set<String>,
+        onErasing: (messages: Int, files: Int) -> Unit = { _, _ -> }
+    ): com.pombo.android.core.BlockedErase.Result? {
+        if (blocked.isEmpty()) return null
+        val key = myPrivateKey() ?: throw IllegalStateException("No identity")
+        val me = myAddress()?.lowercase() ?: throw IllegalStateException("No identity")
+        val inbox = "$me/Pombo-DM-1"
+
+        val rows = ArrayList<com.pombo.android.core.BlockedErase.Row>()
+        for (partition in listOf(StreamConstants.P_NOTIFICATIONS, StreamConstants.P_MESSAGES)) {
+            val startedAt = System.currentTimeMillis()
+            val res = bridge.call("resendRange", JSONObject()
+                .put("streamId", inbox).put("partition", partition)
+                .put("before", startedAt).put("last", 1_000_000).put("budgetMs", 240_000), 300_000)
+            // A refused read drains as empty; it must not pass for an inbox with nothing to erase.
+            res.optJSONObject("readError")?.takeIf { it.optLong("at") >= startedAt }?.let {
+                throw IllegalStateException("Could not read your inbox: HTTP ${it.optInt("status")}")
+            }
+            if (res.optBoolean("partial")) throw IllegalStateException("Could not read your whole inbox in time")
+            val arr = res.optJSONArray("messages") ?: JSONArray()
+            val items = JSONArray()
+            for (i in 0 until arr.length()) {
+                val content = arr.optJSONObject(i)?.opt("content")
+                items.put(if (content is JSONObject && content.optInt("v") == 2 && content.has("epk")) content else JSONObject.NULL)
+            }
+            val opened = openSealedBatch(items) ?: throw IllegalStateException("No identity")
+            for (i in 0 until arr.length()) {
+                val meta = arr.optJSONObject(i)?.optJSONObject("meta") ?: continue
+                val o = opened.takeIf { !it.isNull(i) }?.optJSONObject(i) ?: continue
+                rows += com.pombo.android.core.BlockedErase.Row(
+                    partition, o.optString("sender").lowercase(),
+                    meta.optLong("timestamp"), meta.optInt("sequenceNumber", 0)
+                )
+            }
+        }
+        val theirs = com.pombo.android.core.BlockedErase.theirs(rows, blocked)
+
+        for (peer in blocked) {
+            previewStore.remove("${peer.lowercase()}/Pombo-DM-1")
+            synchronized(dmReceived) { dmReceived.remove(peer.lowercase()) }
+        }
+        val openers = blocked.mapNotNull { peer ->
+            val pairKey = dmPairKeyFor(peer.lowercase())
+            if (pairKey == null) Log.w(TAG, "No pair key for $peer, their files cannot be recognised")
+            pairKey?.let { k ->
+                { c: ByteArray, _: Long -> com.pombo.android.core.SealedSenderCrypto.pairOpen(c, k) ?: throw IllegalStateException("not this pair") }
+            }
+        }
+        val sweep = if (openers.isEmpty()) com.pombo.android.core.StoragePurge.Sweep(emptyList(), 0, 0)
+        else com.pombo.android.core.StoragePurge.chunkGroupsByOpener(
+            storageEndpoints, inbox,
+            (0 until StreamConstants.STORAGE_CHUNK_PARTITIONS).map { StreamConstants.STORAGE_DM_FIRST_CHUNK_PARTITION + it },
+            openers
+        )
+        if (theirs.isEmpty() && sweep.files == 0) return com.pombo.android.core.BlockedErase.Result(null, 0, 0, sweep.unchecked)
+
+        onErasing(theirs.size, sweep.files)
+        // Chunks before the announces that point at them.
+        val groups = sweep.groups + com.pombo.android.core.BlockedErase.groups(theirs)
+        val outcome = com.pombo.android.core.StoragePurge.purgeGroups(storageEndpoints, inbox, groups, key)
+        return com.pombo.android.core.BlockedErase.Result(outcome, theirs.size, sweep.files, sweep.unchecked)
+    }
+
     /** Whether deleting this own message also erases it from storage. */
     fun ownPurgeApplies(messageId: String): Boolean {
         val channel = _current.value ?: return false
