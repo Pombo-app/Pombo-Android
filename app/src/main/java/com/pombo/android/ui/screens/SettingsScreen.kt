@@ -111,14 +111,14 @@ private fun SettingsHeader(title: String, onBack: (() -> Unit)? = null) {
  * without hard-coding positions.
  */
 internal enum class SettingsPanel(val label: String, val icon: ImageVector, val section: Int) {
-    ACCOUNT("Account", Icons.Outlined.Person, 0),
+    ACCOUNT("Profile", Icons.Outlined.Person, 0),
+    SECURITY("Account", Icons.Outlined.Key, 0),
     DEVICE_SYNC("Device Sync", Icons.Outlined.Sync, 0),
-    NOTIFICATIONS("Notifications", Icons.Outlined.Notifications, 0),
-    NETWORKS("Networks", Icons.Outlined.Link, 0),
-    CONTENT("Content", Icons.Outlined.SmartDisplay, 0),
+    NOTIFICATIONS("Notifications", Icons.Outlined.Notifications, 1),
+    DM_INBOX("DM Inbox", Icons.Outlined.MailOutline, 1),
     PRIVACY("Blocked Users", Icons.Outlined.Block, 1),
-    SECURITY("Security", Icons.Outlined.Key, 1),
-    DM_INBOX("DM Inbox", Icons.Outlined.MailOutline, 1)
+    CONTENT("Content", Icons.Outlined.SmartDisplay, 2),
+    NETWORKS("Networks", Icons.Outlined.Link, 2)
     // ABOUT lives on the Profile screen.
 }
 
@@ -297,7 +297,6 @@ private fun AccountPanel(vm: AppViewModel) {
     val username by vm.username.collectAsState()
     val address by vm.address.collectAsState()
     val ensAvatars by vm.ensAvatars.collectAsState()
-    val isGuest by vm.isGuest.collectAsState()
     val clipboard = androidx.compose.ui.platform.LocalClipboardManager.current
 
     // A primary ENS name takes over the display name entirely (web
@@ -311,53 +310,6 @@ private fun AccountPanel(vm: AppViewModel) {
     LaunchedEffect(address) { vm.refreshDmInbox() }
     val ensName = address?.let { ensNames[it.lowercase()] }
     var editing by remember(username, ensName) { mutableStateOf(ensName ?: username ?: "") }
-
-    // Export: ask for a password, then pick where to save. The password (and
-    // the media choice) ride in state between the two steps because SAF
-    // answers via callback.
-    var askExportPassword by remember { mutableStateOf(false) }
-    var exportPassword by remember { mutableStateOf<String?>(null) }
-    var exportIncludeMedia by remember { mutableStateOf(true) }
-    var importUri by remember { mutableStateOf<android.net.Uri?>(null) }
-
-    val exportLauncher = androidx.activity.compose.rememberLauncherForActivityResult(
-        androidx.activity.result.contract.ActivityResultContracts.CreateDocument("application/json")
-    ) { uri ->
-        val pwd = exportPassword
-        exportPassword = null
-        if (uri != null && pwd != null) vm.exportBackupTo(uri, pwd, exportIncludeMedia)
-    }
-    val importLauncher = androidx.activity.compose.rememberLauncherForActivityResult(
-        androidx.activity.result.contract.ActivityResultContracts.OpenDocument()
-    ) { uri -> if (uri != null) importUri = uri }
-
-    if (askExportPassword) BackupPasswordDialog(
-        title = "Export Account Backup",
-        hint = "Choose a password to protect the backup (min 8 characters). You will need it to restore, on Android or on the web.",
-        confirmLabel = "Export",
-        minLength = 8,
-        toggleLabel = "Include sent DM media",
-        confirmPassword = true,
-        onDismiss = { askExportPassword = false }
-    ) { pwd, includeMedia ->
-        askExportPassword = false
-        exportPassword = pwd
-        exportIncludeMedia = includeMedia
-        val stamp = java.text.SimpleDateFormat("yyyy-MM-dd", java.util.Locale.US)
-            .format(java.util.Date())
-        exportLauncher.launch("pombo-account-backup-$stamp.json")
-    }
-    importUri?.let { uri ->
-        BackupPasswordDialog(
-            title = "Restore Account Backup",
-            hint = "Enter the password this backup was created with.",
-            confirmLabel = "Restore",
-            onDismiss = { importUri = null }
-        ) { pwd, _ ->
-            importUri = null
-            vm.importBackupFrom(uri, pwd)
-        }
-    }
 
     SettingsSection {
         // Web: name field capped at 180px with the 56px avatar beside it.
@@ -458,35 +410,86 @@ private fun AccountPanel(vm: AppViewModel) {
             }
         }
 
-        Spacer(Modifier.height(20.dp))
-        Box(Modifier.fillMaxWidth().height(1.dp).background(PomboColors.Overlay5))
-        Spacer(Modifier.height(20.dp))
+    }
+}
 
-        Row(verticalAlignment = Alignment.CenterVertically) {
-            Icon(
-                com.pombo.android.ui.PomboIcons.Database, contentDescription = null,
-                tint = PomboColors.Overlay80, modifier = Modifier.size(16.dp)
-            )
-            Spacer(Modifier.width(8.dp))
-            Text("Backup & Restore", color = PomboColors.Overlay80, fontSize = 14.sp, fontWeight = FontWeight.Medium)
+/** Export and restore an encrypted backup of the account (web Backup & Restore). */
+@Composable
+private fun BackupSection(vm: AppViewModel) {
+    val isGuest by vm.isGuest.collectAsState()
+    // Export: ask for a password, then pick where to save. The password (and
+    // the media choice) ride in state between the two steps because SAF
+    // answers via callback.
+    var askExportPassword by remember { mutableStateOf(false) }
+    var exportPassword by remember { mutableStateOf<String?>(null) }
+    var exportIncludeMedia by remember { mutableStateOf(true) }
+    var importUri by remember { mutableStateOf<android.net.Uri?>(null) }
+
+    val exportLauncher = androidx.activity.compose.rememberLauncherForActivityResult(
+        androidx.activity.result.contract.ActivityResultContracts.CreateDocument("application/json")
+    ) { uri ->
+        val pwd = exportPassword
+        exportPassword = null
+        if (uri != null && pwd != null) vm.exportBackupTo(uri, pwd, exportIncludeMedia)
+    }
+    val importLauncher = androidx.activity.compose.rememberLauncherForActivityResult(
+        androidx.activity.result.contract.ActivityResultContracts.OpenDocument()
+    ) { uri -> if (uri != null) importUri = uri }
+
+    if (askExportPassword) BackupPasswordDialog(
+        title = "Export Account Backup",
+        hint = "Choose a password to protect the backup (min 8 characters). You will need it to restore, on Android or on the web.",
+        confirmLabel = "Export",
+        minLength = 8,
+        toggleLabel = "Include sent DM media",
+        confirmPassword = true,
+        onDismiss = { askExportPassword = false }
+    ) { pwd, includeMedia ->
+        askExportPassword = false
+        exportPassword = pwd
+        exportIncludeMedia = includeMedia
+        val stamp = java.text.SimpleDateFormat("yyyy-MM-dd", java.util.Locale.US)
+            .format(java.util.Date())
+        exportLauncher.launch("pombo-account-backup-$stamp.json")
+    }
+    importUri?.let { uri ->
+        BackupPasswordDialog(
+            title = "Restore Account Backup",
+            hint = "Enter the password this backup was created with.",
+            confirmLabel = "Restore",
+            onDismiss = { importUri = null }
+        ) { pwd, _ ->
+            importUri = null
+            vm.importBackupFrom(uri, pwd)
         }
-        Spacer(Modifier.height(4.dp))
-        Text("Export data to restore on another device", color = PomboColors.Overlay40, fontSize = 12.sp)
-        Spacer(Modifier.height(14.dp))
-        Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-            BackupButton(
-                label = "Export", icon = Icons.Outlined.FileUpload,
-                emphasized = true, enabled = !isGuest, modifier = Modifier.weight(1f)
-            ) { askExportPassword = true }
-            BackupButton(
-                label = "Import", icon = Icons.Outlined.FileDownload,
-                emphasized = false, enabled = true, modifier = Modifier.weight(1f)
-            ) { importLauncher.launch(arrayOf("application/json")) }
-        }
-        // Channel passwords are included: Channel.toJson() carries `password`,
-        // and the backup payload is exportSyncState(), which builds `channels`
-        // from it — the whole file is scrypt/AES-GCM sealed with the export
-        // password anyway.
+    }
+
+    Column {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Icon(
+                    com.pombo.android.ui.PomboIcons.Database, contentDescription = null,
+                    tint = PomboColors.Overlay80, modifier = Modifier.size(16.dp)
+                )
+                Spacer(Modifier.width(8.dp))
+                Text("Backup & Restore", color = PomboColors.Overlay80, fontSize = 14.sp, fontWeight = FontWeight.Medium)
+            }
+            Spacer(Modifier.height(4.dp))
+            Text("Export data to restore on another device", color = PomboColors.Overlay40, fontSize = 12.sp)
+            Spacer(Modifier.height(14.dp))
+            Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                BackupButton(
+                    label = "Export", icon = Icons.Outlined.FileUpload,
+                    emphasized = true, enabled = !isGuest, modifier = Modifier.weight(1f)
+                ) { askExportPassword = true }
+                BackupButton(
+                    label = "Import", icon = Icons.Outlined.FileDownload,
+                    emphasized = false, enabled = true, modifier = Modifier.weight(1f)
+                ) { importLauncher.launch(arrayOf("application/json")) }
+            }
+            // Channel passwords are included: Channel.toJson() carries `password`,
+            // and the backup payload is exportSyncState(), which builds `channels`
+            // from it — the whole file is scrypt/AES-GCM sealed with the export
+            // password anyway.
     }
 }
 
@@ -1611,6 +1614,12 @@ private fun SecurityPanel(vm: AppViewModel) {
             }
         }
 
+        Spacer(Modifier.height(20.dp))
+        Box(Modifier.fillMaxWidth().height(1.dp).background(PomboColors.Overlay5))
+        Spacer(Modifier.height(20.dp))
+        BackupSection(vm)
+        Spacer(Modifier.height(20.dp))
+        Box(Modifier.fillMaxWidth().height(1.dp).background(PomboColors.Overlay5))
         Spacer(Modifier.height(20.dp))
 
         DangerCard(title = "Delete Account", hint = "Permanently delete this account and all its data") {
