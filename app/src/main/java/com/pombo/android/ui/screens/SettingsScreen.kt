@@ -116,7 +116,7 @@ internal enum class SettingsPanel(val label: String, val icon: ImageVector, val 
     NOTIFICATIONS("Notifications", Icons.Outlined.Notifications, 0),
     NETWORKS("Networks", Icons.Outlined.Link, 0),
     CONTENT("Content", Icons.Outlined.SmartDisplay, 0),
-    PRIVACY("Privacy", Icons.Outlined.Block, 1),
+    PRIVACY("Blocked Users", Icons.Outlined.Block, 1),
     SECURITY("Security", Icons.Outlined.Key, 1),
     DM_INBOX("DM Inbox", Icons.Outlined.MailOutline, 1)
     // ABOUT lives on the Profile screen.
@@ -1664,15 +1664,7 @@ private fun PrivacyPanel(vm: AppViewModel) {
 
     // No scroller of its own — the settings pager scrolls every panel.
     Column(Modifier.fillMaxSize()) {
-        Text(
-            "BLOCKED USERS", color = PomboColors.Overlay70,
-            fontSize = 12.sp, fontWeight = FontWeight.Medium, letterSpacing = 0.8.sp
-        )
-        Spacer(Modifier.height(4.dp))
-        Text(
-            "Messages from these accounts are ignored before they are decrypted.",
-            color = PomboColors.Overlay30, fontSize = 12.sp
-        )
+        Text("Messages are hidden but copies remain in storage until you erase them.", color = PomboColors.Overlay40, fontSize = 12.sp)
         Spacer(Modifier.height(14.dp))
         if (blocked.isEmpty()) {
             Text("No blocked users.", color = PomboColors.Overlay30, fontSize = 14.sp)
