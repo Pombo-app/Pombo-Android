@@ -51,7 +51,6 @@ import androidx.compose.material.icons.automirrored.filled.Send
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.AttachFile
 import androidx.compose.material.icons.outlined.SentimentSatisfied
-import androidx.compose.material.icons.outlined.Mic
 import androidx.compose.material.icons.outlined.Delete
 import androidx.compose.material.icons.filled.KeyboardArrowUp
 import com.pombo.android.ui.drawVoiceWave
@@ -1687,10 +1686,10 @@ private fun ChatComposer(
                 )
             } else {
                 Icon(
-                    Icons.Outlined.Mic,
+                    com.pombo.android.ui.PomboIcons.Mic,
                     contentDescription = "Hold to record a voice message",
                     tint = if (recordingMs != null) PomboColors.Danger else PomboColors.Accent,
-                    modifier = Modifier.size(26.dp)
+                    modifier = Modifier.size(28.dp)
                 )
             }
         } else Box(
