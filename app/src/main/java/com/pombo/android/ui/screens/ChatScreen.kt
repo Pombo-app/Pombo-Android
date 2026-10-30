@@ -526,7 +526,7 @@ fun ChatScreen(vm: AppViewModel) {
                     inviteLink = link,
                     onCopy = {
                         inviteClipboard.setText(androidx.compose.ui.text.AnnotatedString(it))
-                        vm.toast("Link copied to clipboard!", com.pombo.android.ui.ToastKind.SUCCESS)
+                        vm.toast("Link copied to clipboard", com.pombo.android.ui.ToastKind.SUCCESS)
                     },
                     onSend = { addr -> vm.sendChannelInvite(addr, ch) { inviteOpen = false } },
                     onDismiss = { inviteOpen = false },

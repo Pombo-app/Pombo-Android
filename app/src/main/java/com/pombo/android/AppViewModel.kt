@@ -326,7 +326,7 @@ class AppViewModel(app: Application) : AndroidViewModel(app), PomboBridge.Listen
         val save: suspend () -> Unit = {
             runWithToast(
                 if (onChain) "Saving on-chain…" else "Saving…",
-                "Channel updated",
+                "Channel info updated",
                 "Failed to update channel"
             ) { manager.updateChannelMetadata(name, description) }
         }
@@ -372,7 +372,7 @@ class AppViewModel(app: Application) : AndroidViewModel(app), PomboBridge.Listen
             toast("Enable Push Notifications first", com.pombo.android.ui.ToastKind.WARNING)
             return@launch
         }
-        val ok = runWithToast("Enabling notifications…", "Push notifications enabled!", "Could not enable push notifications") {
+        val ok = runWithToast("Enabling notifications…", "Push notifications enabled", "Could not enable push notifications") {
             push.enable()
         }
         if (ok) resubscribeDmInboxIfWanted()
@@ -577,7 +577,7 @@ class AppViewModel(app: Application) : AndroidViewModel(app), PomboBridge.Listen
             return@launch
         }
         val inbox = myInboxStreamId() ?: return@launch
-        val ok = runWithToast("Registering…", "DM notifications enabled!", "Failed to enable DM notifications") {
+        val ok = runWithToast("Registering…", "DM notifications enabled", "Failed to enable DM notifications") {
             push.subscribeDmInbox(inbox)
             settingsStore.dmPushEnabled = true
         }
@@ -842,7 +842,7 @@ class AppViewModel(app: Application) : AndroidViewModel(app), PomboBridge.Listen
             }
             // Only dismiss the form when the invite actually went out — closing
             // on failure would hide the reason it failed.
-            val ok = runWithToast("Sending invite…", "Invite sent successfully!", "Failed to send invite") {
+            val ok = runWithToast("Sending invite…", "Invite sent", "Failed to send invite") {
                 manager.sendChannelInvite(address, channel)
             }
             if (ok) onDone()
@@ -850,7 +850,7 @@ class AppViewModel(app: Application) : AndroidViewModel(app), PomboBridge.Listen
 
     /** Accepts an invite that arrived over DM (web: joinChannelFromInvite). */
     fun acceptInvite(invite: ChannelManager.PendingInvite) = viewModelScope.launch {
-        runJoinToast("Joining channel...", "Joined channel successfully!", "Failed to join channel") {
+        runJoinToast("Joining channel…", "Joined channel", "Failed to join channel") {
             // The sender's name for the channel prefills the local identity
             // panel; it does not count as the user naming it.
             val channel = manager.joinChannel(invite.streamId, invite.password, localName = invite.name)
@@ -928,7 +928,7 @@ class AppViewModel(app: Application) : AndroidViewModel(app), PomboBridge.Listen
 
     fun acceptIncomingInvite(invite: InviteToken.Invite) = viewModelScope.launch {
         _incomingInvite.value = null
-        runJoinToast("Joining channel...", "Joined channel successfully!", "Failed to join channel",
+        runJoinToast("Joining channel…", "Joined channel", "Failed to join channel",
             channelName = invite.name) {
             val channel = manager.joinChannel(invite.streamId, invite.password, localName = invite.name)
             manager.openChannel(channel.messageStreamId)
@@ -1153,12 +1153,12 @@ class AppViewModel(app: Application) : AndroidViewModel(app), PomboBridge.Listen
     /** Owner-only: toggles a member's "Can add members" (GRANT) permission. */
     fun setMemberGrant(address: String, canGrant: Boolean, onDone: () -> Unit = {}) = viewModelScope.launch {
         chainAction(
-            if (canGrant) "Grant admin" else "Revoke admin",
+            if (canGrant) "Appoint moderator" else "Dismiss moderator",
             "Updates this member's permissions on the channel's streams."
         ) {
             runWithToast(
-                if (canGrant) "Granting admin…" else "Revoking admin…",
-                if (canGrant) "Member can now add others" else "Admin permission removed",
+                if (canGrant) "Appointing moderator…" else "Dismissing moderator…",
+                if (canGrant) "Member is now a moderator" else "Moderator dismissed",
                 "Failed to update permission"
             ) { manager.setMemberGrant(address, canGrant) }
         }
@@ -1345,7 +1345,7 @@ class AppViewModel(app: Application) : AndroidViewModel(app), PomboBridge.Listen
             "Destroys \"$name\" and its $streamCount streams, for everyone. This cannot be undone."
         ) {
         val id = toast(
-            "Deleting channel...", com.pombo.android.ui.ToastKind.LOADING, Long.MAX_VALUE,
+            "Deleting channel…", com.pombo.android.ui.ToastKind.LOADING, Long.MAX_VALUE,
             subtitle = "$streamCount on-chain transactions"
         )
         try {
@@ -1404,7 +1404,7 @@ class AppViewModel(app: Application) : AndroidViewModel(app), PomboBridge.Listen
         }
         toast(
             "Erased from storage on ${o.erasedOn} of ${o.providers} provider$plural$extra",
-            if (o.erasedOn == o.providers) com.pombo.android.ui.ToastKind.SUCCESS else com.pombo.android.ui.ToastKind.ERROR,
+            if (o.erasedOn == o.providers) com.pombo.android.ui.ToastKind.SUCCESS else com.pombo.android.ui.ToastKind.WARNING,
             5000L
         )
     }
@@ -1445,7 +1445,7 @@ class AppViewModel(app: Application) : AndroidViewModel(app), PomboBridge.Listen
         } else {
             try {
                 manager.banMemberLevels(address, client = true, protocol = false)
-                toast("User banned", com.pombo.android.ui.ToastKind.SUCCESS)
+                toast("Member banned", com.pombo.android.ui.ToastKind.SUCCESS)
             } catch (e: Exception) {
                 toast(e.message ?: "Failed to ban", com.pombo.android.ui.ToastKind.ERROR, 5000L)
                 onDone()
@@ -1473,7 +1473,7 @@ class AppViewModel(app: Application) : AndroidViewModel(app), PomboBridge.Listen
             toast(
                 "Erased ${r.messages} message${if (r.messages == 1) "" else "s"} from storage on " +
                     "${o.erasedOn} of ${o.providers} provider${if (o.providers == 1) "" else "s"}$extra",
-                if (o.erasedOn == o.providers) com.pombo.android.ui.ToastKind.SUCCESS else com.pombo.android.ui.ToastKind.ERROR,
+                if (o.erasedOn == o.providers) com.pombo.android.ui.ToastKind.SUCCESS else com.pombo.android.ui.ToastKind.WARNING,
                 6000L
             )
         } catch (e: Exception) {
@@ -1497,7 +1497,7 @@ class AppViewModel(app: Application) : AndroidViewModel(app), PomboBridge.Listen
         } else {
             try {
                 manager.unbanMemberLevels(address)
-                toast("User unbanned", com.pombo.android.ui.ToastKind.SUCCESS)
+                toast("Member unbanned", com.pombo.android.ui.ToastKind.SUCCESS)
             } catch (e: Exception) {
                 toast(e.message ?: "Failed to unban", com.pombo.android.ui.ToastKind.ERROR, 5000L)
             }
@@ -1581,7 +1581,7 @@ class AppViewModel(app: Application) : AndroidViewModel(app), PomboBridge.Listen
     fun toast(
         message: String,
         kind: com.pombo.android.ui.ToastKind = com.pombo.android.ui.ToastKind.INFO,
-        durationMs: Long = 3000L,
+        durationMs: Long = if (kind == com.pombo.android.ui.ToastKind.ERROR) 5000L else 3000L,
         subtitle: String? = null,
         progress: com.pombo.android.ui.ToastProgress? = null
     ): Long {
@@ -1916,7 +1916,7 @@ class AppViewModel(app: Application) : AndroidViewModel(app), PomboBridge.Listen
         // Discovery results depend on the key — refetch with the new one.
         com.pombo.android.core.GraphApi.clearCache()
         loadExplore()
-        toast("Graph API key updated!", com.pombo.android.ui.ToastKind.SUCCESS)
+        toast("Graph API key updated", com.pombo.android.ui.ToastKind.SUCCESS)
         if (changed) sliceTouched("graphApiKey")
     }
 
@@ -1964,7 +1964,7 @@ class AppViewModel(app: Application) : AndroidViewModel(app), PomboBridge.Listen
         bridge.privateKey = store.privateKey ?: ""
         _status.value = NetStatus.CONNECTING
         bridge.reconnect()
-        toast("Account switched!", com.pombo.android.ui.ToastKind.SUCCESS)
+        toast("Account switched", com.pombo.android.ui.ToastKind.SUCCESS)
     }
 
     private val _contacts = MutableStateFlow(contactsStore.load())
@@ -2228,7 +2228,7 @@ class AppViewModel(app: Application) : AndroidViewModel(app), PomboBridge.Listen
             val res = bridge.call("createWallet")
             adoptWallet(res.getString("privateKey"), res.getString("address"))
             _newMnemonic.value = res.optString("mnemonic", "").ifEmpty { null }
-            toast("Account created!", com.pombo.android.ui.ToastKind.SUCCESS)
+            toast("Account created", com.pombo.android.ui.ToastKind.SUCCESS)
         }
     }
 
@@ -2256,7 +2256,7 @@ class AppViewModel(app: Application) : AndroidViewModel(app), PomboBridge.Listen
             _username.value = it
             sliceTouched("username")
         }
-        toast("Account created!", com.pombo.android.ui.ToastKind.SUCCESS)
+        toast("Account created", com.pombo.android.ui.ToastKind.SUCCESS)
     }
 
     fun importWallet(input: String) = viewModelScope.launch {
@@ -2268,7 +2268,7 @@ class AppViewModel(app: Application) : AndroidViewModel(app), PomboBridge.Listen
                 bridge.call("walletFromPrivateKey", JSONObject().put("privateKey", trimmed))
             }
             adoptWallet(res.getString("privateKey"), res.getString("address"))
-            toast("Account imported!", com.pombo.android.ui.ToastKind.SUCCESS)
+            toast("Account imported", com.pombo.android.ui.ToastKind.SUCCESS)
         }
     }
 
@@ -2784,7 +2784,7 @@ class AppViewModel(app: Application) : AndroidViewModel(app), PomboBridge.Listen
         rpcReconnectJob?.cancel()
         rpcReconnectJob = viewModelScope.launch {
             delay(1200)
-            toast("Reconnecting with new RPC...", com.pombo.android.ui.ToastKind.INFO)
+            toast("Reconnecting with new RPC…", com.pombo.android.ui.ToastKind.INFO)
             _status.value = NetStatus.CONNECTING
             bridge.reconnect()
         }
@@ -2937,7 +2937,7 @@ class AppViewModel(app: Application) : AndroidViewModel(app), PomboBridge.Listen
             "Create channel",
             "Creates \"${spec.name}\" — $streamCount streams, their permissions and storage."
         ) {
-            withCreateProgress(spec.type, "Creating channel...", "Failed to create channel") { onProgress ->
+            withCreateProgress(spec.type, "Creating channel…", "Failed to create channel") { onProgress ->
                 manager.createChannel(
                     name = spec.name,
                     type = spec.type,
@@ -2971,7 +2971,7 @@ class AppViewModel(app: Application) : AndroidViewModel(app), PomboBridge.Listen
     fun finishInterruptedCreate(basePath: String) = viewModelScope.launch {
         val record = manager.interruptedCreates.value.find { it.basePath == basePath } ?: return@launch
         chainAction("Finish channel", "Finishes \"${record.name}\": only the transactions still missing are sent.") {
-            withCreateProgress(record.type, "Finishing channel...", "Could not finish the channel") { onProgress ->
+            withCreateProgress(record.type, "Finishing channel…", "Could not finish the channel") { onProgress ->
                 manager.finishPendingCreate(basePath, onProgress)
             }
         }
@@ -3002,7 +3002,7 @@ class AppViewModel(app: Application) : AndroidViewModel(app), PomboBridge.Listen
         val id = toast(
             title, com.pombo.android.ui.ToastKind.LOADING, Long.MAX_VALUE,
             subtitle = "This may take a minute",
-            progress = com.pombo.android.ui.ToastProgress(0, totalSteps, "Creating Channel...")
+            progress = com.pombo.android.ui.ToastProgress(0, totalSteps, "Creating Channel…")
         )
         var step = 0
         _busy.value = true
@@ -3010,14 +3010,14 @@ class AppViewModel(app: Application) : AndroidViewModel(app), PomboBridge.Listen
             val channel = create {
                 step += 1
                 val label = when {
-                    step <= streamCount -> "Creating Channel..."
-                    step <= streamCount * 2 -> "Setting Permissions..."
-                    else -> "Setting Storage..."
+                    step <= streamCount -> "Creating Channel…"
+                    step <= streamCount * 2 -> "Setting Permissions…"
+                    else -> "Setting Storage…"
                 }
                 setToastProgress(id, step, label)
             }
             dismissToast(id)
-            toast("Channel created successfully!", com.pombo.android.ui.ToastKind.SUCCESS)
+            toast("Channel created", com.pombo.android.ui.ToastKind.SUCCESS)
             manager.openChannel(channel.messageStreamId)
             autoEnableChannelPush(channel)
             // The creator's device answers key requests by default, and the
@@ -3436,9 +3436,9 @@ class AppViewModel(app: Application) : AndroidViewModel(app), PomboBridge.Listen
         ) {
         val totalSteps = 5
         val id = toast(
-            "Creating DM inbox...", com.pombo.android.ui.ToastKind.LOADING, Long.MAX_VALUE,
+            "Creating DM inbox…", com.pombo.android.ui.ToastKind.LOADING, Long.MAX_VALUE,
             subtitle = "This may take a minute",
-            progress = com.pombo.android.ui.ToastProgress(0, totalSteps, "Creating Inbox...")
+            progress = com.pombo.android.ui.ToastProgress(0, totalSteps, "Creating Inbox…")
         )
         var step = 0
         _busy.value = true
@@ -3446,9 +3446,9 @@ class AppViewModel(app: Application) : AndroidViewModel(app), PomboBridge.Listen
             manager.setupDmInbox(storageProvider, customStorageAddress, storageDays) {
                 step += 1
                 val label = when {
-                    step <= 2 -> "Creating Inbox..."
-                    step <= 4 -> "Setting Permissions..."
-                    else -> "Setting Storage..."
+                    step <= 2 -> "Creating Inbox…"
+                    step <= 4 -> "Setting Permissions…"
+                    else -> "Setting Storage…"
                 }
                 setToastProgress(id, step, label)
             }
@@ -3456,7 +3456,7 @@ class AppViewModel(app: Application) : AndroidViewModel(app), PomboBridge.Listen
             _hasDmInbox.value = true
             myInboxStreamId()?.let { push.rememberEndpoints(it) }
             dismissToast(id)
-            toast("DM inbox created!", com.pombo.android.ui.ToastKind.SUCCESS)
+            toast("DM inbox created", com.pombo.android.ui.ToastKind.SUCCESS)
         } catch (e: Exception) {
             dismissToast(id)
             toast("Failed to create DM inbox: ${e.message ?: "unknown error"}", com.pombo.android.ui.ToastKind.ERROR, 5000L)
@@ -3478,7 +3478,7 @@ class AppViewModel(app: Application) : AndroidViewModel(app), PomboBridge.Listen
             return
         }
         channel.peerAddress?.let { manager.renameDmForContact(it, clean) }
-        toast("Name updated", com.pombo.android.ui.ToastKind.SUCCESS)
+        toast("Username updated", com.pombo.android.ui.ToastKind.SUCCESS)
     }
 
     // ==================== DM Inbox panel (web settings-panel-repair) ====================
@@ -3610,7 +3610,7 @@ class AppViewModel(app: Application) : AndroidViewModel(app), PomboBridge.Listen
                 _inboxHealth.value = InboxHealth.Repaired(
                     if (fixed > 0) "$fixed issue${if (fixed > 1) "s" else ""} fixed" else "Nothing to repair"
                 )
-                toast("Inbox repaired successfully", com.pombo.android.ui.ToastKind.SUCCESS)
+                toast("Inbox repaired", com.pombo.android.ui.ToastKind.SUCCESS)
             }
             refreshDmInbox()
         } catch (e: Exception) {

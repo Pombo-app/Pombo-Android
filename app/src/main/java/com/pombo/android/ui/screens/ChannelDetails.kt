@@ -414,7 +414,7 @@ private fun ChannelDetailsMain(
             val copied = dmAddress ?: channel.messageStreamId
             clipboard.setText(androidx.compose.ui.text.AnnotatedString(copied))
             vm.toast(
-                if (dmAddress != null) "Address copied" else "Stream ID copied",
+                if (dmAddress != null) "Address copied" else "Channel ID copied",
                 com.pombo.android.ui.ToastKind.SUCCESS
             )
         }
