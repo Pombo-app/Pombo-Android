@@ -67,6 +67,7 @@ object PomboIcons {
     val Close by lazy { stroked("Close", "M6 18 L18 6 M6 6 l12 12") }
     val Eye by lazy { stroked("Eye", "M15 12 a3 3 0 1 1 -6 0 3 3 0 0 1 6 0 z", "M2.458 12 C3.732 7.943 7.523 5 12 5 c4.478 0 8.268 2.943 9.542 7 -1.274 4.057 -5.064 7 -9.542 7 -4.477 0 -8.268 -2.943 -9.542 -7 z", width = 2f) }
     val StarOutline by lazy { stroked("StarOutline", "M12 3.2 l2.6 5.3 5.8 .8 -4.2 4.1 1 5.8 L12 16.5 l-5.2 2.7 1 -5.8 -4.2 -4.1 5.8 -.8 z", width = 2f) }
+    val Mic by lazy { stroked("Mic", "M12 18.75 a6 6 0 0 0 6 -6 v-1.5 m-6 7.5 a6 6 0 0 1 -6 -6 v-1.5 m6 7.5 v3.75 m-3.75 0 h7.5 M12 15.75 a3 3 0 0 1 -3 -3 V4.5 a3 3 0 1 1 6 0 v8.25 a3 3 0 0 1 -3 3 Z", width = 1.8f) }
     val Info by lazy { stroked("Info", "M11.25 11.25 l.041 -.02 a.75 .75 0 0 1 1.063 .852 l-.708 2.836 a.75 .75 0 0 0 1.063 .853 l.041 -.021 M21 12 a9 9 0 1 1 -18 0 9 9 0 0 1 18 0 z m-9 -3.75 h.008 v.008 H12 V8.25 z", width = 1.2f) }
     val Ban by lazy { stroked("Ban", "M18.364 18.364 A9 9 0 0 0 5.636 5.636 m12.728 12.728 A9 9 0 0 1 5.636 5.636 m12.728 12.728 L5.636 5.636") }
 
