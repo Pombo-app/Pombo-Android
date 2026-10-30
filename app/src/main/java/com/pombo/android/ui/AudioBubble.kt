@@ -110,7 +110,14 @@ private class BandTap : TeeAudioProcessor.AudioBufferSink {
 /** One voice message plays at a time, across every bubble. */
 @androidx.annotation.OptIn(markerClass = [UnstableApi::class])
 object VoicePlayer {
-    data class State(val id: String? = null, val playing: Boolean = false, val positionMs: Long = 0L)
+    /** [durationMs] is the file's own length, 0 until the player knows it. */
+    data class State(
+        val id: String? = null,
+        val playing: Boolean = false,
+        val positionMs: Long = 0L,
+        val durationMs: Long = 0L,
+        val seekable: Boolean = false
+    )
 
     private val _state = MutableStateFlow(State())
     val state: StateFlow<State> = _state.asStateFlow()
@@ -174,10 +181,12 @@ object VoicePlayer {
         }
     }
 
-    fun seek(id: String, fraction: Float, durationMs: Long) {
+    // A WebM without Cues (Chrome's MediaRecorder) is unseekable: seekTo restarts it from 0.
+    fun seek(id: String, fraction: Float) {
         val p = player ?: return
-        if (_state.value.id != id || durationMs <= 0) return
-        p.seekTo((durationMs * fraction.coerceIn(0f, 1f)).toLong())
+        val duration = p.duration
+        if (_state.value.id != id || !p.isCurrentMediaItemSeekable || duration == C.TIME_UNSET || duration <= 0) return
+        p.seekTo((duration * fraction.coerceIn(0f, 1f)).toLong())
         publish()
     }
 
@@ -192,7 +201,12 @@ object VoicePlayer {
 
     private fun publish() {
         val p = player ?: return
-        _state.value = _state.value.copy(playing = p.playWhenReady, positionMs = p.currentPosition)
+        _state.value = _state.value.copy(
+            playing = p.playWhenReady,
+            positionMs = p.currentPosition,
+            durationMs = p.duration.takeIf { it != C.TIME_UNSET && it > 0 } ?: 0L,
+            seekable = p.isCurrentMediaItemSeekable
+        )
     }
 
     private fun writeTemp(context: Context, id: String, bytes: ByteArray, mime: String?): File {
@@ -217,7 +231,9 @@ fun AudioBubbleContent(msg: UiMessage, meta: (@Composable () -> Unit)? = null) {
     val bytes = msg.imageBytes
     val active = state.id == msg.id
     val playing = active && state.playing
-    val duration = msg.audioDurationMs
+    // The manifest's durationMs can differ from the file's; it only stands in until the player knows.
+    val duration = if (active && state.durationMs > 0) state.durationMs else msg.audioDurationMs
+    val seekable = active && state.seekable
     val position = if (active) state.positionMs else 0L
     val fraction = if (duration > 0) (position.toFloat() / duration).coerceIn(0f, 1f) else 0f
     val motion = remember { WaveMotion() }
@@ -266,15 +282,16 @@ fun AudioBubbleContent(msg: UiMessage, meta: (@Composable () -> Unit)? = null) {
                 Modifier
                     .fillMaxWidth()
                     .height(12.dp)
-                    .pointerInput(msg.id, duration) {
+                    .pointerInput(msg.id, seekable) {
+                        if (!seekable) return@pointerInput
                         awaitEachGesture {
                             val down = awaitFirstDown()
-                            VoicePlayer.seek(msg.id, down.position.x / size.width, duration)
+                            VoicePlayer.seek(msg.id, down.position.x / size.width)
                             while (true) {
                                 val change = awaitPointerEvent().changes.firstOrNull { it.id == down.id } ?: break
                                 if (!change.pressed) break
                                 change.consume()
-                                VoicePlayer.seek(msg.id, change.position.x / size.width, duration)
+                                VoicePlayer.seek(msg.id, change.position.x / size.width)
                             }
                         }
                     },
