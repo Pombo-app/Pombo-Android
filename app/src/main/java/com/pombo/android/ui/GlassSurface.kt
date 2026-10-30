@@ -9,6 +9,7 @@ import androidx.compose.foundation.layout.BoxScope
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.SideEffect
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.Shape
 import androidx.compose.ui.platform.LocalView
@@ -36,6 +37,19 @@ fun DialogBackdropBlur(radiusDp: Int = 24) {
         }
     }
 }
+
+/**
+ * The web's frosted `.pinned-banner` / `.pill-nav-inner` without a backdrop
+ * blur: a dark base dense enough that text scrolling behind does not read through, a
+ * white sheen brighter at the top, and the 8% border.
+ */
+fun Modifier.glassPanel(shape: Shape): Modifier = this
+    .background(PomboColors.Surface4.copy(alpha = 0.92f), shape)
+    .background(
+        Brush.verticalGradient(listOf(Color.White.copy(alpha = 0.07f), Color.White.copy(alpha = 0.03f))),
+        shape
+    )
+    .border(1.dp, PomboColors.Overlay8, shape)
 
 /**
  * Glass panel matching the web's `.pill-nav-inner` / `.pinned-banner`:

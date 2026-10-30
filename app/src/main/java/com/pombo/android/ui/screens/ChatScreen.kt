@@ -1,6 +1,7 @@
 package com.pombo.android.ui.screens
 
 import androidx.compose.animation.AnimatedVisibility
+import com.pombo.android.ui.glassPanel
 import androidx.compose.animation.core.LinearEasing
 import androidx.compose.animation.core.RepeatMode
 import androidx.compose.animation.core.animateFloat
@@ -1085,13 +1086,7 @@ fun ChatScreen(vm: AppViewModel) {
                             scrollToMessage(first.targetId)
                             pinCursor = pinIndex + 1
                         }
-                        // The web gets its frost from backdrop-filter: blur(20px).
-                        // Compose has no backdrop blur, so a near-opaque dark base
-                        // carries the same "floating glass" read without letting
-                        // the scrolled text behind show through as noise.
-                        .background(PomboColors.Surface4.copy(alpha = 0.88f), RoundedCornerShape(16.dp))
-                        .background(PomboColors.Overlay6, RoundedCornerShape(16.dp))
-                        .border(1.dp, PomboColors.Overlay8, RoundedCornerShape(16.dp))
+                        .glassPanel(RoundedCornerShape(16.dp))
                         .padding(start = 14.dp, end = 12.dp, top = 8.dp, bottom = 8.dp),
                     verticalAlignment = Alignment.CenterVertically
                 ) {
