@@ -2698,6 +2698,34 @@ internal fun dayLabel(ts: Long): String {
 internal fun formatTime(ts: Long): String =
     if (ts <= 0) "" else SimpleDateFormat("HH:mm", Locale.getDefault()).format(Date(ts))
 
+/**
+ * Compact time for a Home row (web formatPreviewTime): the clock today, then
+ * Yesterday, the weekday within a week, the date within the year, and the
+ * full date before that.
+ */
+internal fun previewTime(ts: Long, now: Long = System.currentTimeMillis()): String {
+    if (ts <= 0) return ""
+    val cal = java.util.Calendar.getInstance()
+    fun dayStart(daysBack: Int): Long {
+        cal.timeInMillis = now
+        cal.set(java.util.Calendar.HOUR_OF_DAY, 0)
+        cal.set(java.util.Calendar.MINUTE, 0)
+        cal.set(java.util.Calendar.SECOND, 0)
+        cal.set(java.util.Calendar.MILLISECOND, 0)
+        cal.add(java.util.Calendar.DAY_OF_YEAR, -daysBack)
+        return cal.timeInMillis
+    }
+    val sameYear = java.util.Calendar.getInstance().apply { timeInMillis = ts }.get(java.util.Calendar.YEAR) ==
+        java.util.Calendar.getInstance().apply { timeInMillis = now }.get(java.util.Calendar.YEAR)
+    return when {
+        ts >= dayStart(0) -> formatTime(ts)
+        ts >= dayStart(1) -> "Yesterday"
+        ts >= dayStart(6) -> SimpleDateFormat("EEE", Locale.US).format(Date(ts))
+        sameYear -> SimpleDateFormat("MMM d", Locale.US).format(Date(ts))
+        else -> SimpleDateFormat("MMM d, yyyy", Locale.US).format(Date(ts))
+    }
+}
+
 /** The frame every form dialog uses; closed by the corner X, never a Cancel. */
 @Composable
 internal fun PomboDialogFrame(
