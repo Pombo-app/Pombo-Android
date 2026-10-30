@@ -28,7 +28,6 @@ import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.rotate
 import androidx.compose.material.icons.automirrored.filled.KeyboardArrowRight
 import androidx.compose.material.icons.outlined.Campaign
-import androidx.compose.material.icons.outlined.Info
 import androidx.compose.material.icons.outlined.Public
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
@@ -573,8 +572,8 @@ private fun ExploreCard(
                 contentAlignment = Alignment.Center
             ) {
                 Icon(
-                    Icons.Outlined.Info, contentDescription = "Channel details",
-                    tint = PomboColors.Overlay40, modifier = Modifier.size(20.dp)
+                    com.pombo.android.ui.PomboIcons.Info, contentDescription = "Channel details",
+                    tint = PomboColors.Overlay30, modifier = Modifier.size(18.dp)
                 )
             }
         }
