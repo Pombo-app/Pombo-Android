@@ -916,8 +916,10 @@ private fun MessageBubble(
                             textColor = bubbleTextColor
                         )
                     } else if (msg.isAudio) {
-                        com.pombo.android.ui.AudioBubbleContent(msg, textColor = bubbleTextColor)
-                        if (metaInline) MessageMeta(msg, onRetry, modifier = Modifier.align(Alignment.End).padding(top = 2.dp))
+                        com.pombo.android.ui.AudioBubbleContent(
+                            msg,
+                            meta = if (metaInline) ({ MessageMeta(msg, onRetry) }) else null
+                        )
                     } else if (msg.isImage) {
                         Box {
                             ImageBubbleContent(msg, onOpen = { lightbox = true })

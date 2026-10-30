@@ -3710,6 +3710,15 @@ class AppViewModel(app: Application) : AndroidViewModel(app), PomboBridge.Listen
     /** Elapsed recording time, or null when not recording. */
     private val _recordingMs = MutableStateFlow<Long?>(null)
     val recordingMs: StateFlow<Long?> = _recordingMs.asStateFlow()
+    /** Slid up: the recording keeps going without the finger, until sent or discarded. */
+    private val _recordingLocked = MutableStateFlow(false)
+    val recordingLocked: StateFlow<Boolean> = _recordingLocked.asStateFlow()
+
+    fun lockVoiceRecording() {
+        if (voiceRecorder != null) _recordingLocked.value = true
+    }
+
+    fun voiceLevel(): Float = voiceRecorder?.level() ?: 0f
 
     fun startVoiceRecording(): Boolean {
         if (voiceRecorder != null) return false
@@ -3743,6 +3752,8 @@ class AppViewModel(app: Application) : AndroidViewModel(app), PomboBridge.Listen
         voiceTicker?.cancel()
         voiceTicker = null
         _recordingMs.value = null
+        val wasLocked = _recordingLocked.value
+        _recordingLocked.value = false
         if (!send) {
             recorder.cancel()
             return
@@ -3750,7 +3761,10 @@ class AppViewModel(app: Application) : AndroidViewModel(app), PomboBridge.Listen
         viewModelScope.launch {
             val recording = withContext(Dispatchers.IO) { recorder.stop() }
             if (recording == null || recording.durationMs < ChannelManager.AUDIO_MIN_DURATION_MS) {
-                toast("Hold to record, release to send", com.pombo.android.ui.ToastKind.INFO)
+                toast(
+                    if (wasLocked) "Voice message too short" else "Hold to record, release to send",
+                    com.pombo.android.ui.ToastKind.INFO
+                )
                 return@launch
             }
             try {

@@ -55,6 +55,12 @@ class VoiceRecorder(private val context: Context) {
 
     fun elapsedMs(): Long = if (startedAt == 0L) 0L else SystemClock.elapsedRealtime() - startedAt
 
+    /** Loudness since the previous call, 0–1. MediaRecorder exposes no frequencies. */
+    fun level(): Float {
+        val peak = runCatching { recorder?.maxAmplitude ?: 0 }.getOrDefault(0)
+        return kotlin.math.sqrt(peak / 32767f).coerceIn(0f, 1f)
+    }
+
     /** Stops and returns the recording, or null when nothing usable was written. */
     fun stop(): Recording? {
         val durationMs = minOf(elapsedMs(), ChannelManager.AUDIO_MAX_DURATION_MS)
