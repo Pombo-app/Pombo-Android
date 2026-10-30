@@ -67,7 +67,6 @@ import androidx.compose.material.icons.outlined.ContentCopy
 import androidx.compose.material.icons.outlined.Key
 import androidx.compose.material.icons.outlined.Lock
 import androidx.compose.material.icons.outlined.Public
-import androidx.compose.material.icons.outlined.Storage
 import androidx.compose.material.icons.outlined.People
 import androidx.compose.material.icons.outlined.VerifiedUser
 import androidx.compose.material.icons.outlined.Visibility
@@ -466,7 +465,7 @@ private fun ChannelDetailsMain(
         Spacer(Modifier.height(8.dp))
     }
     if (channel.type != "dm") {
-        ChannelNavRow("Storage", leadingIcon = Icons.Outlined.Storage) { onOpenSub(ChannelSubPanel.STORAGE) }
+        ChannelNavRow("Storage", leadingIcon = com.pombo.android.ui.PomboIcons.Database) { onOpenSub(ChannelSubPanel.STORAGE) }
         Spacer(Modifier.height(8.dp))
     }
     if (isGated && canModerate) {

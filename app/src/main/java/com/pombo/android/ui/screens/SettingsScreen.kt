@@ -49,7 +49,6 @@ import androidx.compose.material.icons.outlined.ErrorOutline
 import androidx.compose.material.icons.outlined.Delete
 import androidx.compose.material.icons.filled.CheckCircleOutline
 import androidx.compose.material.icons.outlined.Notifications
-import androidx.compose.material.icons.outlined.Storage
 import androidx.compose.material.icons.outlined.Sync
 import androidx.compose.material.icons.outlined.FileUpload
 import androidx.compose.material.icons.outlined.FileDownload
@@ -460,7 +459,7 @@ private fun AccountPanel(vm: AppViewModel) {
 
         Row(verticalAlignment = Alignment.CenterVertically) {
             Icon(
-                Icons.Outlined.Storage, contentDescription = null,
+                com.pombo.android.ui.PomboIcons.Database, contentDescription = null,
                 tint = PomboColors.Overlay80, modifier = Modifier.size(16.dp)
             )
             Spacer(Modifier.width(8.dp))
