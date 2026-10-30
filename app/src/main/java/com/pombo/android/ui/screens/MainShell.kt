@@ -467,7 +467,7 @@ private fun ProfileTab(vm: AppViewModel, onAddAccount: () -> Unit) {
                 Modifier.fillMaxWidth().background(PomboColors.Bg, RoundedCornerShape(12.dp))
                     .border(1.dp, PomboColors.Overlay8, RoundedCornerShape(12.dp))
             ) {
-                accounts.forEachIndexed { i, acc ->
+                accounts.sortedByDescending { it.address.equals(address, ignoreCase = true) }.forEachIndexed { i, acc ->
                     if (i > 0) androidx.compose.material3.HorizontalDivider(color = PomboColors.Overlay8)
                     val isCurrent = acc.address.equals(address, ignoreCase = true)
                     Row(
