@@ -307,7 +307,7 @@ internal fun ChatsTab(vm: AppViewModel, onContacts: () -> Unit, onConnect: () ->
                         )
                     },
                 contentPadding = PaddingValues(start = 10.dp, end = 10.dp, top = 6.dp, bottom = 18.dp),
-                verticalArrangement = Arrangement.spacedBy(2.dp)
+                verticalArrangement = Arrangement.spacedBy(6.dp)
             ) {
                 itemsIndexed(localOrder, key = { _, ch -> ch.messageStreamId }) { _, ch ->
                     val isDragging = ch.messageStreamId == draggingKey
