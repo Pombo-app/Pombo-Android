@@ -1601,7 +1601,7 @@ private fun SecurityPanel(vm: AppViewModel) {
                     ) { Text("Lock", color = PomboColors.Overlay70, fontSize = 14.sp) }
                 }
                 Spacer(Modifier.height(10.dp))
-                HoldToConfirmButton("Hold to Copy (2s)") {
+                HoldToConfirmButton("Copy") {
                     // Sensitive-flagged (no preview, no clipboard sync) and
                     // auto-cleared after 60s — the key must not sit in
                     // clipboard history forever.
@@ -1645,7 +1645,7 @@ private fun SecurityPanel(vm: AppViewModel) {
                         .padding(12.dp)
                 )
                 Spacer(Modifier.height(10.dp))
-                HoldToConfirmButton("Hold to Delete (2s)") {
+                HoldToConfirmButton("Delete") {
                     deleteVerified = false
                     vm.deleteAccount()
                 }
@@ -1783,7 +1783,7 @@ internal fun HoldToConfirmButton(label: String, onConfirm: () -> Unit) {
                 .background(PomboColors.Danger.copy(alpha = 0.40f))
         )
         Box(Modifier.fillMaxWidth().height(40.dp), contentAlignment = Alignment.Center) {
-            Text(label, color = Color.White, fontSize = 14.sp, fontWeight = FontWeight.Medium)
+            Text(if (holding) "Hold (2s)" else label, color = Color.White, fontSize = 14.sp, fontWeight = FontWeight.Medium)
         }
     }
 }

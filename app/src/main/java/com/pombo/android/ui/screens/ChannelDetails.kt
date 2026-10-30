@@ -2075,7 +2075,7 @@ private fun ChannelDestroyPanel(vm: AppViewModel, channel: Channel, onDismiss: (
             "It cannot be reversed."
     )
     Spacer(Modifier.height(14.dp))
-    HoldToConfirmButton("Hold to Delete (2s)") {
+    HoldToConfirmButton("Delete") {
         onDismiss()
         vm.deleteChannelOnChain(channel.messageStreamId, channel.name)
     }
