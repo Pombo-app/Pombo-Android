@@ -112,6 +112,7 @@ private fun SettingsHeader(title: String, onBack: (() -> Unit)? = null) {
  */
 internal enum class SettingsPanel(val label: String, val icon: ImageVector, val section: Int) {
     ACCOUNT("Account", Icons.Outlined.Person, 0),
+    DEVICE_SYNC("Device Sync", Icons.Outlined.Sync, 0),
     NOTIFICATIONS("Notifications", Icons.Outlined.Notifications, 0),
     NETWORKS("Networks", Icons.Outlined.Link, 0),
     CONTENT("Content", Icons.Outlined.SmartDisplay, 0),
@@ -132,7 +133,7 @@ internal fun SettingsTab(
     onBack: () -> Unit
 ) {
     if (panel == null) {
-        SettingsIndex(vm, onOpen)
+        SettingsIndex(onOpen)
         return
     }
     // Any tap outside a text field drops its focus, which is also what
@@ -157,6 +158,7 @@ internal fun SettingsTab(
         ) {
             when (panel) {
                 SettingsPanel.ACCOUNT -> AccountPanel(vm)
+                SettingsPanel.DEVICE_SYNC -> DeviceSyncPanel(vm)
                 SettingsPanel.NOTIFICATIONS -> NotificationsSection(vm)
                 SettingsPanel.SECURITY -> SecurityPanel(vm)
                 SettingsPanel.DM_INBOX -> DmInboxPanel(vm)
@@ -168,10 +170,9 @@ internal fun SettingsTab(
     }
 }
 
-/** Web #settings-panel-index: one row per section, Sync Devices as an action at the end. */
+/** Web #settings-panel-index: one row per section. */
 @Composable
-private fun SettingsIndex(vm: AppViewModel, onOpen: (SettingsPanel) -> Unit) {
-    val isGuest by vm.isGuest.collectAsState()
+private fun SettingsIndex(onOpen: (SettingsPanel) -> Unit) {
     Column(Modifier.fillMaxSize()) {
         SettingsHeader("Settings")
         Column(
@@ -181,54 +182,100 @@ private fun SettingsIndex(vm: AppViewModel, onOpen: (SettingsPanel) -> Unit) {
             SettingsPanel.entries.forEachIndexed { i, panel ->
                 val previous = SettingsPanel.entries.getOrNull(i - 1)
                 if (previous != null && previous.section != panel.section) SettingsIndexDivider()
-                SettingsIndexRow(panel.label, panel.icon, chevron = true) { onOpen(panel) }
-            }
-            // Guests have no inbox to sync to.
-            if (!isGuest) {
-                SettingsIndexDivider()
-                val syncing by vm.sync.syncing.collectAsState()
-                SettingsIndexRow(
-                    if (syncing) "Syncing your data" else "Sync Devices",
-                    Icons.Outlined.Sync, chevron = false, busy = syncing
-                ) { if (!syncing) vm.syncNow() }
+                SettingsIndexRow(panel.label, panel.icon) { onOpen(panel) }
             }
         }
     }
 }
 
+/**
+ * Moves this account's state between the user's own devices — separate from
+ * which endpoints the client talks to (Networks). Web #settings-panel-devicesync.
+ */
 @Composable
-private fun SettingsIndexRow(
-    label: String,
-    icon: ImageVector,
-    chevron: Boolean,
-    busy: Boolean = false,
-    onClick: () -> Unit
-) {
+private fun DeviceSyncPanel(vm: AppViewModel) {
+    val isGuest by vm.isGuest.collectAsState()
+    val hasDmInbox by vm.hasDmInbox.collectAsState()
+    val syncMode by vm.syncMode.collectAsState()
+    val syncing by vm.sync.syncing.collectAsState()
+    LaunchedEffect(Unit) { vm.refreshDmInbox() }
+    // Sync publishes to the account's own DM inbox (partition 1): without one
+    // the choices are shown but cannot be made.
+    val available = !isGuest && hasDmInbox == true
+
+    SettingsSection {
+        Text(
+            "Sync your app state, including sent DMs from other devices",
+            color = PomboColors.Overlay40, fontSize = 12.sp
+        )
+        Spacer(Modifier.height(14.dp))
+        if (!available) {
+            Text(
+                if (isGuest) "Sync belongs to a real account. Connect a wallet to move your state between devices."
+                else "Sync travels through your own DM inbox. Create it first to turn these options on.",
+                color = PomboColors.Overlay40, fontSize = 12.sp, lineHeight = 17.sp,
+                modifier = Modifier.fillMaxWidth()
+                    .background(PomboColors.Overlay3, RoundedCornerShape(12.dp))
+                    .border(1.dp, PomboColors.Overlay5, RoundedCornerShape(12.dp))
+                    .padding(horizontal = 14.dp, vertical = 12.dp)
+            )
+            Spacer(Modifier.height(10.dp))
+        }
+        Column(
+            Modifier.fillMaxWidth()
+                .background(PomboColors.Overlay3, RoundedCornerShape(12.dp))
+                .border(1.dp, PomboColors.Overlay5, RoundedCornerShape(12.dp))
+                .padding(vertical = 4.dp)
+                .alpha(if (available) 1f else 0.4f)
+        ) {
+            com.pombo.android.data.SyncMode.entries.forEach { mode ->
+                Row(
+                    Modifier.fillMaxWidth()
+                        .clickableNoRipple { if (available) vm.setSyncMode(mode) }
+                        .padding(end = 12.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    androidx.compose.material3.RadioButton(
+                        selected = syncMode == mode,
+                        onClick = { vm.setSyncMode(mode) },
+                        enabled = available,
+                        colors = androidx.compose.material3.RadioButtonDefaults.colors(
+                            selectedColor = PomboColors.Accent,
+                            unselectedColor = PomboColors.Overlay30
+                        )
+                    )
+                    Text(
+                        mode.label,
+                        color = PomboColors.Overlay85,
+                        fontSize = 13.sp, fontWeight = FontWeight.Medium
+                    )
+                }
+            }
+        }
+        Spacer(Modifier.height(16.dp))
+        BackupButton(
+            label = if (syncing) "Syncing your data" else "Sync Now", icon = Icons.Outlined.Sync,
+            emphasized = true, enabled = available && !syncing, modifier = Modifier.fillMaxWidth()
+        ) { vm.syncNow() }
+    }
+}
+
+@Composable
+private fun SettingsIndexRow(label: String, icon: ImageVector, onClick: () -> Unit) {
     Row(
         Modifier.fillMaxWidth().clickableNoRipple(onClick).padding(horizontal = 6.dp, vertical = 14.dp),
         verticalAlignment = Alignment.CenterVertically
     ) {
-        if (busy) {
-            androidx.compose.material3.CircularProgressIndicator(
-                modifier = Modifier.size(20.dp),
-                color = PomboColors.Accent,
-                trackColor = PomboColors.Accent.copy(alpha = 0.16f),
-                strokeWidth = 2.5.dp
-            )
-        } else {
-            Icon(icon, contentDescription = null, tint = PomboColors.Overlay50, modifier = Modifier.size(20.dp))
-        }
+        Icon(icon, contentDescription = null, tint = PomboColors.Overlay50, modifier = Modifier.size(20.dp))
         Spacer(Modifier.width(14.dp))
         Text(
             label, color = PomboColors.Overlay85, fontSize = 15.sp,
             fontWeight = FontWeight.Medium, modifier = Modifier.weight(1f)
         )
-        if (chevron) {
-            Icon(
-                Icons.Outlined.ChevronRight, contentDescription = null,
-                tint = PomboColors.Overlay30, modifier = Modifier.size(20.dp)
-            )
-        }
+        Icon(
+            Icons.Outlined.ChevronRight, contentDescription = null,
+            tint = PomboColors.Overlay30, modifier = Modifier.size(20.dp)
+        )
     }
 }
 
@@ -411,63 +458,6 @@ private fun AccountPanel(vm: AppViewModel) {
             }
         }
 
-        // Sync publishes to the account's own DM inbox (partition 1);
-        // pushSync/pullSync both bail on `inboxExists()`, so without an inbox
-        // the whole block is absent rather than disabled.
-        val hasDmInbox by vm.hasDmInbox.collectAsState()
-        if (hasDmInbox == true) {
-            Spacer(Modifier.height(20.dp))
-            Box(Modifier.fillMaxWidth().height(1.dp).background(PomboColors.Overlay5))
-            Spacer(Modifier.height(20.dp))
-
-            // Moves this account's state between the user's own devices —
-            // separate from which endpoints the client talks to (API panel).
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                Icon(
-                    Icons.Outlined.Sync, contentDescription = null,
-                    tint = PomboColors.Overlay80, modifier = Modifier.size(16.dp)
-                )
-                Spacer(Modifier.width(8.dp))
-                Text("Device Sync", color = PomboColors.Overlay80, fontSize = 14.sp, fontWeight = FontWeight.Medium)
-            }
-            Spacer(Modifier.height(4.dp))
-            Text(
-                "Sync your app state, including sent DMs from other devices",
-                color = PomboColors.Overlay40, fontSize = 12.sp
-            )
-            Spacer(Modifier.height(14.dp))
-            val syncMode by vm.syncMode.collectAsState()
-            Column(
-                Modifier.fillMaxWidth()
-                    .background(PomboColors.Overlay3, RoundedCornerShape(12.dp))
-                    .border(1.dp, PomboColors.Overlay5, RoundedCornerShape(12.dp))
-                    .padding(vertical = 4.dp)
-            ) {
-                com.pombo.android.data.SyncMode.entries.forEach { mode ->
-                    Row(
-                        Modifier.fillMaxWidth()
-                            .clickableNoRipple { vm.setSyncMode(mode) }
-                            .padding(end = 12.dp),
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        androidx.compose.material3.RadioButton(
-                            selected = syncMode == mode,
-                            onClick = { vm.setSyncMode(mode) },
-                            colors = androidx.compose.material3.RadioButtonDefaults.colors(
-                                selectedColor = PomboColors.Accent,
-                                unselectedColor = PomboColors.Overlay30
-                            )
-                        )
-                        Text(
-                            mode.label,
-                            color = PomboColors.Overlay85,
-                            fontSize = 13.sp, fontWeight = FontWeight.Medium
-                        )
-                    }
-                }
-            }
-        }
-
         Spacer(Modifier.height(20.dp))
         Box(Modifier.fillMaxWidth().height(1.dp).background(PomboColors.Overlay5))
         Spacer(Modifier.height(20.dp))
@@ -511,7 +501,7 @@ private fun SettingsFieldLabel(text: String) {
     Spacer(Modifier.height(8.dp))
 }
 
-/** The web's Export (bright) / Import (dim) pair of bordered buttons. */
+/** The web's bordered settings buttons: Export (bright) / Import (dim), Sync Now. */
 @Composable
 private fun BackupButton(
     label: String,
