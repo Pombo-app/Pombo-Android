@@ -88,11 +88,11 @@ private val CARD_BG = PomboColors.Overlay5
 private val GREEN = PomboColors.Success
 private val BLUE = Color(0xFF3B82F6)
 
-/** 1.2 MB, 340 KB — the web's formatFileSize. */
+/** 1.2 MB, 340.5 KB — the web's formatFileSize. */
 fun formatBytes(bytes: Long): String = when {
     bytes >= 1024L * 1024 * 1024 -> String.format("%.1f GB", bytes / (1024.0 * 1024 * 1024))
     bytes >= 1024L * 1024 -> String.format("%.1f MB", bytes / (1024.0 * 1024))
-    bytes >= 1024 -> String.format("%.0f KB", bytes / 1024.0)
+    bytes >= 1024 -> String.format("%.1f KB", bytes / 1024.0)
     else -> "$bytes B"
 }
 
