@@ -584,44 +584,8 @@ private fun ExploreCard(
             ch.category.takeIf { it.isNotEmpty() && !it.equals("general", true) }?.replaceFirstChar { it.uppercase() },
             ch.language.takeIf { it.isNotEmpty() }?.uppercase()
         )
-        ch.gateVerb?.let { verb ->
-            Spacer(Modifier.height(12.dp))
-            HorizontalDivider(color = PomboColors.Overlay5, thickness = 1.dp)
-            Spacer(Modifier.height(12.dp))
-            Column(
-                Modifier.fillMaxWidth(),
-                horizontalAlignment = Alignment.CenterHorizontally
-            ) {
-                Text(
-                    verb.uppercase(),
-                    color = if (ch.gateMode == 3) PomboColors.Accent.copy(alpha = 0.70f)
-                        else PomboColors.Overlay40,
-                    fontSize = 11.exp, fontWeight = FontWeight.Medium, letterSpacing = 1.sp
-                )
-                Spacer(Modifier.height(2.dp))
-                Row(verticalAlignment = Alignment.Bottom) {
-                    Text(
-                        ch.gateValue ?: "",
-                        color = PomboColors.Overlay90, maxLines = 1,
-                        fontSize = 15.exp, fontWeight = FontWeight.SemiBold,
-                        modifier = Modifier.alignByBaseline()
-                    )
-                    Spacer(Modifier.width(6.dp))
-                    Text(
-                        ch.gateQualifier ?: "",
-                        color = PomboColors.Overlay50, fontSize = 13.exp, maxLines = 1,
-                        overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis,
-                        modifier = Modifier.alignByBaseline()
-                    )
-                }
-            }
-        }
-        if (tags.isNotEmpty()) {
-            Spacer(Modifier.height(if (ch.gateVerb != null) 8.dp else 12.dp))
-            Row(
-                Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.spacedBy(6.dp, Alignment.End)
-            ) {
+        val tagRow: @Composable () -> Unit = {
+            Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
                 tags.forEach { t ->
                     Text(
                         t,
@@ -633,6 +597,45 @@ private fun ExploreCard(
                     )
                 }
             }
+        }
+        val verb = ch.gateVerb
+        if (verb != null) {
+            Spacer(Modifier.height(12.dp))
+            HorizontalDivider(color = PomboColors.Overlay5, thickness = 1.dp)
+            Spacer(Modifier.height(12.dp))
+            Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.Bottom) {
+                Column(Modifier.weight(1f)) {
+                    Text(
+                        verb.uppercase(),
+                        color = if (ch.gateMode == 3) PomboColors.Accent.copy(alpha = 0.70f)
+                            else PomboColors.Overlay40,
+                        fontSize = 11.exp, fontWeight = FontWeight.Medium, letterSpacing = 1.sp
+                    )
+                    Spacer(Modifier.height(2.dp))
+                    Row(verticalAlignment = Alignment.Bottom) {
+                        Text(
+                            ch.gateValue ?: "",
+                            color = PomboColors.Overlay90, maxLines = 1,
+                            fontSize = 15.exp, fontWeight = FontWeight.SemiBold,
+                            modifier = Modifier.alignByBaseline()
+                        )
+                        Spacer(Modifier.width(6.dp))
+                        Text(
+                            ch.gateQualifier ?: "",
+                            color = PomboColors.Overlay50, fontSize = 13.exp, maxLines = 1,
+                            overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis,
+                            modifier = Modifier.alignByBaseline()
+                        )
+                    }
+                }
+                if (tags.isNotEmpty()) {
+                    Spacer(Modifier.width(12.dp))
+                    tagRow()
+                }
+            }
+        } else if (tags.isNotEmpty()) {
+            Spacer(Modifier.height(12.dp))
+            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End) { tagRow() }
         }
     }
 }
