@@ -176,7 +176,7 @@ class PushVerifier(
                 "image" -> "📷 Image"
                 // sw.js:318-336 covers the remaining content types too.
                 "file" -> "📎 " + content.optString("fileName").ifEmpty { "File" }
-                "audio" -> "🎵 Audio message"
+                "audio" -> com.pombo.android.ChannelManager.AUDIO_FALLBACK_TEXT
                 "video", "video_announce" -> "🎬 Video"
                 "gif" -> "🎞️ GIF"
                 "reaction" -> "Reacted with " + content.optString("emoji").ifEmpty { "👍" }

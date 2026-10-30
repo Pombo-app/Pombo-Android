@@ -1880,6 +1880,7 @@ class AppViewModel(app: Application) : AndroidViewModel(app), PomboBridge.Listen
             runCatching { manager.refreshChannelMetadataFromGraph() }
         }
         sweepTransfers(manager.transferDir)
+        viewModelScope.launch(Dispatchers.IO) { com.pombo.android.core.VoiceRecorder.sweep(app) }
         // A Keystore invalidation (lock screen removed, backup restore) forces
         // SecurePrefs to reset the affected files so the app can boot at all —
         // a silent reset of the wallet file would otherwise look like account loss.
@@ -2313,7 +2314,7 @@ class AppViewModel(app: Application) : AndroidViewModel(app), PomboBridge.Listen
                         val arr = sm.optJSONArray(streamId) ?: return@forEach
                         for (i in 0 until arr.length()) {
                             val m = arr.optJSONObject(i) ?: continue
-                            if (m.optString("type") == "image") {
+                            if (m.optString("type") == "image" || m.optString("type") == "audio") {
                                 m.optString("imageId").ifEmpty { null }?.let { sentImageIds.add(it) }
                             }
                         }
@@ -3702,6 +3703,76 @@ class AppViewModel(app: Application) : AndroidViewModel(app), PomboBridge.Listen
 
     fun resendMessage(id: String) = viewModelScope.launch {
         try { manager.resendMessage(id) } catch (e: Exception) { reportSendFailure(e) }
+    }
+
+    private var voiceRecorder: com.pombo.android.core.VoiceRecorder? = null
+    private var voiceTicker: Job? = null
+    /** Elapsed recording time, or null when not recording. */
+    private val _recordingMs = MutableStateFlow<Long?>(null)
+    val recordingMs: StateFlow<Long?> = _recordingMs.asStateFlow()
+    /** Slid up: the recording keeps going without the finger, until sent or discarded. */
+    private val _recordingLocked = MutableStateFlow(false)
+    val recordingLocked: StateFlow<Boolean> = _recordingLocked.asStateFlow()
+
+    fun lockVoiceRecording() {
+        if (voiceRecorder != null) _recordingLocked.value = true
+    }
+
+    fun voiceLevel(): Float = voiceRecorder?.level() ?: 0f
+
+    fun startVoiceRecording(): Boolean {
+        if (voiceRecorder != null) return false
+        val recorder = com.pombo.android.core.VoiceRecorder(getApplication())
+        try {
+            recorder.start(onLimit = { finishVoiceRecording(send = true) })
+        } catch (e: Exception) {
+            toast("Could not start recording: ${e.message}", com.pombo.android.ui.ToastKind.ERROR)
+            return false
+        }
+        voiceRecorder = recorder
+        _recordingMs.value = 0L
+        // The recorder's own duration cap does not fire on every device.
+        voiceTicker = viewModelScope.launch {
+            while (true) {
+                val elapsed = recorder.elapsedMs()
+                _recordingMs.value = elapsed
+                if (elapsed >= ChannelManager.AUDIO_MAX_DURATION_MS) {
+                    finishVoiceRecording(send = true)
+                    break
+                }
+                delay(200)
+            }
+        }
+        return true
+    }
+
+    fun finishVoiceRecording(send: Boolean) {
+        val recorder = voiceRecorder ?: return
+        voiceRecorder = null
+        voiceTicker?.cancel()
+        voiceTicker = null
+        _recordingMs.value = null
+        val wasLocked = _recordingLocked.value
+        _recordingLocked.value = false
+        if (!send) {
+            recorder.cancel()
+            return
+        }
+        viewModelScope.launch {
+            val recording = withContext(Dispatchers.IO) { recorder.stop() }
+            if (recording == null || recording.durationMs < ChannelManager.AUDIO_MIN_DURATION_MS) {
+                toast(
+                    if (wasLocked) "Voice message too short" else "Hold to record, release to send",
+                    com.pombo.android.ui.ToastKind.INFO
+                )
+                return@launch
+            }
+            try {
+                manager.sendAudio(recording.bytes, recording.mime, recording.durationMs)
+            } catch (e: Exception) {
+                reportSendFailure(e)
+            }
+        }
     }
 
     /** Up while the owner may rotate instead of waiting for a responder to hand over the current key. */

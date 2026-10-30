@@ -121,6 +121,9 @@ data class UiMessage(
     val imageId: String? = null,
     val imageBytes: ByteArray? = null,
     val imageMime: String? = null,
+    /** Voice message: rides the chunked image transport, its bytes in imageBytes. */
+    val isAudio: Boolean = false,
+    val audioDurationMs: Long = 0L,
     /**
      * P2P shared file (wire type `file_announce`). The bytes are NOT in the
      * message — the announcement only describes the file and its piece hashes;
@@ -182,7 +185,7 @@ class ChannelManager(
     /** Persist a new block; the caller owns the settings store. */
     private val persistBlockedPeer: (String) -> Unit = {},
     /** False when Android reports no usable network: a send then fails at once. */
-    private val isOnline: () -> Boolean = { true }
+    internal val isOnline: () -> Boolean = { true }
 ) {
 
     /**
@@ -2672,6 +2675,7 @@ class ChannelManager(
                 val body = when (content.optString("type")) {
                     "text" -> content.optString("text")
                     "image" -> "[image]"
+                    "audio" -> AUDIO_FALLBACK_TEXT
                     "video_announce" -> "[video]"
                     "file_announce", "storage_file_announce" -> "[file]"
                     // A reaction is not what was said here last, and on a
@@ -2755,6 +2759,7 @@ class ChannelManager(
                 val body = when (type) {
                     "text" -> content.optString("text")
                     "image" -> "[image]"
+                    "audio" -> AUDIO_FALLBACK_TEXT
                     "video_announce" -> "[video]"
                     "file_announce", "storage_file_announce" -> "[file]"
                     // Same rule as the preview above: DMs only.
@@ -2774,7 +2779,7 @@ class ChannelManager(
                 if (senderAddr.equals(me, ignoreCase = true)) continue
                 val isContent = when (type) {
                     "text", "message" -> true
-                    "image" -> content.optStringOrNull("imageId") != null
+                    "image", "audio" -> content.optStringOrNull("imageId") != null
                     "video_announce" -> content.opt("metadata") != null
                     else -> false
                 }
@@ -2828,6 +2833,7 @@ class ChannelManager(
             val body = if (content is JSONObject) when (content.optString("type")) {
                 "text" -> content.optString("text")
                 "image" -> "[image]"
+                "audio" -> AUDIO_FALLBACK_TEXT
                 "file_announce", "storage_file_announce" -> "[file]"
                 else -> null
             } else null
@@ -3298,7 +3304,7 @@ class ChannelManager(
      *
      * Fire-and-forget: failing to notify must never fail the send itself.
      */
-    private fun sendWakeSignal(channel: Channel, kind: String? = null) {
+    internal fun sendWakeSignal(channel: Channel, kind: String? = null) {
         scope.launch {
             try {
                 // Web sendWakeSignals: ONLY gated channels use the 'native:'
@@ -3650,7 +3656,7 @@ class ChannelManager(
         // bubble — otherwise its chunks arrive with nowhere to go and the
         // placeholder spins forever. Off screen we want the registration and
         // NOT the bubble; the bubble is rebuilt from [dmReceived] on open.
-        if (data.optString("type") == "image") {
+        if (data.optString("type") == "image" || data.optString("type") == "audio") {
             handleImageManifest(channel, data, showBubble = onScreen)
         }
 
@@ -4226,7 +4232,7 @@ class ChannelManager(
         // Order matters: hydrating before the merge would map over a list that
         // does not hold them yet, which is exactly how sent images came back as
         // blank bubbles after a restart.
-        merged.filter { it.isImage && it.imageBytes == null }
+        merged.filter { (it.isImage || it.isAudio) && it.imageBytes == null }
             .mapNotNull { it.imageId }
             .distinct()
             .forEach { hydrateFromLedger(it) }
@@ -4352,7 +4358,7 @@ class ChannelManager(
                 plain.put("account", sender)
                 plain.put("sender", sender)
                 when (plain.optString("type")) {
-                    "text", "image", "file_announce", "storage_file_announce" -> {
+                    "text", "image", "audio", "file_announce", "storage_file_announce" -> {
                         val id = plain.optString("id")
                         if (id.isNotEmpty() && id !in existing) {
                             toUiMessage(plain, me)?.copy(
@@ -4391,6 +4397,7 @@ class ChannelManager(
         // An image manifest is a message too; treating it as text is what drew
         // the empty bubble where the picture should be.
         val isImage = data.optString("type") == "image"
+        val isAudio = data.optString("type") == "audio"
         val imageId = data.optString("imageId").ifEmpty { null }
         // A file announce becomes a file bubble. Two shapes reach here: the
         // full manifest (from the peer's inbox) and our own LEAN record —
@@ -4431,7 +4438,10 @@ class ChannelManager(
             mine = sender.equals(me, ignoreCase = true),
             isImage = isImage,
             imageId = imageId,
-            imageMime = if (isImage) data.optString("finalMime", "image/jpeg") else null,
+            imageMime = if (isImage) data.optString("finalMime", "image/jpeg")
+                else if (isAudio) data.optStringOrNull("finalMime") else null,
+            isAudio = isAudio,
+            audioDurationMs = if (isAudio) data.optLong("durationMs", 0L) else 0L,
             file = file,
             storageFile = storageFile,
             ensName = ensStore.cachedName(sender),
@@ -5224,7 +5234,7 @@ class ChannelManager(
             }
             _messages.value = snapshot?.messages ?: emptyList()
             _reactions.value = snapshot?.reactions ?: emptyMap()
-            snapshot?.messages?.forEach { if (it.isImage && it.imageId != null) hydrateFromLedger(it.imageId) }
+            snapshot?.messages?.forEach { if ((it.isImage || it.isAudio) && it.imageId != null) hydrateFromLedger(it.imageId) }
             _pins.value = snapshot?.pins ?: emptyList()
             _hiddenIds.value = emptySet()
             _bannedMembers.value = emptySet()
@@ -6177,6 +6187,10 @@ class ChannelManager(
     suspend fun resendMessage(id: String) {
         val channel = _current.value ?: return
         val msg = _messages.value.firstOrNull { it.id == id && it.failed } ?: return
+        if (msg.isAudio) {
+            images.resendAudio(channel, msg)
+            return
+        }
         if (channel.type == "dm") {
             markSending(id)
             publishDm(channel, id, msg.text, msg.sender, msg.timestamp)
@@ -6273,6 +6287,9 @@ class ChannelManager(
 
     suspend fun sendImage(input: ByteArray, originalMime: String) =
         images.sendImage(input, originalMime)
+
+    suspend fun sendAudio(bytes: ByteArray, mime: String, durationMs: Long) =
+        images.sendAudio(bytes, mime, durationMs)
 
     /** Web dedup key `streamId:messageId:emoji:action` -> last send time. */
     private val recentReactions = HashMap<String, Long>()
@@ -6398,7 +6415,7 @@ class ChannelManager(
         publishOverride(channel, override)
 
         deletedIds.add(targetId)
-        if (original.isImage) original.imageId?.let { tombstoneImage(it) }
+        if (original.isImage || original.isAudio) original.imageId?.let { tombstoneImage(it) }
         _messages.value = _messages.value.filterNot { it.id == targetId }
         failedOutbox?.remove(channel.messageStreamId, targetId)
         if (channel.type == "dm") {
@@ -7403,7 +7420,7 @@ class ChannelManager(
             "text" -> handleText(channel, data, historical)
             "file_announce" -> handleFileAnnounce(channel, data)
             "storage_file_announce" -> handleStorageFileAnnounce(channel, data)
-            "image" -> handleImageManifest(channel, data)
+            "image", "audio" -> handleImageManifest(channel, data)
             "image_chunk" -> handleImageChunk(data)
             "reaction" -> {
                 val user = account ?: return
@@ -7680,7 +7697,7 @@ class ChannelManager(
             deletedIds.add(targetId)
             // Images need their own tombstone: the chunks/manifest carry the
             // imageId, not the message id, and would rebuild the bubble.
-            if (original.isImage) original.imageId?.let { tombstoneImage(it) }
+            if (original.isImage || original.isAudio) original.imageId?.let { tombstoneImage(it) }
             _messages.value = _messages.value.filterNot { it.id == targetId }
         } else {
             applyEdit(targetId, data.optString("text"))
@@ -7783,8 +7800,8 @@ class ChannelManager(
         it.copy(pending = false, failed = true, undelivered = true, failError = reason)
     }
 
-    /** Keeps a failed text send, as the wire fields its Retry republishes. */
-    private fun keepForRetry(
+    /** Keeps a failed send, as the wire fields its Retry republishes. */
+    internal fun keepForRetry(
         streamId: String, wire: JSONObject, sender: String, error: String?, undelivered: Boolean = false
     ) {
         failedOutbox?.put(streamId, JSONObject(wire.toString())
@@ -7792,6 +7809,10 @@ class ChannelManager(
             .put("failError", error ?: JSONObject.NULL)
             .put("undelivered", undelivered)
             .put("failedAt", System.currentTimeMillis()))
+    }
+
+    internal fun forgetFailed(streamId: String, id: String) {
+        failedOutbox?.remove(streamId, id)
     }
 
     /** A sent text storage never recorded joins the outbox like one that failed outright. */
@@ -7823,6 +7844,7 @@ class ChannelManager(
                 continue
             }
             val sender = entry.optString("sender").ifEmpty { me }
+            val isAudio = entry.optString("type") == "audio"
             restored += UiMessage(
                 id = id,
                 text = entry.optString("text"),
@@ -7836,6 +7858,10 @@ class ChannelManager(
                 verified = true,
                 ensName = ensStore.cachedName(sender),
                 ensAvatar = ensStore.cachedAvatar(sender),
+                isAudio = isAudio,
+                imageId = if (isAudio) entry.optStringOrNull("imageId") else null,
+                imageMime = if (isAudio) entry.optStringOrNull("finalMime") else null,
+                audioDurationMs = if (isAudio) entry.optLong("durationMs", 0L) else 0L,
                 replyTo = entry.optJSONObject("replyTo")?.let {
                     val rid = it.optString("id")
                     if (rid.isEmpty()) null else ReplyRef(
@@ -7848,6 +7874,7 @@ class ChannelManager(
             )
         }
         if (restored.isNotEmpty()) mergeMessages(restored)
+        restored.filter { it.isAudio }.mapNotNull { it.imageId }.forEach { hydrateFromLedger(it) }
     }
 
     /** A send can settle after the user left its channel: the reopen copy must hear it too. */
@@ -7862,7 +7889,7 @@ class ChannelManager(
     }
 
     @Synchronized
-    private fun markSending(id: String) {
+    internal fun markSending(id: String) {
         _messages.value = _messages.value.map {
             if (it.id == id) {
                 it.copy(pending = true, failed = false, failError = null, delivered = false, undelivered = false)
@@ -7978,6 +8005,11 @@ class ChannelManager(
         // these a hostile publisher could pin arbitrary memory in the app.
         const val IMAGE_MAX_ASSEMBLED_BYTES = 1 * 1024 * 1024
         const val GIF_MAX_ASSEMBLED_BYTES = 5 * 1024 * 1024
+        const val AUDIO_MAX_ASSEMBLED_BYTES = 1 * 1024 * 1024   // config.media.audioMaxAssembledBytes
+        const val AUDIO_MAX_DURATION_MS = 4 * 60 * 1000L        // config.media.audioMaxDurationMs
+        const val AUDIO_MIN_DURATION_MS = 500L                  // config.media.audioMinDurationMs
+        /** What clients without voice messages show; the web writes the same text. */
+        const val AUDIO_FALLBACK_TEXT = "🎤 Voice message"
         const val MAX_CHUNK_BYTES = 220 * 1024        // config.media.imagePayloadMaxBytes
         const val MAX_CHUNKS = 512
         const val ASSEMBLY_TTL_MS = 10 * 60 * 1000L   // config.media.imageAssemblyTtlMs
