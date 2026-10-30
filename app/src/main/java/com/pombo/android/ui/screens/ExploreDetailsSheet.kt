@@ -28,6 +28,7 @@ import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.Text
 import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.getValue
 import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -70,6 +71,9 @@ internal fun ExploreDetailsSheet(
     val owner = ch.messageStreamId.substringBefore('/').lowercase()
     androidx.compose.runtime.LaunchedEffect(owner) { vm.ensureEns(owner) }
     val ownerName = ensNames[owner]
+    val storageDays by androidx.compose.runtime.produceState<Int?>(null, ch.messageStreamId) {
+        value = com.pombo.android.core.GraphApi.streamRetention(ch.messageStreamId)
+    }
     val copy: (String, String) -> Unit = { value, what ->
         clipboard.setText(androidx.compose.ui.text.AnnotatedString(value))
         vm.toast("$what copied", ToastKind.SUCCESS)
@@ -121,22 +125,19 @@ internal fun ExploreDetailsSheet(
             if (ch.type == "gated") {
                 val sealed = ch.wireIdentity == "sealed"
                 DetailsRow("Identity on the wire") {
-                    Column(horizontalAlignment = Alignment.End) {
-                        Row(verticalAlignment = Alignment.CenterVertically) {
-                            Icon(
-                                if (sealed) Icons.Outlined.People else Icons.Outlined.Public,
-                                contentDescription = null, tint = PomboColors.Overlay50,
-                                modifier = Modifier.size(16.dp)
-                            )
-                            Spacer(Modifier.width(6.dp))
-                            DetailsValue(if (sealed) "Sealed" else "Visible")
-                        }
-                        Text(
-                            if (sealed) "authors readable by members only" else "every message signed by its author",
-                            color = PomboColors.Overlay40, fontSize = 11.sp, textAlign = TextAlign.End
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Icon(
+                            if (sealed) Icons.Outlined.People else Icons.Outlined.Public,
+                            contentDescription = null, tint = PomboColors.Overlay50,
+                            modifier = Modifier.size(16.dp)
                         )
+                        Spacer(Modifier.width(6.dp))
+                        DetailsValue(if (sealed) "Sealed" else "Visible")
                     }
                 }
+            }
+            storageDays?.let { days ->
+                DetailsRow("Storage") { DetailsValue(if (days == 1) "1 day" else "$days days") }
             }
             DetailsRow("Owner") {
                 Row(verticalAlignment = Alignment.CenterVertically) {
