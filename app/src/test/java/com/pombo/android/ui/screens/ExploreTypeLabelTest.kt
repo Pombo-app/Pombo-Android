@@ -13,5 +13,7 @@ class ExploreTypeLabelTest {
         assertEquals("Closed", exploreTypeLabel("gated", GateModes.NONE))
         assertEquals("Gated", exploreTypeLabel("gated", GateModes.TOKEN))
         assertEquals("Gated", exploreTypeLabel("gated", null))
+        assertEquals("Open · Read-Only", exploreTypeLabel("public", null, readOnly = true))
+        assertEquals("Paid · Read-Only", exploreTypeLabel("gated", GateModes.PAID, readOnly = true))
     }
 }
