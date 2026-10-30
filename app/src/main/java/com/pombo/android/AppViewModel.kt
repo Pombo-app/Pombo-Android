@@ -179,6 +179,10 @@ class AppViewModel(app: Application) : AndroidViewModel(app), PomboBridge.Listen
     val channels: StateFlow<List<Channel>> get() = manager.channels
     val current: StateFlow<Channel?> get() = manager.current
     val messages: StateFlow<List<UiMessage>> get() = manager.messages
+
+    val composerDrafts = com.pombo.android.ui.ComposerDrafts()
+
+    fun isMessageDeleted(id: String): Boolean = manager.isMessageDeleted(id)
     val reactions get() = manager.reactions
     val onlineCount: StateFlow<Int> get() = manager.onlineCount
     val presenceReady: StateFlow<Boolean> get() = manager.presenceReady
@@ -237,6 +241,7 @@ class AppViewModel(app: Application) : AndroidViewModel(app), PomboBridge.Listen
             // this account's data orphaned on disk.
             manager.replaceChannels(emptyList())
             _contacts.value = emptyList()
+            composerDrafts.forgetAccount(store.address)
             channelStore.clearAccount()
             contactsStore.clearAccount()
             inviteStore.clearAccount()

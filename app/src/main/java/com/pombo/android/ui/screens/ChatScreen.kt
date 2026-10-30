@@ -159,17 +159,27 @@ fun ChatScreen(vm: AppViewModel) {
     val listState = rememberLazyListState()
     val ch = channel ?: return
 
-    // These targets point at messages of ONE channel; this composable
-    // survives channel switches, so without this reset a send in channel B
-    // would commit an edit/reply against a message that lives in channel A.
-    // The composer only clears when it holds an edit's pre-filled text —
-    // an ordinary draft survives the switch, as it always has.
-    LaunchedEffect(ch.messageStreamId) {
-        if (editTarget != null) {
-            editTarget = null
-            composerInput.clearText()
+    // The composer belongs to one conversation: this composable survives
+    // channel switches, so leaving stashes the text, reply and edit under
+    // the conversation they point at, and opening restores its own.
+    val draftAccount by vm.address.collectAsState()
+    androidx.compose.runtime.DisposableEffect(ch.messageStreamId, draftAccount) {
+        val stream = ch.messageStreamId
+        val account = draftAccount
+        vm.composerDrafts.take(account, stream) { vm.isMessageDeleted(it) }?.let { draft ->
+            replyTarget = draft.replyTo
+            editTarget = draft.editing
+            composerInput.setTextAndPlaceCursorAtEnd(draft.text)
         }
-        replyTarget = null
+        onDispose {
+            vm.composerDrafts.stash(
+                account, stream,
+                com.pombo.android.ui.ComposerDrafts.Draft(composerInput.text.toString(), replyTarget, editTarget)
+            )
+            composerInput.clearText()
+            replyTarget = null
+            editTarget = null
+        }
     }
 
     val isPreview by vm.isPreview.collectAsState()
@@ -1252,6 +1262,7 @@ fun ChatScreen(vm: AppViewModel) {
                     else -> "Renew to write"
                 },
                 onTyping = { vm.notifyTyping() },
+                conversation = ch.messageStreamId,
                 onPickImage = { vm.sendImage(it) },
                 onPickVideo = { vm.sendVideo(it) },
                 onPickFile = { vm.sendFile(it) },
@@ -1386,13 +1397,15 @@ private fun ChatComposer(
     onMicDenied: () -> Unit = {},
     recordingLocked: Boolean = false,
     onLockRecording: () -> Unit = {},
-    voiceLevel: () -> Float = { 0f }
+    voiceLevel: () -> Float = { 0f },
+    conversation: String? = null
 ) {
     // State-based field, NOT the legacy value/onValueChange one: only the
     // TextFieldState pipeline advertises accepted MIME types to the IME via
     // contentReceiver — with the old field, Gboard greyed its GIFs out with
     // "can't insert this content here".
-    LaunchedEffect(Unit) {
+    // Restarted per conversation: the first value is the draft restored on opening it, not typing.
+    LaunchedEffect(conversation) {
         var first = true
         androidx.compose.runtime.snapshotFlow { input.text.toString() }.collect {
             if (first) first = false else onTyping()
