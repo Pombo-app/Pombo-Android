@@ -632,16 +632,7 @@ private fun NotificationsSection(vm: AppViewModel) {
                 )
             }
             Spacer(Modifier.width(12.dp))
-            androidx.compose.material3.Switch(
-                checked = enabled,
-                onCheckedChange = { vm.setPushEnabled(it) },
-                colors = androidx.compose.material3.SwitchDefaults.colors(
-                    checkedTrackColor = Color(0xFFF6851B),
-                    checkedThumbColor = Color.White,
-                    uncheckedTrackColor = PomboColors.Overlay10,
-                    uncheckedThumbColor = PomboColors.Overlay60
-                )
-            )
+            com.pombo.android.ui.PomboSwitch(checked = enabled, onCheckedChange = { vm.setPushEnabled(it) })
         }
         // Web #dm-push-section: the "Direct Messages" sub-option, indented
         // under the global toggle with a left border, only while push is on.
@@ -666,16 +657,7 @@ private fun NotificationsSection(vm: AppViewModel) {
                         )
                     }
                     Spacer(Modifier.width(12.dp))
-                    androidx.compose.material3.Switch(
-                        checked = dmPush,
-                        onCheckedChange = { vm.setDmPushEnabled(it) },
-                        colors = androidx.compose.material3.SwitchDefaults.colors(
-                            checkedTrackColor = Color(0xFFF6851B),
-                            checkedThumbColor = Color.White,
-                            uncheckedTrackColor = PomboColors.Overlay10,
-                            uncheckedThumbColor = PomboColors.Overlay60
-                        )
-                    )
+                    com.pombo.android.ui.PomboSwitch(checked = dmPush, onCheckedChange = { vm.setDmPushEnabled(it) })
                 }
             }
         }
@@ -688,8 +670,7 @@ private fun NotificationsSection(vm: AppViewModel) {
         ContentToggleRow(
             title = "Channel Invites",
             hint = "Show notifications when you receive channel invites",
-            checked = invites,
-            trackColor = Color(0xFFF6851B)
+            checked = invites
         ) { vm.setInviteNotifications(it) }
         // Web #notifications-status: "Muted" under the toggle while off.
         if (!invites) {
@@ -712,24 +693,20 @@ private fun ContentPanel(vm: AppViewModel) {
         ContentToggleRow(
             title = "YouTube Embeds",
             hint = "Show video player when YouTube links are shared",
-            checked = ytEnabled,
-            // The web paints this one toggle YouTube red, not accent orange.
-            trackColor = Color(0xFFFF0000)
+            checked = ytEnabled
         ) { vm.setYoutubeEmbeds(it) }
         Spacer(Modifier.height(16.dp))
         ContentToggleRow(
             title = "ENS Avatars",
             hint = "Load profile pictures from the server each ENS name points at. " +
                 "That server sees your IP address.",
-            checked = ensAvatarsEnabled,
-            trackColor = PomboColors.Accent
+            checked = ensAvatarsEnabled
         ) { vm.setEnsAvatars(it) }
         Spacer(Modifier.height(16.dp))
         ContentToggleRow(
             title = "Show Sensitive Content",
             hint = "Enable NSFW filter in channel exploration",
-            checked = nsfwEnabled,
-            trackColor = PomboColors.Accent
+            checked = nsfwEnabled
         ) { vm.setNsfwEnabled(it) }
     }
 }
@@ -1073,7 +1050,6 @@ private fun ContentToggleRow(
     title: String,
     hint: String,
     checked: Boolean,
-    trackColor: Color,
     onChange: (Boolean) -> Unit
 ) {
     Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
@@ -1086,16 +1062,7 @@ private fun ContentToggleRow(
             )
         }
         Spacer(Modifier.width(12.dp))
-        androidx.compose.material3.Switch(
-            checked = checked,
-            onCheckedChange = onChange,
-            colors = androidx.compose.material3.SwitchDefaults.colors(
-                checkedTrackColor = trackColor,
-                checkedThumbColor = Color.White,
-                uncheckedTrackColor = PomboColors.Overlay10,
-                uncheckedThumbColor = PomboColors.Overlay60
-            )
-        )
+        com.pombo.android.ui.PomboSwitch(checked = checked, onCheckedChange = onChange)
     }
 }
 

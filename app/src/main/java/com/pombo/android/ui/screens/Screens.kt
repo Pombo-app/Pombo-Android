@@ -2362,7 +2362,7 @@ private fun ConfirmPopup(
     }
 }
 
-/** Label + hint on the left, web-style pill switch on the right. */
+/** Label + hint on the left, the app's switch on the right. */
 @Composable
 private fun ToggleRow(label: String, hint: String, checked: Boolean, onToggle: () -> Unit) {
     Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
@@ -2373,26 +2373,7 @@ private fun ToggleRow(label: String, hint: String, checked: Boolean, onToggle: (
             )
             Text(hint, color = PomboColors.Overlay30, fontSize = 12.sp)
         }
-        Box(
-            Modifier
-                .width(36.dp).height(20.dp)
-                .background(
-                    if (checked) PomboColors.Accent else PomboColors.Overlay10,
-                    RoundedCornerShape(10.dp)
-                )
-                .clickableNoRipple(onToggle)
-        ) {
-            Box(
-                Modifier
-                    .padding(2.dp)
-                    .align(if (checked) Alignment.CenterEnd else Alignment.CenterStart)
-                    .size(16.dp)
-                    .background(
-                        if (checked) Color.White else PomboColors.Overlay30,
-                        CircleShape
-                    )
-            )
-        }
+        com.pombo.android.ui.PomboSwitch(checked = checked, onCheckedChange = { onToggle() })
     }
 }
 
