@@ -1,6 +1,7 @@
 package com.pombo.android.core
 
 import android.content.Context
+import android.media.MediaMetadataRetriever
 import android.media.MediaRecorder
 import android.os.Build
 import android.os.SystemClock
@@ -77,9 +78,24 @@ class VoiceRecorder(private val context: Context) {
             return null
         }
         return try {
-            Recording(out.readBytes(), MIME, durationMs)
+            val measured = measure(out)
+            if (measured == null) Log.w(TAG, "duration unreadable, using the clock: ${durationMs}ms")
+            Recording(out.readBytes(), MIME, measured?.coerceAtMost(ChannelManager.AUDIO_MAX_DURATION_MS) ?: durationMs)
         } finally {
             out.delete()
+        }
+    }
+
+    /** The file's own length: the clock can run well past what the encoder wrote, and players seek by the file. */
+    private fun measure(out: File): Long? {
+        val retriever = MediaMetadataRetriever()
+        return try {
+            retriever.setDataSource(out.absolutePath)
+            retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_DURATION)?.toLongOrNull()?.takeIf { it > 0 }
+        } catch (e: Exception) {
+            null
+        } finally {
+            runCatching { retriever.release() }
         }
     }
 
