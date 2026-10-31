@@ -127,6 +127,26 @@ class StoragePurgeTest {
     }
 
     @Test
+    fun `storedOnAny settles on the first provider that holds the row, without waiting for a hung one`() = runBlocking {
+        val providers = listOf(
+            StorageEndpoints.Node("0xslow", listOf("https://slow.example")),
+            StorageEndpoints.Node("0xa", listOf("https://a.example"))
+        )
+        val t = StoragePurge.Target(1, 0)
+        val present = """{"results":[{"timestamp":1,"sequenceNumber":0,"result":"present"}]}"""
+        val absent = """{"results":[{"timestamp":1,"sequenceNumber":0,"result":"absent"}]}"""
+        val settled = kotlinx.coroutines.withTimeout(5_000) {
+            StoragePurge.storedOnAny(providers, STREAM, 0, listOf(t), KEY) { url, _ ->
+                if (url.startsWith("https://slow.example")) kotlinx.coroutines.awaitCancellation()
+                200 to present
+            }
+        }
+        assertEquals(true, settled)
+        assertEquals(false, StoragePurge.storedOnAny(providers, STREAM, 0, listOf(t), KEY) { _, _ -> 200 to absent })
+        assertNull(StoragePurge.storedOnAny(providers, STREAM, 0, listOf(t), KEY) { _, _ -> throw java.io.IOException("down") })
+    }
+
+    @Test
     fun `a group signs with its own key when it carries one`() = runBlocking {
         val endpoints = mockk<StorageEndpoints>()
         coEvery { endpoints.providersWith(STREAM, "purge") } returns listOf(StorageEndpoints.Node("0xa", listOf("https://a.example")))

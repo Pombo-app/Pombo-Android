@@ -1807,8 +1807,9 @@ class AppViewModel(app: Application) : AndroidViewModel(app), PomboBridge.Listen
         viewModelScope.launch {
             var wasBusy = false
             kotlinx.coroutines.flow.combine(
-                manager.storageMedia.uploads, manager.storageMedia.downloads, manager.media.progress
-            ) { _, _, _ -> transferBusy() }.collect { busy ->
+                manager.storageMedia.uploads, manager.storageMedia.downloads, manager.media.progress,
+                manager.storageMedia.backgroundVerifies
+            ) { _, _, _, _ -> transferBusy() }.collect { busy ->
                 if (busy) wasBusy = true
                 else if (wasBusy) { wasBusy = false; MediaTransferService.stop(getApplication()) }
             }

@@ -1,5 +1,11 @@
 package com.pombo.android.core
 
+import java.util.concurrent.atomic.AtomicBoolean
+import java.util.concurrent.atomic.AtomicInteger
+import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.coroutineScope
+import kotlinx.coroutines.launch
 import org.json.JSONArray
 import org.json.JSONObject
 
@@ -140,6 +146,39 @@ object StoragePurge {
             }
         }
         return if (answered) present else null
+    }
+
+    /**
+     * Whether any provider holds one of the targets, asked of all of them in
+     * parallel: the first that holds it settles it, without waiting for the
+     * slower ones. Null when no provider answered.
+     */
+    suspend fun storedOnAny(
+        providers: List<StorageEndpoints.Node>, streamId: String, partition: Int, targets: List<Target>,
+        privateKeyHex: String,
+        post: suspend (url: String, body: String) -> Pair<Int, String> = StorageHttp::postJson
+    ): Boolean? {
+        if (providers.isEmpty()) return null
+        return coroutineScope {
+            val result = CompletableDeferred<Boolean?>()
+            val left = AtomicInteger(providers.size)
+            val answered = AtomicBoolean(false)
+            val asks = providers.map { p ->
+                launch {
+                    val present = try {
+                        storedOn(listOf(p), streamId, partition, targets, privateKeyHex, post)
+                    } catch (e: CancellationException) {
+                        throw e
+                    } catch (e: Exception) {
+                        null
+                    }
+                    if (present != null) answered.set(true)
+                    if (!present.isNullOrEmpty()) result.complete(true)
+                    if (left.decrementAndGet() == 0) result.complete(if (answered.get()) false else null)
+                }
+            }
+            result.await().also { asks.forEach { it.cancel() } }
+        }
     }
 
     /** `{results:[{timestamp,sequenceNumber,result}]}` → target → verdict. */

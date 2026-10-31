@@ -9,6 +9,7 @@ import java.io.InputStream
 import java.io.RandomAccessFile
 import java.util.Collections
 import java.util.concurrent.ConcurrentHashMap
+import java.util.concurrent.ConcurrentLinkedQueue
 import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicInteger
 import java.util.concurrent.atomic.AtomicLong
@@ -18,6 +19,7 @@ import kotlin.math.ceil
 import kotlin.math.max
 import kotlin.math.min
 import kotlin.math.pow
+import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -28,7 +30,9 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.isActive
+import kotlinx.coroutines.joinAll
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.selects.select
 import kotlinx.coroutines.withContext
 import org.json.JSONObject
 
@@ -72,6 +76,7 @@ class StorageMedia(
         const val INFLIGHT_HIGH = 1_536 * 1024L   // 1.5 MB — mirrors the web dcRadar HIGH watermark
         const val INFLIGHT_LOW = 384 * 1024L
         const val CHUNK_PARTS = StreamConstants.STORAGE_CHUNK_PARTITIONS
+        const val STORED_CONCURRENCY_PER_PROVIDER = 3
     }
 
     /** How the engine reaches the network for anything that is NOT a raw chunk publish. */
@@ -246,6 +251,7 @@ class StorageMedia(
         generation.incrementAndGet()
         warmUpJobs.values.forEach { it.cancel() }
         warmUpJobs.clear()
+        backgroundJobs.forEach { it.cancel() }
         warmedUp.clear()
         _uploads.value = emptyMap()
         _downloads.value = emptyMap()
@@ -261,7 +267,13 @@ class StorageMedia(
      */
     fun hasActiveTransfers(): Boolean =
         _uploads.value.values.any { it.stage != "done" && it.error == null } ||
-            _downloads.value.values.any { it.status == "downloading" }
+            _downloads.value.values.any { it.status == "downloading" } ||
+            _backgroundVerifies.value > 0
+
+    private val backgroundJobs: MutableSet<Job> = ConcurrentHashMap.newKeySet()
+    private val _backgroundVerifies = MutableStateFlow(0)
+    /** Uploads already announced whose other storage providers are still confirming and repairing. */
+    val backgroundVerifies: StateFlow<Int> = _backgroundVerifies
 
     private val warmedUp = Collections.synchronizedSet(HashSet<String>())
     private val warmUpJobs = ConcurrentHashMap<String, Job>()
@@ -377,10 +389,11 @@ class StorageMedia(
         expectedPublisher: String? = null,
         /** The key that wrote the rows: lets the node's `stored` endpoint answer instead of a read. */
         storedKey: String? = null,
-        onProgress: ((Set<Int>) -> Unit)? = null
+        onProgress: ((Set<Int>) -> Unit)? = null,
+        storedOpts: StoredOpts? = null
     ): Set<Int> {
         if (storedKey != null) {
-            storedIndices(sid, windows, tsIndex, storedKey, label)?.let { present ->
+            storedIndices(sid, windows, tsIndex, storedKey, label, storedOpts)?.let { present ->
                 stats?.storedAnswered = true
                 onProgress?.invoke(present)
                 return present
@@ -441,9 +454,18 @@ class StorageMedia(
      * The verify by the node's `stored` endpoint: exact per row and signed by
      * the key that wrote the chunks, for a stream the writer may not read (a
      * peer's inbox). Null when no provider offers it, so the caller reads.
+     *
+     * Every (partition, provider) query runs in parallel. With [StoredOpts]
+     * (nodeAddress → chunk indices, filled as the answers land) it returns as
+     * soon as one provider has answered every partition; the queries still in
+     * flight go on in [scope] and land in [StoredOpts.pending].
      */
-    private suspend fun storedIndices(sid: String, windows: List<Win>, tsIndex: Map<String, Int>, privateKeyHex: String, label: String): Set<Int>? {
-        val providers = runCatching { endpoints.providersWith(sid, "stored") }.getOrDefault(emptyList())
+    private suspend fun storedIndices(
+        sid: String, windows: List<Win>, tsIndex: Map<String, Int>, privateKeyHex: String, label: String,
+        opts: StoredOpts? = null
+    ): Set<Int>? {
+        var providers = runCatching { endpoints.providersWith(sid, "stored") }.getOrDefault(emptyList())
+        opts?.only?.let { only -> providers = providers.filter { it.nodeAddress in only } }
         if (providers.isEmpty()) return null
         val byPartition = LinkedHashMap<Int, MutableList<Pair<StoragePurge.Target, Int>>>()
         for ((key, i) in tsIndex) {
@@ -452,14 +474,59 @@ class StorageMedia(
             if (windows.none { it.partition == p && ts >= it.from && ts <= it.to }) continue
             byPartition.getOrPut(p) { ArrayList() }.add(StoragePurge.Target(ts, 0) to i)
         }
-        val found = HashSet<Int>()
-        for ((partition, rows) in byPartition) {
-            val present = StoragePurge.storedOn(providers, sid, partition, rows.map { it.first }, privateKeyHex)
-                ?: run { Log.w(TAG, "$label: stored query unanswered on P$partition — reading instead"); return null }
-            for ((t, i) in rows) if (t in present) found.add(i)
+        val found = Collections.synchronizedSet(HashSet<Int>())
+        val answeredBy = ConcurrentHashMap<String, MutableSet<Int>>()
+        val unanswered = ConcurrentHashMap<Int, AtomicInteger>()
+        val anyComplete = CompletableDeferred<Unit>()
+        fun isComplete(node: String) = answeredBy[node]?.size == byPartition.size
+        // A queue per provider: a node that hangs must not hold the slots of another.
+        suspend fun ask(provider: StorageEndpoints.Node) = coroutineScope {
+            val queue = ConcurrentLinkedQueue(byPartition.entries.map { it.key to it.value })
+            repeat(min(STORED_CONCURRENCY_PER_PROVIDER, queue.size)) {
+                launch {
+                    while (true) {
+                        val (partition, rows) = queue.poll() ?: break
+                        val present = try {
+                            StoragePurge.storedOn(listOf(provider), sid, partition, rows.map { it.first }, privateKeyHex)
+                        } catch (e: kotlinx.coroutines.CancellationException) {
+                            throw e
+                        } catch (e: Exception) {
+                            Log.w(TAG, "$label: stored on ${provider.nodeAddress} P$partition failed: ${e.message}"); null
+                        }
+                        if (present == null) { unanswered.getOrPut(partition) { AtomicInteger() }.incrementAndGet(); continue }
+                        val node = provider.nodeAddress
+                        val mine = opts?.byProvider?.getOrPut(node) { Collections.synchronizedSet(HashSet()) }
+                        for ((t, i) in rows) if (t in present) { found.add(i); mine?.add(i) }
+                        answeredBy.getOrPut(node) { Collections.synchronizedSet(HashSet()) }.add(partition)
+                        if (isComplete(node)) anyComplete.complete(Unit)
+                    }
+                }
+            }
         }
-        return found
+        if (opts == null) {
+            coroutineScope { providers.forEach { launch(Dispatchers.IO) { ask(it) } } }
+        } else {
+            val jobs = providers.map { scope.launch(Dispatchers.IO) { ask(it) } }
+            val all = scope.launch { jobs.joinAll() }
+            opts.pending.add(all)
+            select { all.onJoin {}; anyComplete.onAwait {} }
+            if (providers.none { isComplete(it.nodeAddress) }) all.join()
+        }
+        if (providers.any { isComplete(it.nodeAddress) }) return found.toSet()
+        for (partition in byPartition.keys) {
+            if ((unanswered[partition]?.get() ?: 0) == providers.size) {
+                Log.w(TAG, "$label: stored query unanswered on P$partition — reading instead"); return null
+            }
+        }
+        return found.toSet()
     }
+
+    /** Per-provider results of the `stored` verify: see [storedIndices]. */
+    private class StoredOpts(
+        val byProvider: MutableMap<String, MutableSet<Int>>,
+        val only: List<String>? = null,
+        val pending: MutableList<Job> = Collections.synchronizedList(ArrayList())
+    )
 
     private fun windowedRate(hist: ArrayDeque<Pair<Long, Long>>, now: Long): Long? {
         if (hist.size < 2) return null
@@ -496,7 +563,9 @@ class StorageMedia(
          *  of the clone — the clone path would stamp the uploader's account
          *  onto every stored chunk. */
         sharedPublishKeyHex: String? = null,
-        messageId: String? = null, transferId: String? = null
+        messageId: String? = null, transferId: String? = null,
+        /** Chunk rows a background repair writes after the announce, for the same purge as [SendResult.chunkRows]. */
+        onLaterChunkRows: ((List<DmSentRows.Row>) -> Unit)? = null
     ): SendResult {
         if (source.size <= 0L) throw IllegalStateException("File is empty")
         if (isDm && dmPeerPublicKey.isNullOrEmpty()) throw IllegalStateException("DM storage transfer needs the peer's public key")
@@ -539,6 +608,7 @@ class StorageMedia(
         var stagingFile: File? = null
         var slicer: Source.Slicer? = null
         var producerJob: Job? = null
+        var background: Job? = null
         try {
             val doCompress = shouldCompress(source.fileType, source.fileName)
             val compression = if (doCompress) "deflate" else "none"
@@ -664,6 +734,15 @@ class StorageMedia(
             val stored = HashSet<Int>()
             val chunkTs = HashMap<Int, Long>()
             val chunkTsHist = HashMap<Int, MutableList<Long>>()
+            // nodeAddress → chunks that node confirmed by `stored`. One node holding
+            // every chunk lets the announce go; the others finish in the background.
+            val perProvider = ConcurrentHashMap<String, MutableSet<Int>>()
+            val storedPending: MutableList<Job> = Collections.synchronizedList(ArrayList())
+            val reportedRows = HashSet<Pair<Int, Long>>()
+            fun freshRows(rowKey: String): List<DmSentRows.Row> =
+                (warmUpPings + chunkTsHist.flatMap { (i, hist) -> hist.map { chunkPartition(i) to it } })
+                    .filter { reportedRows.add(it) }
+                    .map { (p, ts) -> DmSentRows.Row(messageStreamId, p, ts, 0, rowKey) }
             val failedChunks = ArrayList<Int>()
             val nextIdx = AtomicInteger(0)
             var totalBytesSent = 0L
@@ -891,7 +970,9 @@ class StorageMedia(
             // ---- verify & repair ----
             var storedCount: Int? = null
             if (StorageMediaConfig.VERIFY) withContext(engine) {
-                fun missingIdx(): List<Int> = (0 until tc).filter { !stored.contains(it) }
+                fun confirmed(): Set<Int> =
+                    perProvider.values.map { synchronized(it) { it.toSet() } }.maxByOrNull { it.size } ?: stored
+                fun missingIdx(): List<Int> = confirmed().let { c -> (0 until tc).filter { it !in c } }
                 fun updBar() { up.percent = 100; up.stage = "verifying"; emitThrottled(up) }
                 up.phase = "Verifying on storage…"
                 updBar()
@@ -928,7 +1009,7 @@ class StorageMedia(
                 var lastReadKnown = true
                 suspend fun verifyRead(windows: List<Win>, label: String, onProgress: ((Set<Int>) -> Unit)? = null): Set<Int> {
                     val st = ReadStats()
-                    val f = readStoredIndices(messageStreamId, windows, tsIndexForVerify(), bases, label, st, expectedPublisher = verifyPublisher, storedKey = chunkIdentityPk, onProgress = onProgress)
+                    val f = readStoredIndices(messageStreamId, windows, tsIndexForVerify(), bases, label, st, expectedPublisher = verifyPublisher, storedKey = chunkIdentityPk, onProgress = onProgress, storedOpts = StoredOpts(perProvider, pending = storedPending))
                     lastReadKnown = st.storedAnswered || st.winsOk > 0
                     return f
                 }
@@ -937,7 +1018,7 @@ class StorageMedia(
                 if (missing.isNotEmpty()) {
                     up.phase = "Verifying on storage…"; emit(up)
                     val found = verifyRead(allPartitionWindows(firstChunkTs - 15000, wall() + 1000), "full sweep") { fs ->
-                        stored.addAll(fs); updBar(); up.phase = "Verifying: ${stored.size}/$tc confirmed…"; emitThrottled(up)
+                        stored.addAll(fs); updBar(); up.phase = "Verifying: ${confirmed().size}/$tc confirmed…"; emitThrottled(up)
                     }
                     stored.addAll(found); missing = missingIdx(); updBar()
                 }
@@ -962,7 +1043,7 @@ class StorageMedia(
                 var pass = 0; var stalledPasses = 0
                 while (missing.isNotEmpty() && !verifyBlind && lastReadKnown && pass < 8 && stalledPasses < 3) {
                     pass++
-                    val storedBefore = stored.size
+                    val storedBefore = confirmed().size
                     if (pass > 1) sendSpacing = min(2000.0, sendSpacing * 1.5)
                     Log.w(TAG, "Storage repair pass $pass: ${missing.size} chunks confirmed missing")
                     up.phase = "Repairing (pass $pass)…"; up.stage = "repairing"; emit(up)
@@ -978,14 +1059,75 @@ class StorageMedia(
                             Log.w(TAG, "Nothing new for ${StorageMediaConfig.VERIFY_QUIET_MS / 1000}s — republishing the ${missing.size} missing again"); break
                         }
                     }
-                    stalledPasses = if (stored.size > storedBefore) 0 else stalledPasses + 1
+                    stalledPasses = if (confirmed().size > storedBefore) 0 else stalledPasses + 1
                 }
                 storedCount = if (!lastReadKnown && missing.isNotEmpty()) {
                     Log.e(TAG, "Storage verify: no node could confirm the chunks (stored unanswered, reads refused) — announcing UNVERIFIED"); null
                 } else if (verifyBlind && stored.isEmpty()) {
                     Log.e(TAG, "Storage verify skipped (blind) — announcing UNVERIFIED"); null
                 } else {
-                    Log.i(TAG, "Storage verify & repair: ${stored.size}/$tc confirmed${if (stored.size < tc) " — INCOMPLETE" else ""}"); stored.size
+                    val c = confirmed().size
+                    Log.i(TAG, "Storage verify & repair: $c/$tc confirmed${if (c < tc) " — INCOMPLETE" else ""}"); c
+                }
+
+                suspend fun finishOnProvider(node: String, key: String) {
+                    storedPending.toList().joinAll()
+                    fun has(): Set<Int> = perProvider[node]?.let { synchronized(it) { it.toSet() } } ?: emptySet()
+                    fun missingOn(): List<Int> = has().let { h -> (0 until tc).filter { it !in h } }
+                    var answered = true
+                    suspend fun readOn(label: String): Boolean {
+                        val before = has().size
+                        answered = storedIndices(messageStreamId, windowsForIndices(missingOn()), tsIndexForVerify(), key, label, StoredOpts(perProvider, only = listOf(node))) != null
+                        return has().size > before
+                    }
+                    if (StorageMediaConfig.SECOND_CHANCE && missingOn().isNotEmpty()) {
+                        val start = perf()
+                        val cap = max(5 * 60000L, tc * 2000L)
+                        var lastProgress = perf()
+                        while (missingOn().isNotEmpty() && perf() - lastProgress < StorageMediaConfig.VERIFY_QUIET_MS && perf() - start < cap) {
+                            delay(2500)
+                            if (readOn("background drain")) lastProgress = perf()
+                        }
+                    }
+                    var bgPass = 0; var stalled = 0
+                    while (missingOn().isNotEmpty() && answered && bgPass < 8 && stalled < 3) {
+                        bgPass++
+                        val before = has().size
+                        Log.i(TAG, "Storage background repair on $node, pass $bgPass: ${missingOn().size} chunks missing")
+                        republishParallel(missingOn())
+                        var lastProgress = perf()
+                        while (missingOn().isNotEmpty()) {
+                            delay(2000)
+                            if (readOn("background post-repair pass $bgPass")) { lastProgress = perf(); continue }
+                            if (!answered || perf() - lastProgress >= StorageMediaConfig.VERIFY_QUIET_MS) break
+                        }
+                        stalled = if (has().size > before) 0 else stalled + 1
+                    }
+                    val n = has().size
+                    Log.i(TAG, "Storage background verify on $node: $n/$tc confirmed${if (n < tc) " — INCOMPLETE" else ""}")
+                }
+                val complete = perProvider.filterValues { synchronized(it) { it.size } >= tc }.keys
+                val key = chunkIdentityPk
+                if (complete.isNotEmpty() && key != null) {
+                    val others = runCatching { endpoints.providersWith(messageStreamId, "stored") }.getOrDefault(emptyList())
+                        .map { it.nodeAddress }.filter { it !in complete }
+                    if (others.isNotEmpty()) {
+                        Log.i(TAG, "Storage verify: $tc/$tc on ${complete.joinToString()} — confirming ${others.joinToString()} in the background")
+                        _backgroundVerifies.update { it + 1 }
+                        background = scope.launch(engine) {
+                            try {
+                                coroutineScope { others.forEach { launch { finishOnProvider(it, key) } } }
+                                freshRows(key).takeIf { it.isNotEmpty() }?.let { onLaterChunkRows?.invoke(it) }
+                            } catch (e: kotlinx.coroutines.CancellationException) {
+                                throw e
+                            } catch (e: Exception) {
+                                Log.w(TAG, "Storage background verify failed: ${e.message}")
+                            }
+                        }.also { job ->
+                            backgroundJobs.add(job)
+                            job.invokeOnCompletion { backgroundJobs.remove(job); _backgroundVerifies.update { it - 1 } }
+                        }
+                    }
                 }
             }
 
@@ -1024,19 +1166,21 @@ class StorageMedia(
             up.stage = "done"; up.percent = 100; up.bytesSent = up.totalBytes ?: totalBytesSent
             emit(up); clearProgress(tid)
             val rowKey = chunkIdentityPk ?: if (channelEphemeral) publishIdentityPk else null
-            val rows = if (rowKey == null) emptyList()
-                else warmUpPings.map { (p, ts) -> DmSentRows.Row(messageStreamId, p, ts, 0, rowKey) } +
-                    chunkTsHist.flatMap { (i, hist) -> hist.map { DmSentRows.Row(messageStreamId, chunkPartition(i), it, 0, rowKey) } }
+            val rows = if (rowKey == null) emptyList() else withContext(engine) { freshRows(rowKey) }
             return SendResult(msgId, announce, storedCount, tc, rows)
         } catch (e: Exception) {
             up.error = e.message; emit(up); clearProgress(tid); throw e
         } finally {
-            producerJob?.cancel()   // stop a still-running compression on an abnormal exit
-            try { slicer?.close() } catch (e: Exception) { /* closed */ }
-            stagingFile?.let { runCatching { it.delete() } }
-            // The per-transfer throwaway publisher dies with the transfer —
-            // native, in memory only, and not even for the rest of the session.
-            if (isDm) chunkIdentities.remove("chunks|$messageStreamId|$tid")
+            // A background repair republishes from the slicer and the staged file.
+            val release = {
+                producerJob?.cancel()   // stop a still-running compression on an abnormal exit
+                try { slicer?.close() } catch (e: Exception) { /* closed */ }
+                stagingFile?.let { runCatching { it.delete() } }
+                // The per-transfer throwaway publisher dies with the transfer —
+                // native, in memory only, and not even for the rest of the session.
+                if (isDm) chunkIdentities.remove("chunks|$messageStreamId|$tid")
+            }
+            background?.invokeOnCompletion { release() } ?: release()
         }
     }
 

@@ -708,11 +708,11 @@ class ChannelManager(
                 val providers = runCatching { storageEndpoints.providersWith(messageStreamId, "stored") }.getOrDefault(emptyList())
                 if (providers.isEmpty()) return null
                 for (r in rows) {
-                    val present = com.pombo.android.core.StoragePurge.storedOn(
+                    val present = com.pombo.android.core.StoragePurge.storedOnAny(
                         providers, messageStreamId, r.partition,
                         listOf(com.pombo.android.core.StoragePurge.Target(r.timestamp, r.sequenceNumber)), r.privateKeyHex
                     ) ?: return null
-                    if (present.isNotEmpty()) return true
+                    if (present) return true
                 }
                 return false
             }
