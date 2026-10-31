@@ -48,7 +48,7 @@ class ChannelSyncSignalTest {
     }
 
     @Test fun `a local rename schedules one push`() {
-        manager.setLocalChannelIdentity(KNOWN, "Renamed", null)
+        manager.setLocalChannelIdentity(KNOWN, "Renamed")
 
         assertEquals(1, pushes)
     }

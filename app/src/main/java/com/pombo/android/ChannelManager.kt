@@ -860,8 +860,8 @@ class ChannelManager(
 
     /**
      * A just-joined channel without an on-chain name whose entry flow did not
-     * ask the user for one: the UI offers the local name + classification
-     * panel over the opening channel. Cleared on save or dismiss.
+     * ask the user for one: the UI offers the local name panel over the
+     * opening channel. Cleared on save or dismiss.
      */
     private val _pendingLocalIdentity = MutableStateFlow<Channel?>(null)
     val pendingLocalIdentity: StateFlow<Channel?> = _pendingLocalIdentity.asStateFlow()
@@ -869,18 +869,15 @@ class ChannelManager(
     fun dismissLocalIdentity() { _pendingLocalIdentity.value = null }
 
     /**
-     * Local name + classification write for a joined channel. Never touches
-     * the chain; blank name keeps the current one. Propagated by device sync
-     * like a DM nickname.
+     * Local name write for a joined channel. Never touches the chain; blank
+     * name keeps the current one. Propagated by device sync like a DM
+     * nickname.
      */
-    fun setLocalChannelIdentity(streamId: String, name: String?, classification: String?) {
+    fun setLocalChannelIdentity(streamId: String, name: String?) {
         _pendingLocalIdentity.value = null
         val trimmed = name?.trim()?.takeIf { it.isNotEmpty() }
         _channels.value = _channels.value.map { ch ->
-            if (ch.messageStreamId == streamId) ch.copy(
-                name = trimmed ?: ch.name,
-                classification = classification ?: ch.classification
-            ) else ch
+            if (ch.messageStreamId == streamId) ch.copy(name = trimmed ?: ch.name) else ch
         }
         saveChannels()
         if (_current.value?.messageStreamId == streamId) {
@@ -2348,7 +2345,7 @@ class ChannelManager(
             description = if (visible) description else "",
             language = if (visible) language else "",
             category = if (visible) category else "",
-            classification = classification ?: if (type == "gated") "personal" else null,
+            classification = classification,
             readOnly = readOnly,
             gateAddress = gateAddress,
             wireIdentity = if (type == "gated") wireIdentity else null
@@ -2604,7 +2601,7 @@ class ChannelManager(
         )
         addChannel(channel)
         // Entry into a channel with no on-chain name and no user-typed one:
-        // offer the local name + classification panel over the opening
+        // offer the local name panel over the opening
         // channel. Unreadable metadata proves nothing — no ask (web parity).
         if (metaRead && !netNamed && !named) _pendingLocalIdentity.value = channel
         return channel
