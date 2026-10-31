@@ -119,14 +119,16 @@ internal fun ChatsTab(vm: AppViewModel, onContacts: () -> Unit, onConnect: () ->
     val filter by vm.homeTab.collectAsState()
 
     // Background channels have no subscription: only the scan sees their new
-    // messages. On entry, then on a timer while the list is on screen; the
-    // per-channel floor inside keeps re-entries from hammering.
+    // messages. Every channel on entry, then a few at a time on a timer while
+    // the list is on screen; the per-channel floor inside keeps re-entries
+    // from hammering.
     val lifecycleOwner = LocalLifecycleOwner.current
     LaunchedEffect(lifecycleOwner) {
         lifecycleOwner.repeatOnLifecycle(Lifecycle.State.STARTED) {
+            vm.scanChannelsActivity()
             while (true) {
-                vm.scanChannelsActivity()
                 delay(30_000)
+                vm.scanChannelsActivity(full = false)
             }
         }
     }

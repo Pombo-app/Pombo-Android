@@ -1069,14 +1069,15 @@ class AppViewModel(app: Application) : AndroidViewModel(app), PomboBridge.Listen
     private val minScanIntervalMs = 10_000L
 
     /**
-     * Resends run concurrently — the bridge multiplexes by request id, which is
-     * what the Explore preview pass already relies on. The web serialises with
-     * a 2s stagger because it repeats every 30s forever; ours is a one-off
-     * burst when the user opens the list, so serialising just made the channels
-     * further down the list take seconds to fill in. Bounded so a long channel
-     * list does not fire dozens of resends at once.
+     * A full pass runs concurrently — the bridge multiplexes by request id —
+     * bounded so a long channel list does not fire dozens of resends at once.
      */
     private val scanConcurrency = 4
+
+    /** Web `pollBatchSize` and `pollStaggerDelayMs`: the timer's pass, a few channels in turn, one at a time. */
+    private val scanBatchSize = 3
+    private val scanStaggerMs = 2_000L
+    private var scanIndex = 0
 
     private val scanning = java.util.concurrent.atomic.AtomicBoolean(false)
     private val lastScanAt = HashMap<String, Long>()
@@ -1098,42 +1099,54 @@ class AppViewModel(app: Application) : AndroidViewModel(app), PomboBridge.Listen
      * subscribed to, by resending a small window per channel (see
      * ChannelManager.scanChannelActivity).
      *
-     * The web runs this on a 30s timer; here it is event-driven, firing on
-     * connect and whenever the user lands on Chats.
+     * [full] (on connect and on landing on Chats) reads every channel at once,
+     * so the list is caught up when it shows. Otherwise it is the web poller's
+     * pass, run on a timer while Chats is on screen: a few channels, in turn.
      *
      * DMs are skipped: their inbox is subscribed permanently, so their previews
      * are already live. The open channel is skipped for the same reason.
      */
-    fun scanChannelsActivity() {
+    fun scanChannelsActivity(full: Boolean = true) {
         // Nothing to gain while a channel is open: it holds the subscription
         // and the bridge, and the list is not on screen anyway.
         if (manager.current.value != null) return
         if (!scanning.compareAndSet(false, true)) return
         scanJob = viewModelScope.launch {
             try {
-                val order = manager.channelOrder.value
-                val ordered = manager.channels.value.sortedBy {
-                    order.indexOf(it.messageStreamId).let { i -> if (i < 0) Int.MAX_VALUE else i }
-                }
+                val channels = manager.channels.value
                 // Never let a first scan report the whole stored history as new.
-                unreadStore.seedWatermarks(ordered.map { it.messageStreamId })
+                unreadStore.seedWatermarks(channels.map { it.messageStreamId })
 
-                val due = ordered.filter { channel ->
-                    if (channel.type == "dm") return@filter false
-                    if (channel.messageStreamId == manager.current.value?.messageStreamId) return@filter false
-                    val now = System.currentTimeMillis()
-                    if (now - (lastScanAt[channel.messageStreamId] ?: 0L) < minScanIntervalMs) return@filter false
-                    lastScanAt[channel.messageStreamId] = now
-                    true
+                val background = channels.filter {
+                    it.type != "dm" && it.messageStreamId != manager.current.value?.messageStreamId
                 }
-                val gate = kotlinx.coroutines.sync.Semaphore(scanConcurrency)
-                kotlinx.coroutines.coroutineScope {
-                    // List order still decides who starts first, so the channels
-                    // the user is looking at fill in first.
-                    due.forEach { channel ->
-                        launch {
-                            gate.withPermit { manager.scanChannelActivity(channel) }
+                // A channel read moments ago is skipped (on the timer, its turn is still spent, as on the web).
+                fun claim(channel: Channel): Boolean {
+                    val now = System.currentTimeMillis()
+                    if (now - (lastScanAt[channel.messageStreamId] ?: 0L) < minScanIntervalMs) return false
+                    lastScanAt[channel.messageStreamId] = now
+                    return true
+                }
+                if (full) {
+                    val order = manager.channelOrder.value
+                    val due = background.sortedBy {
+                        order.indexOf(it.messageStreamId).let { i -> if (i < 0) Int.MAX_VALUE else i }
+                    }.filter(::claim)
+                    val gate = kotlinx.coroutines.sync.Semaphore(scanConcurrency)
+                    kotlinx.coroutines.coroutineScope {
+                        // List order decides who starts first, so the channels
+                        // the user is looking at fill in first.
+                        due.forEach { channel ->
+                            launch { gate.withPermit { manager.scanChannelActivity(channel) } }
                         }
+                    }
+                } else {
+                    val (batch, next) = com.pombo.android.core.roundRobin(background, scanIndex, scanBatchSize)
+                    scanIndex = next
+                    batch.forEachIndexed { i, channel ->
+                        if (!claim(channel)) return@forEachIndexed
+                        manager.scanChannelActivity(channel)
+                        if (i < batch.lastIndex) delay(scanStaggerMs)
                     }
                 }
             } finally {
