@@ -897,6 +897,7 @@ class StorageMedia(
                 updBar()
 
                 // Frontier visibility: wait until each partition's newest chunk is readable.
+                // Never on a DM: the sender may not read the peer's inbox.
                 val newestByPart = LongArray(chunkParts)
                 for (i in 0 until tc) { val k = i % chunkParts; val ts = chunkTs[i] ?: 0L; if (ts > newestByPart[k]) newestByPart[k] = ts }
                 suspend fun frontierVisible(k: Int): Boolean {
@@ -908,7 +909,7 @@ class StorageMedia(
                     }
                     return try { var seen = false; StorageHttp.directFetchRange(base, messageStreamId, firstPart + k, newestByPart[k] - 1500, newestByPart[k] + 1500) { seen = true }; seen } catch (e: Exception) { true }
                 }
-                if (bases.isNotEmpty() && tc > 1) {
+                if (!isDm && bases.isNotEmpty() && tc > 1) {
                     val pending = (0 until chunkParts).filter { newestByPart[it] > 0 }.toMutableSet()
                     var lastPending = pending.size; var frontStall = 0
                     while (pending.isNotEmpty() && frontStall < 10) {
