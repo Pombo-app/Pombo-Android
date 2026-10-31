@@ -234,8 +234,8 @@ fun MainShell(vm: AppViewModel) {
 
     if (walletOpen) com.pombo.android.ui.WalletSheet(vm) { walletOpen = false }
 
-    if (showJoin) JoinChannelDialog(onDismiss = { showJoin = false }) { id, pwd, name, cls ->
-        vm.joinChannel(id, pwd, name, cls); showJoin = false
+    if (showJoin) JoinChannelDialog(onDismiss = { showJoin = false }) { id, pwd, name ->
+        vm.joinChannel(id, pwd, name); showJoin = false
     }
 }
 

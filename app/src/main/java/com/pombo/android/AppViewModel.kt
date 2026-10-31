@@ -2998,7 +2998,6 @@ class AppViewModel(app: Application) : AndroidViewModel(app), PomboBridge.Listen
                     language = spec.language,
                     category = spec.category,
                     members = spec.members,
-                    classification = spec.classification,
                     storageProvider = spec.storageProvider,
                     customStorageAddress = spec.customStorageAddress,
                     storageDays = spec.storageDays,
@@ -3086,14 +3085,12 @@ class AppViewModel(app: Application) : AndroidViewModel(app), PomboBridge.Listen
     fun joinChannel(
         input: String,
         password: String?,
-        localName: String? = null,
-        classification: String? = null
+        localName: String? = null
     ) = viewModelScope.launch {
         runJoinToast("Joining channel…", "Joined channel", "Failed to join channel") {
             val channel = manager.joinChannel(
                 input, password?.ifEmpty { null },
                 localName = localName,
-                classification = classification,
                 named = !localName.isNullOrBlank()
             )
             manager.openChannel(channel.messageStreamId)
@@ -3105,17 +3102,17 @@ class AppViewModel(app: Application) : AndroidViewModel(app), PomboBridge.Listen
         runCatching { manager.refreshChannelMetadataFromGraph() }
     }
 
-    /** Local identity panel (name + classification) for unnamed entries. */
+    /** Local name panel for unnamed entries. */
     val pendingLocalIdentity get() = manager.pendingLocalIdentity
     fun dismissLocalIdentity() = manager.dismissLocalIdentity()
-    fun saveLocalIdentity(channel: Channel, name: String?, classification: String?) =
-        manager.setLocalChannelIdentity(channel.messageStreamId, name, classification)
+    fun saveLocalIdentity(channel: Channel, name: String?) =
+        manager.setLocalChannelIdentity(channel.messageStreamId, name)
 
     /** Member rename of a channel with no on-chain name: local write + sync. */
     fun renameChannelLocal(channel: Channel, name: String) {
         val clean = name.trim()
         if (clean.isEmpty()) return
-        manager.setLocalChannelIdentity(channel.messageStreamId, clean, null)
+        manager.setLocalChannelIdentity(channel.messageStreamId, clean)
     }
 
     // ---- Gate entry screen (N-D): a gated channel refused the join ----

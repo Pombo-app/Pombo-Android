@@ -285,7 +285,7 @@ fun PomboApp(vm: AppViewModel) {
             LocalChannelIdentityDialog(
                 channel = ch,
                 onDismiss = vm::dismissLocalIdentity,
-                onSave = { name, cls -> vm.saveLocalIdentity(ch, name, cls) }
+                onSave = { name -> vm.saveLocalIdentity(ch, name) }
             )
         }
 
@@ -1129,7 +1129,6 @@ data class NewChannel(
     val description: String,
     val language: String,
     val category: String,
-    val classification: String,
     val members: List<String>,
     val storageProvider: String,
     val customStorageAddress: String?,
@@ -1178,7 +1177,7 @@ private fun TokenPresetRow(
  * Create Channel — the web's #new-channel-modal adapted to the phone: the
  * desktop type sidebar becomes a row of tabs, everything else keeps the same
  * fields, copy and conditional logic (visible-only fields, member list for
- * Closed channels, classification).
+ * Closed channels).
  */
 @Composable
 internal fun CreateChannelDialog(vm: AppViewModel, onDismiss: () -> Unit, onCreate: (NewChannel) -> Unit) {
@@ -1192,7 +1191,6 @@ internal fun CreateChannelDialog(vm: AppViewModel, onDismiss: () -> Unit, onCrea
     var description by remember { mutableStateOf("") }
     var language by remember { mutableStateOf("en") }
     var category by remember { mutableStateOf("general") }
-    var classification by remember { mutableStateOf("personal") }
     var membersText by remember { mutableStateOf("") }
     var readOnly by remember { mutableStateOf(false) }
     var storageProvider by remember { mutableStateOf("streamr") }
@@ -1245,7 +1243,6 @@ internal fun CreateChannelDialog(vm: AppViewModel, onDismiss: () -> Unit, onCrea
         description = description.trim(),
         language = language,
         category = category,
-        classification = classification,
         members = members,
         storageProvider = storageProvider,
         customStorageAddress = customStorage.trim().ifBlank { null },
@@ -1889,45 +1886,6 @@ internal fun CreateChannelDialog(vm: AppViewModel, onDismiss: () -> Unit, onCrea
                     }
                 }
 
-                // Classification: local-only organization, so it closes the page.
-                if (kind == ChannelKind.CLOSED || kind == ChannelKind.GATED || kind == ChannelKind.PAID) {
-                    Spacer(Modifier.height(20.dp))
-                    Box(Modifier.fillMaxWidth().height(1.dp).background(PomboColors.Overlay5))
-                    Spacer(Modifier.height(16.dp))
-                    SectionLabel("Classification")
-                    Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                        listOf("personal" to "Personal", "community" to "Community").forEach { (value, label) ->
-                            val active = classification == value
-                            Box(
-                                Modifier.weight(1f)
-                                    .background(
-                                        if (active) PomboColors.Overlay10 else PomboColors.Overlay5,
-                                        RoundedCornerShape(8.dp)
-                                    )
-                                    .border(
-                                        1.dp,
-                                        Color.White.copy(alpha = if (active) 0.10f else 0.05f),
-                                        RoundedCornerShape(8.dp)
-                                    )
-                                    .clickableNoRipple { classification = value }
-                                    .padding(vertical = 8.dp),
-                                contentAlignment = Alignment.Center
-                            ) {
-                                Text(
-                                    label,
-                                    color = if (active) Color.White else PomboColors.Overlay50,
-                                    fontSize = 12.sp, fontWeight = FontWeight.Medium
-                                )
-                            }
-                        }
-                    }
-                    Text(
-                        "For organizing your channels locally.",
-                        color = PomboColors.Overlay30, fontSize = 12.sp,
-                        modifier = Modifier.padding(top = 6.dp)
-                    )
-                }
-
                 Spacer(Modifier.height(24.dp))
             }
 
@@ -2400,11 +2358,10 @@ private fun ChipPicker(options: List<Pair<String, String>>, selected: String, on
 }
 
 @Composable
-internal fun JoinChannelDialog(onDismiss: () -> Unit, onJoin: (String, String?, String?, String?) -> Unit) {
+internal fun JoinChannelDialog(onDismiss: () -> Unit, onJoin: (String, String?, String?) -> Unit) {
     var id by remember { mutableStateOf("") }
     var password by remember { mutableStateOf("") }
     var localName by remember { mutableStateOf("") }
-    var classification by remember { mutableStateOf("personal") }
 
     PomboDialogFrame("Join a channel", onDismiss) {
         PomboFieldLabel("CHANNEL ID")
@@ -2423,43 +2380,9 @@ internal fun JoinChannelDialog(onDismiss: () -> Unit, onJoin: (String, String?, 
             color = PomboColors.Overlay25, fontSize = 12.sp
         )
 
-        Spacer(Modifier.height(14.dp))
-        ClassificationChips(classification) { classification = it }
-
         Spacer(Modifier.height(20.dp))
         PomboPrimaryButton("Join", enabled = id.isNotBlank()) {
-            onJoin(id, password.ifEmpty { null }, localName.trim().ifEmpty { null }, classification)
-        }
-    }
-}
-
-/** Personal/Community selector shared by the join dialog and the local identity panel. */
-@Composable
-internal fun ClassificationChips(selected: String, onSelect: (String) -> Unit) {
-    Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-        listOf("personal" to "Personal", "community" to "Community").forEach { (value, label) ->
-            val active = selected == value
-            Box(
-                Modifier.weight(1f)
-                    .background(
-                        if (active) PomboColors.Overlay10 else PomboColors.Overlay5,
-                        RoundedCornerShape(8.dp)
-                    )
-                    .border(
-                        1.dp,
-                        Color.White.copy(alpha = if (active) 0.10f else 0.05f),
-                        RoundedCornerShape(8.dp)
-                    )
-                    .clickableNoRipple { onSelect(value) }
-                    .padding(vertical = 8.dp),
-                contentAlignment = Alignment.Center
-            ) {
-                Text(
-                    label,
-                    color = if (active) Color.White else PomboColors.Overlay50,
-                    fontSize = 12.sp, fontWeight = FontWeight.Medium
-                )
-            }
+            onJoin(id, password.ifEmpty { null }, localName.trim().ifEmpty { null })
         }
     }
 }
@@ -2473,12 +2396,9 @@ internal fun ClassificationChips(selected: String, onSelect: (String) -> Unit) {
 internal fun LocalChannelIdentityDialog(
     channel: Channel,
     onDismiss: () -> Unit,
-    onSave: (String, String) -> Unit
+    onSave: (String) -> Unit
 ) {
     var name by remember(channel.messageStreamId) { mutableStateOf(channel.name) }
-    var classification by remember(channel.messageStreamId) {
-        mutableStateOf(channel.classification ?: "personal")
-    }
 
     PomboDialogFrame("Name this channel", onDismiss) {
         Text(
@@ -2495,11 +2415,8 @@ internal fun LocalChannelIdentityDialog(
             color = PomboColors.Overlay25, fontSize = 12.sp
         )
 
-        Spacer(Modifier.height(14.dp))
-        ClassificationChips(classification) { classification = it }
-
         Spacer(Modifier.height(20.dp))
-        PomboPrimaryButton("Save", enabled = name.isNotBlank()) { onSave(name, classification) }
+        PomboPrimaryButton("Save", enabled = name.isNotBlank()) { onSave(name) }
     }
 }
 
