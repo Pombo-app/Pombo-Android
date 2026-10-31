@@ -1744,7 +1744,7 @@ class AppViewModel(app: Application) : AndroidViewModel(app), PomboBridge.Listen
         manager.reloadInvites()
         _contacts.value = contactsStore.load()
         _youtubeEmbeds.value = settingsStore.youtubeEmbeds
-        _homeTab.value = if (guest) com.pombo.android.core.HomeTab.DIRECT
+        _homeTab.value = if (guest) com.pombo.android.core.HomeTab.DEFAULT
             else com.pombo.android.core.HomeTab.fromId(settingsStore.homeTab)
         _nsfwEnabled.value = settingsStore.nsfwEnabled
         _ensAvatarsEnabled.value = settingsStore.ensAvatars

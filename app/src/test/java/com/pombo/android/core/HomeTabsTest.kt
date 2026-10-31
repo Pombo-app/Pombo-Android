@@ -14,9 +14,16 @@ class HomeTabsTest {
     }
 
     @Test
-    fun `stored ids round-trip and anything else falls back to Direct`() {
+    fun `Channels comes first and is where the Home opens`() {
+        assertEquals(listOf(HomeTab.CHANNELS, HomeTab.DIRECT), HomeTab.entries.toList())
+        assertEquals(HomeTab.CHANNELS, HomeTab.DEFAULT)
+    }
+
+    @Test
+    fun `stored ids round-trip, a remembered tab winning, and anything else falls back to Channels`() {
         HomeTab.entries.forEach { assertEquals(it, HomeTab.fromId(it.id)) }
-        assertEquals(HomeTab.DIRECT, HomeTab.fromId(null))
-        assertEquals(HomeTab.DIRECT, HomeTab.fromId("community"))
+        assertEquals(HomeTab.DIRECT, HomeTab.fromId("direct"))
+        assertEquals(HomeTab.CHANNELS, HomeTab.fromId(null))
+        assertEquals(HomeTab.CHANNELS, HomeTab.fromId("community"))
     }
 }
