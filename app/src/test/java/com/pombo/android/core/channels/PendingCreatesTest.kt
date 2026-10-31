@@ -33,7 +33,7 @@ class PendingCreatesTest {
     ) = PendingCreate(
         basePath = "0xowner/abcd", owner = "0xowner", name = "Test", type = type, password = null,
         exposure = "hidden", readOnly = false, description = "", language = "en", category = "general",
-        members = emptyList(), classification = null, storageProvider = "streamr", customStorageAddress = null,
+        members = emptyList(), storageProvider = "streamr", customStorageAddress = null,
         storageDays = 180, gateMode = 0, gateToken = null, gateMinBalance = null, gatePrice = null,
         gateDuration = null, wireIdentity = "sealed", publishKey = null, interactionsKey = null,
         startBlock = 100, gateAddress = gateAddress, startedAt = startedAt
