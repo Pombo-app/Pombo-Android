@@ -2806,18 +2806,15 @@ class ChannelManager(
             val since = unreadStore.watermark(streamId)
             val me = myAddress()
 
-            // Advance the watermark past ANY newer item, content or not, so
-            // a window full of reactions cannot make the next scan reread
-            // the same entries forever (web does the same). A row dated ahead
-            // of the clock would push it past every real message to come.
-            var maxTs = since
-            val latestAllowed = System.currentTimeMillis() + TIMESTAMP_TOLERANCE_MS
-            for (i in 0 until arr.length()) {
-                val ts = arr.optJSONObject(i)?.optJSONObject("meta")?.optLong("timestamp") ?: 0L
-                if (ts in (maxTs + 1)..latestAllowed) maxTs = ts
-            }
-
             val rows = openPreviewRows(channel, streamId, arr, channel.password)
+
+            // Advance the watermark past ANY newer row read, content or not, so
+            // a window full of reactions cannot make the next scan reread the
+            // same entries forever (web does the same). Only rows read, though:
+            // one dropped on a cold moderator cache, or for a key not held yet,
+            // must count once the next scan can open it. Rows dated ahead of
+            // the clock are already out.
+            val maxTs = maxOf(since, rows.maxOfOrNull { it.ts } ?: 0L)
             var newContent = 0
             for (row in rows) {
                 // Unread: content only, and not my own.
@@ -5399,6 +5396,17 @@ class ChannelManager(
     private suspend fun closeCurrentInternal(previewScope: Int? = previewStore.generation()) {
         val channel = _current.value ?: return
         saveReopenSnapshot(channel)
+        // Everything on screen counts as read, up to the newest row's time: the
+        // activity scan compares row times, so the clock would let a sender
+        // whose clock runs ahead have their read messages counted again.
+        if (previewScope != null) {
+            val latestAllowed = System.currentTimeMillis() + TIMESTAMP_TOLERANCE_MS
+            val seen = _messages.value
+                .map { it.envelopeTs.takeIf { ts -> ts > 0 } ?: it.timestamp }
+                .filter { it <= latestAllowed }
+                .maxOrNull() ?: 0L
+            unreadStore.clear(channel.messageStreamId, seenUpTo = seen)
+        }
         if (previewScope != null) _messages.value.filter { !it.failed }
             .maxByOrNull { it.envelopeTs.takeIf { ts -> ts > 0 } ?: it.timestamp }
             ?.let { m ->

@@ -114,14 +114,17 @@ class UnreadStore(context: Context) {
         prefs.edit().putString(watermarkKey(), o.toString()).apply()
     }
 
-    /** Called when the channel is opened — the web's "mark as read". */
+    /**
+     * Called when the channel is opened (everything up to now has been seen)
+     * and when it is closed (everything it showed has been seen) — the web's
+     * "mark as read". The watermark only moves forward.
+     */
     @Synchronized
-    fun clear(streamId: String) {
-        // Opening the channel means everything up to now has been seen, so the
-        // watermark moves too. Without this the next activity scan re-counts
-        // every message that was on screen a moment ago, because they are still
-        // newer than a watermark left behind at the last scan.
-        setWatermark(streamId, System.currentTimeMillis())
+    fun clear(streamId: String, seenUpTo: Long = System.currentTimeMillis()) {
+        // Without the watermark the next activity scan re-counts every message
+        // that was on screen a moment ago, because they are still newer than a
+        // watermark left behind at the last scan.
+        setWatermark(streamId, seenUpTo)
         if (_counts.value[streamId] == null) return
         val next = _counts.value.toMutableMap().apply { remove(streamId) }
         _counts.value = next
