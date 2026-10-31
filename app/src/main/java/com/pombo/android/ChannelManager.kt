@@ -1925,8 +1925,6 @@ class ChannelManager(
         category: String = "general",
         /** Closed channels: addresses granted access on-chain at creation. */
         members: List<String> = emptyList(),
-        /** Local-only grouping for closed channels ('personal' | 'community'). */
-        classification: String? = null,
         /** 'streamr' (Pombo cluster) or 'custom'. */
         storageProvider: String = "streamr",
         /** Only meaningful when storageProvider == 'custom'. */
@@ -1958,7 +1956,7 @@ class ChannelManager(
             owner = addr.lowercase(),
             name = name, type = type, password = password, exposure = exposure, readOnly = readOnly,
             description = description, language = language, category = category,
-            members = members, classification = classification,
+            members = members,
             storageProvider = storageProvider, customStorageAddress = customStorageAddress, storageDays = storageDays,
             gateMode = gateMode, gateToken = gateToken, gateMinBalance = gateMinBalance,
             gatePrice = gatePrice, gateDuration = gateDuration, wireIdentity = wireIdentity,
@@ -2064,7 +2062,6 @@ class ChannelManager(
         val language = start.language
         val category = start.category
         val members = start.members
-        val classification = start.classification
         val storageProvider = start.storageProvider
         val customStorageAddress = start.customStorageAddress
         val storageDays = start.storageDays
@@ -2345,7 +2342,6 @@ class ChannelManager(
             description = if (visible) description else "",
             language = if (visible) language else "",
             category = if (visible) category else "",
-            classification = classification,
             readOnly = readOnly,
             gateAddress = gateAddress,
             wireIdentity = if (type == "gated") wireIdentity else null
@@ -2493,7 +2489,6 @@ class ChannelManager(
         input: String,
         password: String? = null,
         localName: String? = null,
-        classification: String? = null,
         named: Boolean = false
     ): Channel {
         val messageStreamId = input.trim().let {
@@ -2595,7 +2590,6 @@ class ChannelManager(
             password = if (resolvedType == "password") password else null,
             exposure = exposure,
             description = descriptionMeta,
-            classification = classification,
             readOnly = if (resolvedType == "gated") gateReadOnly else !canPublish && canSubscribe,
             writeOnly = canPublish && !canSubscribe
         )

@@ -34,7 +34,7 @@ class PendingCreateStoreTest {
     private fun record(basePath: String, owner: String = a) = PendingCreate(
         basePath = basePath, owner = owner, name = "Group", type = "gated", password = null,
         exposure = "visible", readOnly = true, description = "d", language = "pt", category = "tech",
-        members = listOf("0xbob"), classification = null, storageProvider = "custom",
+        members = listOf("0xbob"), storageProvider = "custom",
         customStorageAddress = "0xnode", storageDays = 30, gateMode = 3, gateToken = "0xtoken",
         gateMinBalance = null, gatePrice = "1000000000000000000", gateDuration = 2_592_000L,
         wireIdentity = "sealed",

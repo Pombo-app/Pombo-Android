@@ -19,7 +19,6 @@ data class PendingCreate(
     val language: String,
     val category: String,
     val members: List<String>,
-    val classification: String?,
     val storageProvider: String,
     val customStorageAddress: String?,
     val storageDays: Int,
@@ -42,7 +41,6 @@ data class PendingCreate(
         .put("exposure", exposure).put("readOnly", readOnly)
         .put("description", description).put("language", language).put("category", category)
         .put("members", JSONArray(members))
-        .put("classification", classification ?: JSONObject.NULL)
         .put("storageProvider", storageProvider)
         .put("customStorageAddress", customStorageAddress ?: JSONObject.NULL)
         .put("storageDays", storageDays)
@@ -81,7 +79,6 @@ data class PendingCreate(
             language = o.optString("language", "en"),
             category = o.optString("category", "general"),
             members = o.optJSONArray("members")?.let { arr -> (0 until arr.length()).map { arr.getString(it) } } ?: emptyList(),
-            classification = o.text("classification"),
             storageProvider = o.optString("storageProvider", "streamr"),
             customStorageAddress = o.text("customStorageAddress"),
             storageDays = o.optInt("storageDays", 180),
