@@ -5399,6 +5399,17 @@ class ChannelManager(
     private suspend fun closeCurrentInternal(previewScope: Int? = previewStore.generation()) {
         val channel = _current.value ?: return
         saveReopenSnapshot(channel)
+        // Everything on screen counts as read, up to the newest row's time: the
+        // activity scan compares row times, so the clock would let a sender
+        // whose clock runs ahead have their read messages counted again.
+        if (previewScope != null) {
+            val latestAllowed = System.currentTimeMillis() + TIMESTAMP_TOLERANCE_MS
+            val seen = _messages.value
+                .map { it.envelopeTs.takeIf { ts -> ts > 0 } ?: it.timestamp }
+                .filter { it <= latestAllowed }
+                .maxOrNull() ?: 0L
+            unreadStore.clear(channel.messageStreamId, seenUpTo = seen)
+        }
         if (previewScope != null) _messages.value.filter { !it.failed }
             .maxByOrNull { it.envelopeTs.takeIf { ts -> ts > 0 } ?: it.timestamp }
             ?.let { m ->

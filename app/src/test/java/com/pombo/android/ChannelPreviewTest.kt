@@ -153,6 +153,27 @@ class ChannelPreviewTest {
     }
 
     @Test
+    fun `leaving a channel marks read up to its newest message on screen, from a clock ahead of mine too`() {
+        val ahead = System.currentTimeMillis() + 60_000
+        p0 = listOf(Row(text("m1", "read", ahead), at = ahead))
+        manager.openChannel(room.messageStreamId)
+
+        manager.closeCurrent()
+
+        verify { h.unreadStore.clear(room.messageStreamId, ahead) }
+    }
+
+    @Test
+    fun `an account switch marks nothing read in the next account's store`() {
+        p0 = listOf(Row(text("m1", "read", t0), at = t0))
+        manager.openChannel(room.messageStreamId)
+
+        manager.reloadChannels()
+
+        verify(exactly = 0) { h.unreadStore.clear(room.messageStreamId, t0) }
+    }
+
+    @Test
     fun `a channel closed by an account switch leaves nothing in the next account's previews`() {
         p0 = listOf(Row(text("m1", "the last account's secret", t0), at = t0))
         manager.openChannel(room.messageStreamId)

@@ -48,6 +48,10 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.material3.Icon
 import androidx.compose.material3.Text
 import androidx.compose.runtime.LaunchedEffect
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.compose.LocalLifecycleOwner
+import androidx.lifecycle.repeatOnLifecycle
+import kotlinx.coroutines.delay
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
@@ -114,10 +118,18 @@ internal fun ChatsTab(vm: AppViewModel, onContacts: () -> Unit, onConnect: () ->
     val channelOrder by vm.channelOrder.collectAsState()
     val filter by vm.homeTab.collectAsState()
 
-    // Landing on Chats is the moment the list is about to be read, so it is
-    // when the background channels are worth a look. Fires on every entry into
-    // the tab; the per-channel floor inside keeps that from hammering.
-    LaunchedEffect(Unit) { vm.scanChannelsActivity() }
+    // Background channels have no subscription: only the scan sees their new
+    // messages. On entry, then on a timer while the list is on screen; the
+    // per-channel floor inside keeps re-entries from hammering.
+    val lifecycleOwner = LocalLifecycleOwner.current
+    LaunchedEffect(lifecycleOwner) {
+        lifecycleOwner.repeatOnLifecycle(Lifecycle.State.STARTED) {
+            while (true) {
+                vm.scanChannelsActivity()
+                delay(30_000)
+            }
+        }
+    }
 
     // Apply the user's manual drag order: known ids first in their saved order,
     // everything else after in natural order (stable sort).
