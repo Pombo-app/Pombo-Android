@@ -136,72 +136,70 @@ internal fun ChatsTab(vm: AppViewModel, onContacts: () -> Unit, onConnect: () ->
     Box(Modifier.fillMaxSize()) {
         Column(Modifier.fillMaxSize()) {
             PomboHeader(status) {
-                if (isGuest) {
-                    CreateAccountButton(onConnect)
-                } else {
-                    Row(verticalAlignment = Alignment.CenterVertically) {
-                        HeaderIconButton(34.dp, onContacts) {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Box(if (isGuest) Modifier.alpha(GUEST_LOCKED_ALPHA) else Modifier) {
+                        HeaderIconButton(34.dp, if (isGuest) onConnect else onContacts) {
                             Icon(
                                 Icons.Outlined.People, contentDescription = "Contacts",
                                 tint = PomboColors.TextPrimary, modifier = Modifier.size(24.dp)
                             )
                         }
-                        Spacer(Modifier.width(8.dp))
-                        var transfersOpen by remember { mutableStateOf(false) }
-                        Box {
-                            TransfersButton(vm) { transfersOpen = true }
-                            androidx.compose.material3.DropdownMenu(
-                                expanded = transfersOpen,
-                                onDismissRequest = { transfersOpen = false },
-                                offset = androidx.compose.ui.unit.DpOffset(TRANSFERS_MENU_OFFSET, 0.dp),
-                                shape = RoundedCornerShape(12.dp),
-                                containerColor = PomboColors.SurfaceRaised,
-                                border = androidx.compose.foundation.BorderStroke(1.dp, PomboColors.Overlay10),
-                                // FIXED width: transfer stats redraw every second and a
-                                // wrap-content menu visibly breathes with each repaint.
-                                modifier = Modifier.width(320.dp)
-                            ) {
-                                ActiveTransfersSection(vm, channels)
-                            }
+                    }
+                    Spacer(Modifier.width(8.dp))
+                    var transfersOpen by remember { mutableStateOf(false) }
+                    Box {
+                        TransfersButton(vm) { transfersOpen = true }
+                        androidx.compose.material3.DropdownMenu(
+                            expanded = transfersOpen,
+                            onDismissRequest = { transfersOpen = false },
+                            offset = androidx.compose.ui.unit.DpOffset(TRANSFERS_MENU_OFFSET, 0.dp),
+                            shape = RoundedCornerShape(12.dp),
+                            containerColor = PomboColors.SurfaceRaised,
+                            border = androidx.compose.foundation.BorderStroke(1.dp, PomboColors.Overlay10),
+                            // FIXED width: transfer stats redraw every second and a
+                            // wrap-content menu visibly breathes with each repaint.
+                            modifier = Modifier.width(320.dp)
+                        ) {
+                            ActiveTransfersSection(vm, channels)
                         }
-                        Spacer(Modifier.width(8.dp))
-                        // Bell: recent channel invites. Android addition — on the
-                        // web an invite only ever exists as a transient toast; here
-                        // unanswered ones stay reachable until accepted/dismissed.
-                        val invites by vm.pendingInvites.collectAsState()
-                        val dismissedInvites by vm.dismissedInvites.collectAsState()
-                        var invitesOpen by remember { mutableStateOf(false) }
-                        // false = pending only (default on every open); true appends
-                        // dismissed invites, dimmed, with Accept still available.
-                        var showAllInvites by remember { mutableStateOf(false) }
-                        Box {
-                            HeaderIconButton(34.dp, { showAllInvites = false; invitesOpen = true }) {
-                                Icon(
-                                    Icons.Outlined.Notifications, contentDescription = "Channel invites",
-                                    tint = PomboColors.TextPrimary, modifier = Modifier.size(24.dp)
-                                )
-                            }
-                            if (invites.isNotEmpty()) HeaderBadge(invites.size, Modifier.align(Alignment.TopEnd))
-                            androidx.compose.material3.DropdownMenu(
-                                expanded = invitesOpen,
-                                onDismissRequest = { invitesOpen = false },
-                                // Shape/color/border belong on the menu's own surface:
-                                // a rounded background on the content leaves the
-                                // surface's square corners showing behind it.
-                                shape = RoundedCornerShape(12.dp),
-                                containerColor = PomboColors.SurfaceRaised,
-                                border = androidx.compose.foundation.BorderStroke(1.dp, PomboColors.Overlay10),
-                                modifier = Modifier.width(320.dp)
-                            ) {
-                                ChannelInvitesSection(
-                                    vm = vm,
-                                    invites = invites,
-                                    dismissedInvites = dismissedInvites,
-                                    showAll = showAllInvites,
-                                    onShowAll = { showAllInvites = it },
-                                    onAccepted = { invitesOpen = false }
-                                )
-                            }
+                    }
+                    Spacer(Modifier.width(8.dp))
+                    // Bell: recent channel invites. Android addition — on the
+                    // web an invite only ever exists as a transient toast; here
+                    // unanswered ones stay reachable until accepted/dismissed.
+                    val invites by vm.pendingInvites.collectAsState()
+                    val dismissedInvites by vm.dismissedInvites.collectAsState()
+                    var invitesOpen by remember { mutableStateOf(false) }
+                    // false = pending only (default on every open); true appends
+                    // dismissed invites, dimmed, with Accept still available.
+                    var showAllInvites by remember { mutableStateOf(false) }
+                    Box {
+                        HeaderIconButton(34.dp, { showAllInvites = false; invitesOpen = true }) {
+                            Icon(
+                                Icons.Outlined.Notifications, contentDescription = "Channel invites",
+                                tint = PomboColors.TextPrimary, modifier = Modifier.size(24.dp)
+                            )
+                        }
+                        if (invites.isNotEmpty()) HeaderBadge(invites.size, Modifier.align(Alignment.TopEnd))
+                        androidx.compose.material3.DropdownMenu(
+                            expanded = invitesOpen,
+                            onDismissRequest = { invitesOpen = false },
+                            // Shape/color/border belong on the menu's own surface:
+                            // a rounded background on the content leaves the
+                            // surface's square corners showing behind it.
+                            shape = RoundedCornerShape(12.dp),
+                            containerColor = PomboColors.SurfaceRaised,
+                            border = androidx.compose.foundation.BorderStroke(1.dp, PomboColors.Overlay10),
+                            modifier = Modifier.width(320.dp)
+                        ) {
+                            ChannelInvitesSection(
+                                vm = vm,
+                                invites = invites,
+                                dismissedInvites = dismissedInvites,
+                                showAll = showAllInvites,
+                                onShowAll = { showAllInvites = it },
+                                onAccepted = { invitesOpen = false }
+                            )
                         }
                     }
                 }
@@ -255,7 +253,9 @@ internal fun ChatsTab(vm: AppViewModel, onContacts: () -> Unit, onConnect: () ->
                 )
             }
 
-            if (filtered.isEmpty()) {
+            if (guestCardShown(isGuest, channels.size)) {
+                GuestHomeCard(onConnect)
+            } else if (filtered.isEmpty()) {
                 Column(
                     Modifier.weight(1f).fillMaxWidth(),
                     horizontalAlignment = Alignment.CenterHorizontally,
@@ -404,6 +404,37 @@ internal fun ChatsTab(vm: AppViewModel, onContacts: () -> Unit, onConnect: () ->
             onDismiss = { showDmSetup = false },
             onCreate = { provider, custom, days -> vm.setupDmInbox(provider, custom, days) }
         )
+    }
+}
+
+/** A guest with nothing in the Home list is shown the way to an account, in either tab. */
+internal fun guestCardShown(isGuest: Boolean, channelCount: Int): Boolean = isGuest && channelCount == 0
+
+@Composable
+private fun GuestHomeCard(onCreate: () -> Unit) {
+    Column(
+        Modifier
+            .fillMaxWidth()
+            .padding(horizontal = 10.dp, vertical = 8.dp)
+            .background(PomboColors.Overlay2, RoundedCornerShape(12.dp))
+            .border(1.dp, PomboColors.Overlay4, RoundedCornerShape(12.dp))
+            .padding(16.dp),
+        horizontalAlignment = Alignment.CenterHorizontally
+    ) {
+        Text(
+            "You're browsing as a guest. Your identity and data aren't saved. Create an account to keep them.",
+            color = PomboColors.Overlay60, fontSize = 13.sp,
+            textAlign = androidx.compose.ui.text.style.TextAlign.Center
+        )
+        Spacer(Modifier.height(12.dp))
+        Box(
+            Modifier
+                .background(PomboColors.Accent, RoundedCornerShape(12.dp))
+                .clickableNoRipple(onCreate)
+                .padding(horizontal = 16.dp, vertical = 8.dp)
+        ) {
+            Text("Create account", color = Color.White, fontSize = 14.sp, fontWeight = FontWeight.Medium)
+        }
     }
 }
 

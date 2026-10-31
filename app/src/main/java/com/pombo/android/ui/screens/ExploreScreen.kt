@@ -68,7 +68,7 @@ import com.pombo.android.ui.theme.PomboColors
 
 @Composable
 @OptIn(androidx.compose.foundation.layout.ExperimentalLayoutApi::class)
-internal fun ExploreTab(vm: AppViewModel, onCreate: () -> Unit, onJoin: () -> Unit, onConnect: () -> Unit) {
+internal fun ExploreTab(vm: AppViewModel, onCreate: () -> Unit, onJoin: () -> Unit) {
     val items by vm.explore.collectAsState()
     val loading by vm.exploreLoading.collectAsState()
     val directoryFailed by vm.exploreDirectoryFailed.collectAsState()
@@ -132,10 +132,8 @@ internal fun ExploreTab(vm: AppViewModel, onCreate: () -> Unit, onJoin: () -> Un
                         modifier = Modifier.semantics { contentDescription = "Join by ID" }
                     )
                 }
-                Spacer(Modifier.width(12.dp))
-                if (isGuest) {
-                    CreateAccountButton(onConnect)
-                } else {
+                if (!isGuest) {
+                    Spacer(Modifier.width(12.dp))
                     // Web #header-create-channel-btn: `px-4 py-1.5 rounded-xl
                     // bg-[#F6851B]/15 border-[#F6851B]/30` with a WHITE plus — a
                     // rounded rectangle, not the circle we had, and the glyph is

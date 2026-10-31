@@ -176,10 +176,7 @@ fun MainShell(vm: AppViewModel) {
                     onConnect = { showConnect = true },
                     onExplore = { tab = Tab.EXPLORE }
                 )
-                Tab.EXPLORE -> ExploreTab(
-                    vm, onCreate = { showCreate = true }, onJoin = { showJoin = true },
-                    onConnect = { showConnect = true }
-                )
+                Tab.EXPLORE -> ExploreTab(vm, onCreate = { showCreate = true }, onJoin = { showJoin = true })
                 Tab.CONTACTS -> ContactsTab(vm)
                 Tab.SETTINGS -> SettingsTab(
                     vm, settingsPanel,
@@ -206,8 +203,8 @@ fun MainShell(vm: AppViewModel) {
                 current = tab,
                 address = vm.address.collectAsState().value,
                 ensAvatarUrl = vm.ensAvatars.collectAsState().value[vm.address.collectAsState().value?.lowercase()],
-                showWallet = !isGuest,
-                onWallet = { walletOpen = true },
+                isGuest = isGuest,
+                onWallet = { if (isGuest) showConnect = true else walletOpen = true },
                 onSelect = { picked ->
                     tab = picked
                     // Settings always opens on its section list.
@@ -242,8 +239,8 @@ private fun PillNav(
     address: String?,
     /** ENS picture for my own address, when the account has one. */
     ensAvatarUrl: String? = null,
-    /** A guest is a throwaway identity, not an account with funds. */
-    showWallet: Boolean,
+    /** A guest's Wallet is dimmed and leads to an account; the avatar carries a "Guest" label. */
+    isGuest: Boolean,
     onWallet: () -> Unit,
     onSelect: (Tab) -> Unit,
     modifier: Modifier = Modifier
@@ -259,7 +256,24 @@ private fun PillNav(
         listOf(Tab.CHATS, Tab.EXPLORE, null, Tab.SETTINGS, Tab.PROFILE).forEach { t ->
             if (t == null) {
                 // Wallet opens a sheet over the current view and is never the active tab.
-                if (showWallet) PillItem("Wallet", Icons.Outlined.AccountBalanceWallet, active = false, onClick = onWallet)
+                PillItem(
+                    "Wallet", Icons.Outlined.AccountBalanceWallet, active = false,
+                    modifier = if (isGuest) Modifier.alpha(GUEST_LOCKED_ALPHA) else Modifier,
+                    onClick = onWallet
+                )
+            } else if (t == Tab.PROFILE && isGuest && address != null) {
+                val active = current == t
+                Column(
+                    Modifier
+                        .clickableNoRipple { onSelect(t) }
+                        .background(if (active) PomboColors.Accent.copy(alpha = 0.22f) else Color.Transparent, RoundedCornerShape(24.dp))
+                        .padding(horizontal = 12.dp, vertical = 6.dp),
+                    horizontalAlignment = Alignment.CenterHorizontally,
+                    verticalArrangement = Arrangement.spacedBy(2.dp)
+                ) {
+                    Avatar(address, size = 24.dp, cornerRadiusFraction = 0.5)
+                    Text("Guest", color = PomboColors.Accent, fontSize = 10.sp, fontWeight = FontWeight.Medium)
+                }
             } else if (t == Tab.PROFILE) {
                 val active = current == t
                 Box(
@@ -364,26 +378,6 @@ private fun NetworkDot(modifier: Modifier = Modifier) {
     }
 }
 
-/** A guest's header action, sized like the icon buttons it stands in for. */
-@Composable
-internal fun CreateAccountButton(onClick: () -> Unit) {
-    Row(
-        Modifier
-            .height(32.dp)
-            .background(PomboColors.Accent, RoundedCornerShape(12.dp))
-            .clickableNoRipple(onClick)
-            .padding(horizontal = 14.dp),
-        verticalAlignment = Alignment.CenterVertically
-    ) {
-        Icon(
-            Icons.Outlined.Person, contentDescription = null,
-            tint = Color.White, modifier = Modifier.size(14.dp)
-        )
-        Spacer(Modifier.width(6.dp))
-        Text("Create Account", color = Color.White, fontSize = 13.sp, fontWeight = FontWeight.Medium)
-    }
-}
-
 /**
  * Reached from a plain "About" button on Profile (2026-08-21), not an inline
  * text block — the disclaimer is a legal notice, copied verbatim from the
@@ -431,8 +425,9 @@ private fun ProfileTab(vm: AppViewModel, onAddAccount: () -> Unit) {
         // "No name" was a dead end for an account without one — a guest, above
         // all, which now has no username at all.
         Text(
-            myEns ?: username ?: addr?.let { shortAddr(it) } ?: "No name",
-            color = PomboColors.TextPrimary, fontSize = 20.sp, fontWeight = FontWeight.Bold
+            if (isGuest) "Guest" else myEns ?: username ?: addr?.let { shortAddr(it) } ?: "No name",
+            color = if (isGuest) PomboColors.Accent else PomboColors.TextPrimary,
+            fontSize = 20.sp, fontWeight = FontWeight.Bold
         )
         Spacer(Modifier.height(4.dp))
         if (myEns != null && username != null) {
@@ -500,14 +495,18 @@ private fun ProfileTab(vm: AppViewModel, onAddAccount: () -> Unit) {
             Modifier.fillMaxWidth().background(PomboColors.Bg, RoundedCornerShape(12.dp))
                 .border(1.dp, PomboColors.Overlay8, RoundedCornerShape(12.dp))
         ) {
-            ProfileAction("Add account", Icons.Outlined.AddCircleOutline, onClick = onAddAccount)
-            androidx.compose.material3.HorizontalDivider(color = PomboColors.Overlay8)
-            // Leaves the account behind rather than erasing it: `disconnect()`
-            // calls WalletStore.clear(), which drops the current account's key
-            // for good. Destroying an account belongs in Settings → Security,
-            // behind its device-auth gate and typed confirmation — not one tap
-            // away in the profile menu.
-            ProfileAction("Browse as guest", com.pombo.android.ui.PomboIcons.Ghost) { vm.browseAsGuest() }
+            profileEntries(isGuest).forEachIndexed { i, entry ->
+                if (i > 0) androidx.compose.material3.HorizontalDivider(color = PomboColors.Overlay8)
+                when (entry) {
+                    ProfileEntry.ADD_ACCOUNT -> ProfileAction(entry.label, Icons.Outlined.AddCircleOutline, onClick = onAddAccount)
+                    // Leaves the account behind rather than erasing it: `disconnect()`
+                    // calls WalletStore.clear(), which drops the current account's key
+                    // for good. Destroying an account belongs in Settings → Security,
+                    // behind its device-auth gate and typed confirmation — not one tap
+                    // away in the profile menu.
+                    ProfileEntry.BROWSE_AS_GUEST -> ProfileAction(entry.label, com.pombo.android.ui.PomboIcons.Ghost) { vm.browseAsGuest() }
+                }
+            }
         }
         // Moved out of Settings (2026-08-21 user call): About is app-level, not
         // account-scoped, and this screen is what "the avatar" means on Android —
@@ -526,6 +525,16 @@ private fun ProfileTab(vm: AppViewModel, onAddAccount: () -> Unit) {
         if (showAbout) AboutDialog(onDismiss = { showAbout = false })
     }
 }
+
+internal enum class ProfileEntry(val label: String) {
+    ADD_ACCOUNT("Add account"),
+    BROWSE_AS_GUEST("Browse as guest")
+}
+
+/** The profile's account actions: a guest is already the guest session, so it only gets Add account. */
+internal fun profileEntries(isGuest: Boolean): List<ProfileEntry> =
+    if (isGuest) listOf(ProfileEntry.ADD_ACCOUNT)
+    else listOf(ProfileEntry.ADD_ACCOUNT, ProfileEntry.BROWSE_AS_GUEST)
 
 @Composable
 private fun ProfileAction(
@@ -563,6 +572,9 @@ private fun ProfileAction(
  * pill sat on top of the "New DM" button.
  */
 internal val PILL_NAV_HEIGHT = 58.dp
+
+/** What needs an account, as a guest sees it (web: body.guest-mode [data-guest-locked]). */
+internal const val GUEST_LOCKED_ALPHA = 0.4f
 
 /**
  * The pill's clearance from the (nav-bar-padded) bottom edge. Was 2rem,
