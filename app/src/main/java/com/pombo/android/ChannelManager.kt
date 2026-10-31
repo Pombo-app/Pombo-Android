@@ -2806,18 +2806,15 @@ class ChannelManager(
             val since = unreadStore.watermark(streamId)
             val me = myAddress()
 
-            // Advance the watermark past ANY newer item, content or not, so
-            // a window full of reactions cannot make the next scan reread
-            // the same entries forever (web does the same). A row dated ahead
-            // of the clock would push it past every real message to come.
-            var maxTs = since
-            val latestAllowed = System.currentTimeMillis() + TIMESTAMP_TOLERANCE_MS
-            for (i in 0 until arr.length()) {
-                val ts = arr.optJSONObject(i)?.optJSONObject("meta")?.optLong("timestamp") ?: 0L
-                if (ts in (maxTs + 1)..latestAllowed) maxTs = ts
-            }
-
             val rows = openPreviewRows(channel, streamId, arr, channel.password)
+
+            // Advance the watermark past ANY newer row read, content or not, so
+            // a window full of reactions cannot make the next scan reread the
+            // same entries forever (web does the same). Only rows read, though:
+            // one dropped on a cold moderator cache, or for a key not held yet,
+            // must count once the next scan can open it. Rows dated ahead of
+            // the clock are already out.
+            val maxTs = maxOf(since, rows.maxOfOrNull { it.ts } ?: 0L)
             var newContent = 0
             for (row in rows) {
                 // Unread: content only, and not my own.

@@ -153,6 +153,26 @@ class ChannelPreviewTest {
     }
 
     @Test
+    fun `a moderator's message dropped on a cold cache is counted by the next scan`() {
+        val gate = "0x" + "9a".repeat(20)
+        val news = gatedRoom.copy(gateAddress = gate, readOnly = true)
+        coEvery { h.bridge.call("gateIsModerator", any(), any()) } returns JSONObject().put("moderator", true)
+        coEvery { h.bridge.call("resend", any(), any()) } returns JSONObject().put("messages", JSONArray().put(JSONObject()
+            .put("content", text("m1", "from a moderator", t0))
+            .put("meta", JSONObject().put("publisherId", gate).put("signer", other).put("timestamp", t0))))
+
+        runBlocking { manager.scanChannelActivity(news) }
+
+        verify(exactly = 0) { h.unreadStore.setWatermark(news.messageStreamId, t0) }
+        verify(exactly = 0) { h.unreadStore.add(news.messageStreamId, any()) }
+
+        runBlocking { manager.scanChannelActivity(news) }
+
+        verify { h.unreadStore.add(news.messageStreamId, 1) }
+        verify { h.unreadStore.setWatermark(news.messageStreamId, t0) }
+    }
+
+    @Test
     fun `leaving a channel marks read up to its newest message on screen, from a clock ahead of mine too`() {
         val ahead = System.currentTimeMillis() + 60_000
         p0 = listOf(Row(text("m1", "read", ahead), at = ahead))
