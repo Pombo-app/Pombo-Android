@@ -432,7 +432,8 @@ internal class FileTransfers(private val manager: ChannelManager) {
                 gateAddress = gate,
                 sharedPublishKeyHex = sharedKeyHex,
                 messageId = id,
-                transferId = tid
+                transferId = tid,
+                onLaterChunkRows = if (isDm) { rows -> manager.rememberDmFileRows(id, rows) } else null
             )
             // Replace the draft with the confirmed metadata from the announce.
             val finalMeta = com.pombo.android.core.StorageMedia.StorageFileMetadata
