@@ -132,273 +132,268 @@ internal fun ChatsTab(vm: AppViewModel, onContacts: () -> Unit, onConnect: () ->
     }
     val filtered = ordered.filter { HomeTab.of(it.type) == filter }
 
-    Column(Modifier.fillMaxSize()) {
-        PomboHeader(status) {
-            if (isGuest) {
-                CreateAccountButton(onConnect)
-            } else {
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    HeaderIconButton(34.dp, onContacts) {
-                        Icon(
-                            Icons.Outlined.People, contentDescription = "Contacts",
-                            tint = PomboColors.TextPrimary, modifier = Modifier.size(24.dp)
-                        )
-                    }
-                    Spacer(Modifier.width(8.dp))
-                    var transfersOpen by remember { mutableStateOf(false) }
-                    Box {
-                        TransfersButton(vm) { transfersOpen = true }
-                        androidx.compose.material3.DropdownMenu(
-                            expanded = transfersOpen,
-                            onDismissRequest = { transfersOpen = false },
-                            offset = androidx.compose.ui.unit.DpOffset(TRANSFERS_MENU_OFFSET, 0.dp),
-                            shape = RoundedCornerShape(12.dp),
-                            containerColor = PomboColors.SurfaceRaised,
-                            border = androidx.compose.foundation.BorderStroke(1.dp, PomboColors.Overlay10),
-                            // FIXED width: transfer stats redraw every second and a
-                            // wrap-content menu visibly breathes with each repaint.
-                            modifier = Modifier.width(320.dp)
-                        ) {
-                            ActiveTransfersSection(vm, channels)
-                        }
-                    }
-                    Spacer(Modifier.width(8.dp))
-                    // Bell: recent channel invites. Android addition — on the
-                    // web an invite only ever exists as a transient toast; here
-                    // unanswered ones stay reachable until accepted/dismissed.
-                    val invites by vm.pendingInvites.collectAsState()
-                    val dismissedInvites by vm.dismissedInvites.collectAsState()
-                    var invitesOpen by remember { mutableStateOf(false) }
-                    // false = pending only (default on every open); true appends
-                    // dismissed invites, dimmed, with Accept still available.
-                    var showAllInvites by remember { mutableStateOf(false) }
-                    Box {
-                        HeaderIconButton(34.dp, { showAllInvites = false; invitesOpen = true }) {
+    val hasDmInbox by vm.hasDmInbox.collectAsState()
+    var showNewDm by remember { mutableStateOf(false) }
+    var showDmSetup by remember { mutableStateOf(false) }
+    LaunchedEffect(isGuest) { vm.refreshDmInbox() }
+
+    Box(Modifier.fillMaxSize()) {
+        Column(Modifier.fillMaxSize()) {
+            PomboHeader(status) {
+                if (isGuest) {
+                    CreateAccountButton(onConnect)
+                } else {
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        HeaderIconButton(34.dp, onContacts) {
                             Icon(
-                                Icons.Outlined.Notifications, contentDescription = "Channel invites",
+                                Icons.Outlined.People, contentDescription = "Contacts",
                                 tint = PomboColors.TextPrimary, modifier = Modifier.size(24.dp)
                             )
                         }
-                        if (invites.isNotEmpty()) HeaderBadge(invites.size, Modifier.align(Alignment.TopEnd))
-                        androidx.compose.material3.DropdownMenu(
-                            expanded = invitesOpen,
-                            onDismissRequest = { invitesOpen = false },
-                            // Shape/color/border belong on the menu's own surface:
-                            // a rounded background on the content leaves the
-                            // surface's square corners showing behind it.
-                            shape = RoundedCornerShape(12.dp),
-                            containerColor = PomboColors.SurfaceRaised,
-                            border = androidx.compose.foundation.BorderStroke(1.dp, PomboColors.Overlay10),
-                            modifier = Modifier.width(320.dp)
+                        Spacer(Modifier.width(8.dp))
+                        var transfersOpen by remember { mutableStateOf(false) }
+                        Box {
+                            TransfersButton(vm) { transfersOpen = true }
+                            androidx.compose.material3.DropdownMenu(
+                                expanded = transfersOpen,
+                                onDismissRequest = { transfersOpen = false },
+                                offset = androidx.compose.ui.unit.DpOffset(TRANSFERS_MENU_OFFSET, 0.dp),
+                                shape = RoundedCornerShape(12.dp),
+                                containerColor = PomboColors.SurfaceRaised,
+                                border = androidx.compose.foundation.BorderStroke(1.dp, PomboColors.Overlay10),
+                                // FIXED width: transfer stats redraw every second and a
+                                // wrap-content menu visibly breathes with each repaint.
+                                modifier = Modifier.width(320.dp)
+                            ) {
+                                ActiveTransfersSection(vm, channels)
+                            }
+                        }
+                        Spacer(Modifier.width(8.dp))
+                        // Bell: recent channel invites. Android addition — on the
+                        // web an invite only ever exists as a transient toast; here
+                        // unanswered ones stay reachable until accepted/dismissed.
+                        val invites by vm.pendingInvites.collectAsState()
+                        val dismissedInvites by vm.dismissedInvites.collectAsState()
+                        var invitesOpen by remember { mutableStateOf(false) }
+                        // false = pending only (default on every open); true appends
+                        // dismissed invites, dimmed, with Accept still available.
+                        var showAllInvites by remember { mutableStateOf(false) }
+                        Box {
+                            HeaderIconButton(34.dp, { showAllInvites = false; invitesOpen = true }) {
+                                Icon(
+                                    Icons.Outlined.Notifications, contentDescription = "Channel invites",
+                                    tint = PomboColors.TextPrimary, modifier = Modifier.size(24.dp)
+                                )
+                            }
+                            if (invites.isNotEmpty()) HeaderBadge(invites.size, Modifier.align(Alignment.TopEnd))
+                            androidx.compose.material3.DropdownMenu(
+                                expanded = invitesOpen,
+                                onDismissRequest = { invitesOpen = false },
+                                // Shape/color/border belong on the menu's own surface:
+                                // a rounded background on the content leaves the
+                                // surface's square corners showing behind it.
+                                shape = RoundedCornerShape(12.dp),
+                                containerColor = PomboColors.SurfaceRaised,
+                                border = androidx.compose.foundation.BorderStroke(1.dp, PomboColors.Overlay10),
+                                modifier = Modifier.width(320.dp)
+                            ) {
+                                ChannelInvitesSection(
+                                    vm = vm,
+                                    invites = invites,
+                                    dismissedInvites = dismissedInvites,
+                                    showAll = showAllInvites,
+                                    onShowAll = { showAllInvites = it },
+                                    onAccepted = { invitesOpen = false }
+                                )
+                            }
+                        }
+                    }
+                }
+            }
+
+            // Home tabs (Direct Messages / Channels) — active gets an orange underline
+            Box(Modifier.fillMaxWidth().padding(horizontal = 8.dp)) {
+                androidx.compose.material3.HorizontalDivider(
+                    color = PomboColors.Overlay6,
+                    modifier = Modifier.align(Alignment.BottomCenter)
+                )
+                Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceEvenly) {
+                    HomeTab.entries.forEach { f ->
+                        val active = f == filter
+                        Column(
+                            Modifier.weight(1f).clickableNoRipple { vm.setHomeTab(f) },
+                            horizontalAlignment = Alignment.CenterHorizontally
                         ) {
-                            ChannelInvitesSection(
-                                vm = vm,
-                                invites = invites,
-                                dismissedInvites = dismissedInvites,
-                                showAll = showAllInvites,
-                                onShowAll = { showAllInvites = it },
-                                onAccepted = { invitesOpen = false }
+                            Text(
+                                f.label.uppercase(),
+                                color = if (active) PomboColors.Accent else PomboColors.Overlay30,
+                                fontSize = 10.sp,
+                                fontWeight = FontWeight.Medium,
+                                letterSpacing = 0.15.em,
+                                modifier = Modifier.padding(vertical = 10.dp)
+                            )
+                            Box(
+                                Modifier.fillMaxWidth().height(2.dp)
+                                    .background(if (active) PomboColors.Accent else Color.Transparent)
                             )
                         }
                     }
                 }
             }
-        }
 
-        // Home tabs (Direct Messages / Channels) — active gets an orange underline
-        Box(Modifier.fillMaxWidth().padding(horizontal = 8.dp)) {
-            androidx.compose.material3.HorizontalDivider(
-                color = PomboColors.Overlay6,
-                modifier = Modifier.align(Alignment.BottomCenter)
-            )
-            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceEvenly) {
-                HomeTab.entries.forEach { f ->
-                    val active = f == filter
-                    Column(
-                        Modifier.weight(1f).clickableNoRipple { vm.setHomeTab(f) },
-                        horizontalAlignment = Alignment.CenterHorizontally
-                    ) {
-                        Text(
-                            f.label.uppercase(),
-                            color = if (active) PomboColors.Accent else PomboColors.Overlay30,
-                            fontSize = 10.sp,
-                            fontWeight = FontWeight.Medium,
-                            letterSpacing = 0.15.em,
-                            modifier = Modifier.padding(vertical = 10.dp)
-                        )
-                        Box(
-                            Modifier.fillMaxWidth().height(2.dp)
-                                .background(if (active) PomboColors.Accent else Color.Transparent)
-                        )
-                    }
-                }
-            }
-        }
-
-        val interrupted by vm.interruptedCreates.collectAsState()
-        var confirmDiscard by remember { mutableStateOf<com.pombo.android.data.PendingCreate?>(null) }
-        interrupted.forEach { pending ->
-            InterruptedCreateRow(
-                pending,
-                enabled = !busy,
-                onFinish = { vm.finishInterruptedCreate(pending.basePath) },
-                onDiscard = { confirmDiscard = pending }
-            )
-        }
-        confirmDiscard?.let { pending ->
-            DiscardCreateDialog(
-                pending,
-                onDismiss = { confirmDiscard = null },
-                onDiscard = { confirmDiscard = null; vm.discardInterruptedCreate(pending.basePath) }
-            )
-        }
-
-        if (filtered.isEmpty()) {
-            Column(
-                Modifier.weight(1f).fillMaxWidth(),
-                horizontalAlignment = Alignment.CenterHorizontally,
-                verticalArrangement = Arrangement.Center
-            ) {
-                Text(
-                    when {
-                        busy -> "…"
-                        filter == HomeTab.DIRECT -> "No direct messages yet"
-                        else -> "No channels yet"
-                    },
-                    color = PomboColors.TextSecondary, fontSize = 14.sp,
-                    textAlign = androidx.compose.ui.text.style.TextAlign.Center
+            val interrupted by vm.interruptedCreates.collectAsState()
+            var confirmDiscard by remember { mutableStateOf<com.pombo.android.data.PendingCreate?>(null) }
+            interrupted.forEach { pending ->
+                InterruptedCreateRow(
+                    pending,
+                    enabled = !busy,
+                    onFinish = { vm.finishInterruptedCreate(pending.basePath) },
+                    onDiscard = { confirmDiscard = pending }
                 )
-                if (!busy && filter == HomeTab.CHANNELS) {
-                    Spacer(Modifier.height(12.dp))
-                    EmptyStateButton("Explore channels", onExplore)
-                }
             }
-        } else {
-            // Swipe left/right anywhere on the list to move between the filter
-            // tabs, like the web (initChannelFilterSwipe: >50px horizontal).
-            var swipeAccum by remember { mutableFloatStateOf(0f) }
-            val swipeThreshold = with(LocalDensity.current) { 56.dp.toPx() }
-            val listState = androidx.compose.foundation.lazy.rememberLazyListState()
-            // Drag-to-reorder (hold and drag) in EVERY tab, like the web: there
-            // is one saved order (secureStorage.channelOrder) and each tab is a
-            // window onto it. See [mergeOrder] for how a reordered slice folds
-            // back into the full list.
-            var draggingKey by remember { mutableStateOf<String?>(null) }
-            var dragOffset by remember { mutableFloatStateOf(0f) }
-            var localOrder by remember { mutableStateOf(filtered) }
-            LaunchedEffect(filtered) { if (draggingKey == null) localOrder = filtered }
+            confirmDiscard?.let { pending ->
+                DiscardCreateDialog(
+                    pending,
+                    onDismiss = { confirmDiscard = null },
+                    onDiscard = { confirmDiscard = null; vm.discardInterruptedCreate(pending.basePath) }
+                )
+            }
 
-            // The list runs to the foot of the screen, under the DM button and
-            // the floating pill: it is cut there whatever we do, so the cut is
-            // faded into the background instead of left as a sliced card.
-            Box(Modifier.weight(1f).fillMaxWidth()) {
-            LazyColumn(
-                state = listState,
-                modifier = Modifier.fillMaxSize()
-                    .pointerInput(filter) {
-                        detectHorizontalDragGestures(
-                            onDragEnd = {
-                                val order = HomeTab.entries
-                                val i = order.indexOf(filter)
-                                if (swipeAccum < -swipeThreshold && i < order.lastIndex) vm.setHomeTab(order[i + 1])
-                                else if (swipeAccum > swipeThreshold && i > 0) vm.setHomeTab(order[i - 1])
-                                swipeAccum = 0f
-                            },
-                            onDragCancel = { swipeAccum = 0f },
-                            onHorizontalDrag = { _, delta -> swipeAccum += delta }
-                        )
-                    },
-                contentPadding = PaddingValues(start = 10.dp, end = 10.dp, top = 6.dp, bottom = 18.dp),
-                verticalArrangement = Arrangement.spacedBy(6.dp)
-            ) {
-                itemsIndexed(localOrder, key = { _, ch -> ch.messageStreamId }) { _, ch ->
-                    val isDragging = ch.messageStreamId == draggingKey
-                    LaunchedEffect(ch.messageStreamId) { vm.ensureChannelPreview(ch) }
-                    Box(
-                        Modifier
-                            .zIndex(if (isDragging) 1f else 0f)
-                            .graphicsLayer { translationY = if (isDragging) dragOffset else 0f }
-                            .then(
-                                Modifier.pointerInput(ch.messageStreamId) {
-                                    detectDragGesturesAfterLongPress(
-                                        onDragStart = { draggingKey = ch.messageStreamId; dragOffset = 0f },
-                                        onDragEnd = {
-                                            vm.setChannelOrder(
-                                                mergeOrder(
-                                                    ordered.map { it.messageStreamId },
-                                                    localOrder.map { it.messageStreamId }
-                                                )
-                                            )
-                                            draggingKey = null; dragOffset = 0f
-                                        },
-                                        onDragCancel = { draggingKey = null; dragOffset = 0f },
-                                        onDrag = { change, amount ->
-                                            change.consume()
-                                            dragOffset += amount.y
-                                            val cur = localOrder.indexOfFirst { it.messageStreamId == draggingKey }
-                                            if (cur < 0) return@detectDragGesturesAfterLongPress
-                                            val row = listState.layoutInfo.visibleItemsInfo
-                                                .firstOrNull { it.key == draggingKey } ?: return@detectDragGesturesAfterLongPress
-                                            val step = row.size + 2.dp.toPx()   // row height + spacing
-                                            if (dragOffset > step / 2 && cur < localOrder.lastIndex) {
-                                                localOrder = localOrder.toMutableList().apply { add(cur + 1, removeAt(cur)) }
-                                                dragOffset -= step
-                                            } else if (dragOffset < -step / 2 && cur > 0) {
-                                                localOrder = localOrder.toMutableList().apply { add(cur - 1, removeAt(cur)) }
-                                                dragOffset += step
-                                            }
-                                        }
-                                    )
-                                }
-                            )
-                    ) {
-                        ChannelListItem(
-                            ch,
-                            image = channelImages[ch.adminStreamId],
-                            preview = channelPreviews[ch.messageStreamId],
-                            peerEnsAvatarUrl = ch.peerAddress?.let { ensAvatars[it.lowercase()] },
-                            ensNames = ensNames,
-                            unread = unreadCounts[ch.messageStreamId] ?: 0,
-                            myAddress = myAddress,
-                            onOpen = { vm.openChannel(ch.messageStreamId, com.pombo.android.AppViewModel.ChatOrigin.CHATS) }
-                        )
+            if (filtered.isEmpty()) {
+                Column(
+                    Modifier.weight(1f).fillMaxWidth(),
+                    horizontalAlignment = Alignment.CenterHorizontally,
+                    verticalArrangement = Arrangement.Center
+                ) {
+                    Text(
+                        when {
+                            busy -> "…"
+                            filter == HomeTab.DIRECT -> "No direct messages yet"
+                            else -> "No channels yet"
+                        },
+                        color = PomboColors.TextSecondary, fontSize = 14.sp,
+                        textAlign = androidx.compose.ui.text.style.TextAlign.Center
+                    )
+                    if (!busy && filter == HomeTab.CHANNELS) {
+                        Spacer(Modifier.height(12.dp))
+                        EmptyStateButton("Explore channels", onExplore)
                     }
                 }
-            }
-            Box(
-                Modifier.align(Alignment.BottomCenter).fillMaxWidth().height(32.dp)
-                    .background(
-                        Brush.verticalGradient(
-                            listOf(Color.Transparent, PomboColors.Bg)
+            } else {
+                // Swipe left/right anywhere on the list to move between the filter
+                // tabs, like the web (initChannelFilterSwipe: >50px horizontal).
+                var swipeAccum by remember { mutableFloatStateOf(0f) }
+                val swipeThreshold = with(LocalDensity.current) { 56.dp.toPx() }
+                val listState = androidx.compose.foundation.lazy.rememberLazyListState()
+                // Drag-to-reorder (hold and drag) in EVERY tab, like the web: there
+                // is one saved order (secureStorage.channelOrder) and each tab is a
+                // window onto it. See [mergeOrder] for how a reordered slice folds
+                // back into the full list.
+                var draggingKey by remember { mutableStateOf<String?>(null) }
+                var dragOffset by remember { mutableFloatStateOf(0f) }
+                var localOrder by remember { mutableStateOf(filtered) }
+                LaunchedEffect(filtered) { if (draggingKey == null) localOrder = filtered }
+
+                // The list runs to the foot of the screen, under the DM button and
+                // the floating pill: it is cut there whatever we do, so the cut is
+                // faded into the background instead of left as a sliced card.
+                Box(Modifier.weight(1f).fillMaxWidth()) {
+                LazyColumn(
+                    state = listState,
+                    modifier = Modifier.fillMaxSize()
+                        .pointerInput(filter) {
+                            detectHorizontalDragGestures(
+                                onDragEnd = {
+                                    val order = HomeTab.entries
+                                    val i = order.indexOf(filter)
+                                    if (swipeAccum < -swipeThreshold && i < order.lastIndex) vm.setHomeTab(order[i + 1])
+                                    else if (swipeAccum > swipeThreshold && i > 0) vm.setHomeTab(order[i - 1])
+                                    swipeAccum = 0f
+                                },
+                                onDragCancel = { swipeAccum = 0f },
+                                onHorizontalDrag = { _, delta -> swipeAccum += delta }
+                            )
+                        },
+                    contentPadding = PaddingValues(
+                        start = 10.dp, end = 10.dp, top = 6.dp,
+                        bottom = if (filter == HomeTab.DIRECT) 104.dp else 18.dp
+                    ),
+                    verticalArrangement = Arrangement.spacedBy(6.dp)
+                ) {
+                    itemsIndexed(localOrder, key = { _, ch -> ch.messageStreamId }) { _, ch ->
+                        val isDragging = ch.messageStreamId == draggingKey
+                        LaunchedEffect(ch.messageStreamId) { vm.ensureChannelPreview(ch) }
+                        Box(
+                            Modifier
+                                .zIndex(if (isDragging) 1f else 0f)
+                                .graphicsLayer { translationY = if (isDragging) dragOffset else 0f }
+                                .then(
+                                    Modifier.pointerInput(ch.messageStreamId) {
+                                        detectDragGesturesAfterLongPress(
+                                            onDragStart = { draggingKey = ch.messageStreamId; dragOffset = 0f },
+                                            onDragEnd = {
+                                                vm.setChannelOrder(
+                                                    mergeOrder(
+                                                        ordered.map { it.messageStreamId },
+                                                        localOrder.map { it.messageStreamId }
+                                                    )
+                                                )
+                                                draggingKey = null; dragOffset = 0f
+                                            },
+                                            onDragCancel = { draggingKey = null; dragOffset = 0f },
+                                            onDrag = { change, amount ->
+                                                change.consume()
+                                                dragOffset += amount.y
+                                                val cur = localOrder.indexOfFirst { it.messageStreamId == draggingKey }
+                                                if (cur < 0) return@detectDragGesturesAfterLongPress
+                                                val row = listState.layoutInfo.visibleItemsInfo
+                                                    .firstOrNull { it.key == draggingKey } ?: return@detectDragGesturesAfterLongPress
+                                                val step = row.size + 2.dp.toPx()   // row height + spacing
+                                                if (dragOffset > step / 2 && cur < localOrder.lastIndex) {
+                                                    localOrder = localOrder.toMutableList().apply { add(cur + 1, removeAt(cur)) }
+                                                    dragOffset -= step
+                                                } else if (dragOffset < -step / 2 && cur > 0) {
+                                                    localOrder = localOrder.toMutableList().apply { add(cur - 1, removeAt(cur)) }
+                                                    dragOffset += step
+                                                }
+                                            }
+                                        )
+                                    }
+                                )
+                        ) {
+                            ChannelListItem(
+                                ch,
+                                image = channelImages[ch.adminStreamId],
+                                preview = channelPreviews[ch.messageStreamId],
+                                peerEnsAvatarUrl = ch.peerAddress?.let { ensAvatars[it.lowercase()] },
+                                ensNames = ensNames,
+                                unread = unreadCounts[ch.messageStreamId] ?: 0,
+                                myAddress = myAddress,
+                                onOpen = { vm.openChannel(ch.messageStreamId, com.pombo.android.AppViewModel.ChatOrigin.CHATS) }
+                            )
+                        }
+                    }
+                }
+                Box(
+                    Modifier.align(Alignment.BottomCenter).fillMaxWidth().height(32.dp)
+                        .background(
+                            Brush.verticalGradient(
+                                listOf(Color.Transparent, PomboColors.Bg)
+                            )
                         )
-                    )
-            )
+                )
+                }
             }
+
         }
 
-        // DM affordance under the channel list (web: #dm-inbox-setup /
-        // #dm-new-btn-wrap). Hidden for guests; before the inbox exists it
-        // offers to create it, after that it starts new conversations.
-        val isGuest by vm.isGuest.collectAsState()
-        val hasDmInbox by vm.hasDmInbox.collectAsState()
-        var showNewDm by remember { mutableStateOf(false) }
-        var showDmSetup by remember { mutableStateOf(false) }
-        LaunchedEffect(isGuest) { vm.refreshDmInbox() }
-
-        if (!isGuest) {
-            // Extra bottom room so the button clears the floating pill nav
-            // instead of sitting against it. Independent of PILL_NAV_BOTTOM_OFFSET
-            // on purpose: the wrapper's own bottom padding (MainScreen) already
-            // reserves exactly enough to reach the pill's top edge regardless of
-            // that offset's value, so this is the ENTIRE gap between the two —
-            // tying it to the offset (as a 2026-08-21 edit briefly did) shrank it
-            // to the point the button sat flush against the pill.
-            Box(
-                Modifier.fillMaxWidth().padding(start = 16.dp, end = 16.dp, top = 6.dp, bottom = 28.dp),
-                contentAlignment = Alignment.Center
-            ) {
+        // DM affordance over the list's bottom-right corner (web: #dm-actions).
+        // Hidden for guests; before the inbox exists it offers to create it,
+        // after that it starts new conversations.
+        if (!isGuest && filter == HomeTab.DIRECT) {
+            Box(Modifier.align(Alignment.BottomEnd).padding(end = 24.dp, bottom = 40.dp)) {
                 when (hasDmInbox) {
-                    true -> AccentPillButton("New DM", Icons.Filled.Add) { showNewDm = true }
+                    true -> NewDmIconButton { showNewDm = true }
                     false -> AccentPillButton("Create DM Inbox", Icons.Filled.MailOutline) { showDmSetup = true }
                     null -> PillButtonPlaceholder()
                 }
@@ -906,24 +901,35 @@ private fun TransferRow(
     }
 }
 
-/**
- * The pill while the inbox probe is in flight. Lays out the New DM content
- * invisibly so the pill keeps that button's size.
- */
+/** Web: the icon-only #new-dm-btn on mobile. */
+@Composable
+private fun NewDmIconButton(onClick: () -> Unit) {
+    Box(
+        Modifier
+            .background(PomboColors.Accent.copy(alpha = 0.15f), RoundedCornerShape(12.dp))
+            .border(1.dp, PomboColors.Accent.copy(alpha = 0.30f), RoundedCornerShape(12.dp))
+            .clickable(onClickLabel = "New DM", onClick = onClick)
+            .padding(12.dp),
+        contentAlignment = Alignment.Center
+    ) {
+        Icon(
+            com.pombo.android.ui.PomboIcons.EnvelopePlus, contentDescription = "New DM",
+            tint = PomboColors.TextPrimary, modifier = Modifier.size(20.dp)
+        )
+    }
+}
+
+/** The New DM button while the inbox probe is in flight, at the same size. */
 @Composable
 private fun PillButtonPlaceholder() {
     Box(
         Modifier
             .background(PomboColors.Accent.copy(alpha = 0.15f), RoundedCornerShape(12.dp))
             .border(1.dp, PomboColors.Accent.copy(alpha = 0.30f), RoundedCornerShape(12.dp))
-            .padding(horizontal = 20.dp, vertical = 10.dp),
+            .padding(12.dp),
         contentAlignment = Alignment.Center
     ) {
-        Row(Modifier.alpha(0f), verticalAlignment = Alignment.CenterVertically) {
-            Icon(Icons.Filled.Add, contentDescription = null, modifier = Modifier.size(16.dp))
-            Spacer(Modifier.width(8.dp))
-            Text("New DM", fontSize = 14.sp, fontWeight = FontWeight.Medium)
-        }
+        Box(Modifier.size(20.dp))
         androidx.compose.material3.CircularProgressIndicator(
             modifier = Modifier.size(18.dp),
             color = Color.White,
