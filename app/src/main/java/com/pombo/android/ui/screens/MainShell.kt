@@ -176,10 +176,7 @@ fun MainShell(vm: AppViewModel) {
                     onConnect = { showConnect = true },
                     onExplore = { tab = Tab.EXPLORE }
                 )
-                Tab.EXPLORE -> ExploreTab(
-                    vm, onCreate = { showCreate = true }, onJoin = { showJoin = true },
-                    onConnect = { showConnect = true }
-                )
+                Tab.EXPLORE -> ExploreTab(vm, onCreate = { showCreate = true }, onJoin = { showJoin = true })
                 Tab.CONTACTS -> ContactsTab(vm)
                 Tab.SETTINGS -> SettingsTab(
                     vm, settingsPanel,
@@ -378,26 +375,6 @@ private fun NetworkDot(modifier: Modifier = Modifier) {
             ),
             radius = inner
         )
-    }
-}
-
-/** A guest's header action, sized like the icon buttons it stands in for. */
-@Composable
-internal fun CreateAccountButton(onClick: () -> Unit) {
-    Row(
-        Modifier
-            .height(32.dp)
-            .background(PomboColors.Accent, RoundedCornerShape(12.dp))
-            .clickableNoRipple(onClick)
-            .padding(horizontal = 14.dp),
-        verticalAlignment = Alignment.CenterVertically
-    ) {
-        Icon(
-            Icons.Outlined.Person, contentDescription = null,
-            tint = Color.White, modifier = Modifier.size(14.dp)
-        )
-        Spacer(Modifier.width(6.dp))
-        Text("Create Account", color = Color.White, fontSize = 13.sp, fontWeight = FontWeight.Medium)
     }
 }
 
