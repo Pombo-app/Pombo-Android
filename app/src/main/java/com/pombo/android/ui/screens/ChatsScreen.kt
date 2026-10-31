@@ -70,12 +70,17 @@ import androidx.compose.ui.unit.em
 import androidx.compose.ui.unit.sp
 import com.pombo.android.AppViewModel
 import com.pombo.android.NetStatus
+import com.pombo.android.core.HomeTab
 import com.pombo.android.data.Channel
 import com.pombo.android.ui.Avatar
 import com.pombo.android.ui.theme.PomboColors
 
 
-private enum class ChannelFilter(val label: String) { ALL("All"), PERSONAL("Personal"), COMMUNITIES("Communities") }
+private val HomeTab.label: String
+    get() = when (this) {
+        HomeTab.DIRECT -> "Direct Messages"
+        HomeTab.CHANNELS -> "Channels"
+    }
 
 /**
  * Folds a reordered slice back into the full channel order.
@@ -86,9 +91,6 @@ private enum class ChannelFilter(val label: String) { ALL("All"), PERSONAL("Pers
  * them in the new sequence is what makes that true: the dragged channel really
  * moves in the one saved order (so every other view sees it), while channels
  * the filter hid never shift under the user.
- *
- * In the All tab the slice IS the whole list, so this is the identity it used
- * to be.
  */
 private fun mergeOrder(global: List<String>, slice: List<String>): List<String> {
     val inSlice = slice.toHashSet()
@@ -114,7 +116,7 @@ internal fun ChatsTab(vm: AppViewModel, onContacts: () -> Unit, onConnect: () ->
     val unreadCounts by vm.unreadCounts.collectAsState()
     val myAddress by vm.address.collectAsState()
     val channelOrder by vm.channelOrder.collectAsState()
-    var filter by remember { mutableStateOf(ChannelFilter.ALL) }
+    val filter by vm.homeTab.collectAsState()
 
     // Landing on Chats is the moment the list is about to be read, so it is
     // when the background channels are worth a look. Fires on every entry into
@@ -128,11 +130,7 @@ internal fun ChatsTab(vm: AppViewModel, onContacts: () -> Unit, onConnect: () ->
             channelOrder.indexOf(ch.messageStreamId).let { if (it < 0) Int.MAX_VALUE else it }
         }
     }
-    val filtered = when (filter) {
-        ChannelFilter.ALL -> ordered
-        ChannelFilter.PERSONAL -> ordered.filter { it.type == "dm" || it.type == "gated" }
-        ChannelFilter.COMMUNITIES -> ordered.filter { it.type == "public" || it.type == "password" }
-    }
+    val filtered = ordered.filter { HomeTab.of(it.type) == filter }
 
     Column(Modifier.fillMaxSize()) {
         PomboHeader(status) {
@@ -207,17 +205,17 @@ internal fun ChatsTab(vm: AppViewModel, onContacts: () -> Unit, onConnect: () ->
             }
         }
 
-        // Filter tabs (All / Personal / Communities) — active gets an orange underline
+        // Home tabs (Direct Messages / Channels) — active gets an orange underline
         Box(Modifier.fillMaxWidth().padding(horizontal = 8.dp)) {
             androidx.compose.material3.HorizontalDivider(
                 color = PomboColors.Overlay6,
                 modifier = Modifier.align(Alignment.BottomCenter)
             )
             Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceEvenly) {
-                ChannelFilter.entries.forEach { f ->
+                HomeTab.entries.forEach { f ->
                     val active = f == filter
                     Column(
-                        Modifier.weight(1f).clickableNoRipple { filter = f },
+                        Modifier.weight(1f).clickableNoRipple { vm.setHomeTab(f) },
                         horizontalAlignment = Alignment.CenterHorizontally
                     ) {
                         Text(
@@ -262,11 +260,15 @@ internal fun ChatsTab(vm: AppViewModel, onContacts: () -> Unit, onConnect: () ->
                 verticalArrangement = Arrangement.Center
             ) {
                 Text(
-                    if (busy) "…" else "No channels yet",
+                    when {
+                        busy -> "…"
+                        filter == HomeTab.DIRECT -> "No direct messages yet"
+                        else -> "No channels yet"
+                    },
                     color = PomboColors.TextSecondary, fontSize = 14.sp,
                     textAlign = androidx.compose.ui.text.style.TextAlign.Center
                 )
-                if (!busy && filter == ChannelFilter.ALL) {
+                if (!busy && filter == HomeTab.CHANNELS) {
                     Spacer(Modifier.height(12.dp))
                     EmptyStateButton("Explore channels", onExplore)
                 }
@@ -278,10 +280,9 @@ internal fun ChatsTab(vm: AppViewModel, onContacts: () -> Unit, onConnect: () ->
             val swipeThreshold = with(LocalDensity.current) { 56.dp.toPx() }
             val listState = androidx.compose.foundation.lazy.rememberLazyListState()
             // Drag-to-reorder (hold and drag) in EVERY tab, like the web: there
-            // is one saved order (secureStorage.channelOrder) and each view is a
-            // window onto it, so a drag in Personal moves the channel for All
-            // and Communities too. See [mergeOrder] for how a reordered slice
-            // folds back into the full list.
+            // is one saved order (secureStorage.channelOrder) and each tab is a
+            // window onto it. See [mergeOrder] for how a reordered slice folds
+            // back into the full list.
             var draggingKey by remember { mutableStateOf<String?>(null) }
             var dragOffset by remember { mutableFloatStateOf(0f) }
             var localOrder by remember { mutableStateOf(filtered) }
@@ -297,10 +298,10 @@ internal fun ChatsTab(vm: AppViewModel, onContacts: () -> Unit, onConnect: () ->
                     .pointerInput(filter) {
                         detectHorizontalDragGestures(
                             onDragEnd = {
-                                val order = ChannelFilter.entries
+                                val order = HomeTab.entries
                                 val i = order.indexOf(filter)
-                                if (swipeAccum < -swipeThreshold && i < order.lastIndex) filter = order[i + 1]
-                                else if (swipeAccum > swipeThreshold && i > 0) filter = order[i - 1]
+                                if (swipeAccum < -swipeThreshold && i < order.lastIndex) vm.setHomeTab(order[i + 1])
+                                else if (swipeAccum > swipeThreshold && i > 0) vm.setHomeTab(order[i - 1])
                                 swipeAccum = 0f
                             },
                             onDragCancel = { swipeAccum = 0f },

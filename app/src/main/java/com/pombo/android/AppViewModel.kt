@@ -1744,6 +1744,8 @@ class AppViewModel(app: Application) : AndroidViewModel(app), PomboBridge.Listen
         manager.reloadInvites()
         _contacts.value = contactsStore.load()
         _youtubeEmbeds.value = settingsStore.youtubeEmbeds
+        _homeTab.value = if (guest) com.pombo.android.core.HomeTab.DIRECT
+            else com.pombo.android.core.HomeTab.fromId(settingsStore.homeTab)
         _nsfwEnabled.value = settingsStore.nsfwEnabled
         _ensAvatarsEnabled.value = settingsStore.ensAvatars
         com.pombo.android.ui.EnsAvatarsSetting.set(settingsStore.ensAvatars)
@@ -2015,6 +2017,14 @@ class AppViewModel(app: Application) : AndroidViewModel(app), PomboBridge.Listen
     private val _youtubeEmbeds = MutableStateFlow(settingsStore.youtubeEmbeds)
     /** Web settings "YouTube Embeds" — inline players for YouTube links, default ON. */
     val youtubeEmbeds: StateFlow<Boolean> = _youtubeEmbeds.asStateFlow()
+
+    private val _homeTab = MutableStateFlow(com.pombo.android.core.HomeTab.fromId(settingsStore.homeTab))
+    val homeTab: StateFlow<com.pombo.android.core.HomeTab> = _homeTab.asStateFlow()
+
+    fun setHomeTab(tab: com.pombo.android.core.HomeTab) {
+        _homeTab.value = tab
+        if (!_isGuest.value) settingsStore.homeTab = tab.id
+    }
 
     // ==================== P2P file transfers ====================
 

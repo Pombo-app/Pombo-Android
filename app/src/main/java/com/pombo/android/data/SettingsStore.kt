@@ -81,6 +81,11 @@ class SettingsStore(context: Context) {
         get() = prefs.getBoolean(scoped(KEY_YT_EMBEDS), true)
         set(value) = prefs.edit().putBoolean(scoped(KEY_YT_EMBEDS), value).apply()
 
+    /** Last Home tab id (core.HomeTab). Local-only, like the web's localStorage key. */
+    var homeTab: String?
+        get() = prefs.getString(scoped(KEY_HOME_TAB), null)
+        set(value) = prefs.edit().putString(scoped(KEY_HOME_TAB), value).apply()
+
     /**
      * Whether an ENS avatar record is fetched and shown (web
      * secureStorage.getEnsAvatarsEnabled, default true). Off means the
@@ -222,6 +227,7 @@ class SettingsStore(context: Context) {
         const val KEY_SLICE_TS = "slice_ts"
         const val KEY_BLOCKED = "blocked_peers"
         const val KEY_YT_EMBEDS = "youtube_embeds"
+        const val KEY_HOME_TAB = "home_tab"
         const val KEY_NSFW = "nsfw_enabled"
         const val KEY_ENS_AVATARS = "ens_avatars_enabled"
         const val KEY_DM_PUSH = "dm_push_enabled"
