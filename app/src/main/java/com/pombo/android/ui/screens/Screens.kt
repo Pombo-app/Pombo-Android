@@ -34,6 +34,7 @@ import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.AttachFile
 import androidx.compose.material.icons.filled.Lock
+import androidx.compose.material.icons.filled.Public
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
@@ -42,7 +43,6 @@ import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.Icon
 import androidx.compose.material.icons.outlined.Close
 import androidx.compose.material3.OutlinedButton
-import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.OutlinedTextFieldDefaults
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
@@ -58,6 +58,11 @@ import kotlinx.coroutines.launch
 import kotlin.math.roundToInt
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.foundation.layout.defaultMinSize
+import androidx.compose.ui.draw.drawWithContent
+import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.graphics.takeOrElse
+import androidx.compose.ui.layout.layout
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.text.input.VisualTransformation
@@ -755,7 +760,7 @@ fun CreateAccountWizard(vm: AppViewModel, onDismiss: () -> Unit) {
                 ) {
                     Text("DISPLAY NAME", color = PomboColors.Overlay40, fontSize = 11.sp, fontWeight = FontWeight.Medium, letterSpacing = 0.08.em)
                     Spacer(Modifier.height(8.dp))
-                    OutlinedTextField(
+                    PomboTextField(
                         value = name,
                         onValueChange = { if (it.length <= 18) name = it },
                         placeholder = { Text("Your name (optional)", color = PomboColors.Overlay20, fontSize = 14.sp) },
@@ -995,7 +1000,7 @@ fun OnboardingScreen(vm: AppViewModel, canCancel: Boolean = false) {
                 ) { Text("Cancel", color = PomboColors.TextSecondary) }
             }
         } else {
-            OutlinedTextField(
+            PomboTextField(
                 value = importText,
                 onValueChange = { importText = it },
                 label = { Text("Private key or recovery phrase") },
@@ -1092,14 +1097,12 @@ object GateModes {
  * (gatePay auto-wraps the payer's shortfall from plain POL).
  */
 val GATE_TOKEN_PRESETS = listOf(
-    Triple("pol", "POL", "0x0000000000000000000000000000000000001010"),
     Triple("usdc", "USDC", "0x3c499c542cef5e3811e1192ce70d8cc03d5c3359"),
-    Triple("data", "DATA", "0x3a9a81d576d83ff21f26f325066054540720fc34")
+    Triple("pol", "POL", "0x0000000000000000000000000000000000001010")
 )
 val PAY_TOKEN_PRESETS = listOf(
-    Triple("pol", "POL", "0x0d500b1d8e8ef31e21c99d1db9a6444d3adf1270"),
     Triple("usdc", "USDC", "0x3c499c542cef5e3811e1192ce70d8cc03d5c3359"),
-    Triple("data", "DATA", "0x3a9a81d576d83ff21f26f325066054540720fc34")
+    Triple("pol", "POL", "0x0d500b1d8e8ef31e21c99d1db9a6444d3adf1270")
 )
 
 val CHANNEL_LANGUAGES = listOf(
@@ -1109,10 +1112,10 @@ val CHANNEL_LANGUAGES = listOf(
 )
 
 val CHANNEL_CATEGORIES = listOf(
-    "politics" to "Politics", "news" to "News", "tech" to "Tech & AI",
+    "general" to "General", "politics" to "Politics", "news" to "News", "tech" to "Tech & AI",
     "crypto" to "Crypto & Web3", "finance" to "Business & Finance", "science" to "Science",
     "gaming" to "Gaming", "entertainment" to "Entertainment", "sports" to "Sports",
-    "education" to "Education", "comedy" to "Comedy & Memes", "general" to "General",
+    "education" to "Education", "comedy" to "Comedy & Memes",
     // index.html:727-728 — the web offers these two; omitting them meant an
     // Android user could not classify a channel the web can.
     "nsfw" to "NSFW 18+", "adult" to "Adult 18+"
@@ -1186,7 +1189,7 @@ internal fun CreateChannelDialog(vm: AppViewModel, onDismiss: () -> Unit, onCrea
     var wireVisible by remember { mutableStateOf(false) }
     var name by remember { mutableStateOf("") }
     var password by remember { mutableStateOf("") }
-    var visible by remember { mutableStateOf(false) }
+    var visible by remember { mutableStateOf(true) }
     var description by remember { mutableStateOf("") }
     var language by remember { mutableStateOf("en") }
     var category by remember { mutableStateOf("general") }
@@ -1199,7 +1202,7 @@ internal fun CreateChannelDialog(vm: AppViewModel, onDismiss: () -> Unit, onCrea
 
     // N-D gate fields (Gated/Paid tabs)
     var gateAsset by remember { mutableStateOf("token") }      // token | nft
-    var gatePreset by remember { mutableStateOf("pol") }       // pol | usdc | data | custom
+    var gatePreset by remember { mutableStateOf("usdc") }      // usdc | pol | custom
     var gateTokenCustom by remember { mutableStateOf("") }
     var gateMinBalanceText by remember { mutableStateOf("") }
     var paidPreset by remember { mutableStateOf("usdc") }
@@ -1352,12 +1355,550 @@ internal fun CreateChannelDialog(vm: AppViewModel, onDismiss: () -> Unit, onCrea
         runPreflight()
     }
 
-    // NOT an androidx Dialog: a Dialog is its own window, and on a real phone
-    // that window is laid out beyond the display bounds, so its footer fell off
-    // the bottom of the screen. It also hid the app's toasts and double-padded
-    // the status bar. Rendering the panel in the activity's own window makes
-    // the insets the same ones the rest of the app uses.
-    androidx.activity.compose.BackHandler(onBack = onDismiss)
+    FormPanel(
+        title = "Create Channel",
+        onBack = onDismiss,
+        cost = gasCosts?.formattedFor(kind.id) ?: "calculating...",
+        actionLabel = "Create Channel",
+        onAction = { submit() },
+        overlay = {
+            // Validation and pre-flight feedback live INSIDE the dialog window —
+            // the app's toast host is in the main window and would be covered.
+            DialogToast(notice) { notice = null }
+            if (confirmingPassword) ConfirmPasswordDialog(
+                expected = password,
+                onCancel = { confirmingPassword = false },
+                onConfirmed = { confirmingPassword = false; runPreflight() }
+            )
+            lowBalance?.let { low ->
+                ConfirmPopup(
+                    title = "Low POL balance",
+                    message = "Your balance (${low.balance}) is close to the estimated cost " +
+                        "(${low.estimate}). If gas spikes, the transaction may fail. Continue anyway?",
+                    confirmLabel = "Create anyway",
+                    onConfirm = { lowBalance = null; onCreate(pendingSpec ?: buildSpec()) },
+                    onCancel = { lowBalance = null }
+                )
+            }
+        }
+    ) {
+        // Type tabs (web sidebar). Five entries since N-D — a scroll
+        // row of chips instead of equal weights, or "Protected" clips.
+        SectionLabel("Type")
+        val typeScroll = androidx.compose.foundation.rememberScrollState()
+        Row(
+            Modifier.fillMaxWidth().chipScroller(typeScroll),
+            horizontalArrangement = Arrangement.spacedBy(8.dp)
+        ) {
+            ChannelKind.entries.forEach { k ->
+                val active = k == kind
+                val fg = if (active) Color.White else PomboColors.Overlay60
+                Row(
+                    Modifier
+                        .background(
+                            if (active) PomboColors.Overlay12 else PomboColors.Overlay6,
+                            RoundedCornerShape(8.dp)
+                        )
+                        .clickableNoRipple { kind = k }
+                        .padding(horizontal = 14.dp, vertical = 10.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(10.dp)
+                ) {
+                    val iconModifier = Modifier.size(16.dp)
+                    when (k) {
+                        ChannelKind.OPEN -> Icon(Icons.Filled.Public, null, tint = fg, modifier = iconModifier)
+                        ChannelKind.PROTECTED -> Icon(com.pombo.android.ui.PomboIcons.LockClosed, null, tint = fg, modifier = iconModifier)
+                        ChannelKind.CLOSED -> EthereumIcon(tint = fg, modifier = iconModifier)
+                        ChannelKind.GATED -> Icon(com.pombo.android.ui.PomboIcons.CheckBadge, null, tint = fg, modifier = iconModifier)
+                        ChannelKind.PAID -> Icon(com.pombo.android.ui.PomboIcons.CurrencyDollar, null, tint = fg, modifier = iconModifier)
+                    }
+                    Text(k.label, color = fg, fontSize = 14.sp)
+                }
+            }
+        }
+
+        // Type blurb
+        Spacer(Modifier.height(12.dp))
+        Column(
+            Modifier.fillMaxWidth()
+                .background(PomboColors.Overlay5, RoundedCornerShape(12.dp))
+                .border(1.dp, PomboColors.Overlay5, RoundedCornerShape(12.dp))
+                .padding(16.dp)
+        ) {
+            Text(kind.blurb, color = PomboColors.Overlay50, fontSize = 14.sp, lineHeight = 20.sp)
+        }
+
+        Spacer(Modifier.height(20.dp))
+        SectionLabel("Name")
+        PomboTextField(
+            value = name, onValueChange = { name = it },
+            placeholder = { Text("Channel name", color = PomboColors.Overlay20, fontSize = 14.sp) },
+            singleLine = true, shape = RoundedCornerShape(12.dp),
+            textStyle = androidx.compose.ui.text.TextStyle(fontSize = 14.sp, color = PomboColors.TextPrimary),
+            colors = pomboFieldColors(), modifier = Modifier.fillMaxWidth()
+        )
+
+        Spacer(Modifier.height(20.dp))
+        Box(Modifier.fillMaxWidth().height(1.dp).background(PomboColors.Overlay5))
+        Spacer(Modifier.height(16.dp))
+
+        // Closed channels are never discoverable, so the web hides this
+        // section outright rather than showing a toggle that cannot be
+        // honoured (ChannelModalsUI.js:184-190).
+        if (kind != ChannelKind.CLOSED) {
+            ToggleRow(
+                label = "LISTED",
+                hint = "Channel appears in Explore",
+                checked = visible,
+                onToggle = { visible = !visible }
+            )
+
+            if (visible) {
+                Spacer(Modifier.height(16.dp))
+                SectionLabel("Description")
+                PomboTextField(
+                    value = description, onValueChange = { if (it.length <= 200) description = it },
+                    placeholder = { Text("What's this channel about?", color = PomboColors.Overlay20, fontSize = 14.sp) },
+                    shape = RoundedCornerShape(12.dp), maxLines = 3,
+                    textStyle = androidx.compose.ui.text.TextStyle(fontSize = 14.sp, color = PomboColors.TextPrimary),
+                    colors = pomboFieldColors(), modifier = Modifier.fillMaxWidth()
+                )
+                Spacer(Modifier.height(16.dp))
+                SectionLabel("Language")
+                ChipPicker(CHANNEL_LANGUAGES, language) { language = it }
+                Spacer(Modifier.height(16.dp))
+                SectionLabel("Category")
+                ChipPicker(CHANNEL_CATEGORIES, category) { category = it }
+            }
+            Spacer(Modifier.height(16.dp))
+        }
+
+        // Read-only. Public/password: public subscribe WITHOUT
+        // publish. Gated: an immutable flag on the gate — the
+        // contract refuses everyone but the owner and moderators at
+        // ingest, and the shared publish key is only handed to them.
+        ToggleRow(
+            label = "READ-ONLY",
+            hint = "Only you and moderators can send messages",
+            checked = readOnly,
+            onToggle = { readOnly = !readOnly }
+        )
+
+        if (kind == ChannelKind.PROTECTED) {
+            Spacer(Modifier.height(16.dp))
+            SectionLabel("Password")
+            PomboTextField(
+                value = password, onValueChange = { password = it },
+                placeholder = { Text("Channel password", color = PomboColors.Overlay20, fontSize = 14.sp) },
+                singleLine = true, shape = RoundedCornerShape(12.dp),
+                // Web has a reveal toggle (#channel-password-toggle):
+                // this password can never be recovered, so letting the
+                // user check it before committing it on-chain matters.
+                visualTransformation = if (showPassword)
+                    androidx.compose.ui.text.input.VisualTransformation.None
+                else PasswordVisualTransformation(),
+                trailingIcon = {
+                    Icon(
+                        if (showPassword) Icons.Filled.Visibility else Icons.Filled.VisibilityOff,
+                        contentDescription = if (showPassword) "Hide password" else "Show password",
+                        tint = PomboColors.Overlay40,
+                        modifier = Modifier.size(18.dp)
+                            .clickableNoRipple { showPassword = !showPassword }
+                    )
+                },
+                textStyle = androidx.compose.ui.text.TextStyle(fontSize = 14.sp, color = PomboColors.TextPrimary),
+                colors = pomboFieldColors(), modifier = Modifier.fillMaxWidth()
+            )
+            Text(
+                "Everyone needs this password to read the channel.",
+                color = PomboColors.Overlay30, fontSize = 12.sp,
+                modifier = Modifier.padding(top = 6.dp)
+            )
+        }
+
+        if (kind == ChannelKind.GATED) {
+            Spacer(Modifier.height(16.dp))
+            SectionLabel("Asset Type")
+            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                listOf("token" to "Token", "nft" to "NFT").forEach { (value, label) ->
+                    val active = gateAsset == value
+                    Box(
+                        Modifier.weight(1f)
+                            .background(
+                                if (active) PomboColors.Overlay10 else PomboColors.Overlay5,
+                                RoundedCornerShape(8.dp)
+                            )
+                            .clickableNoRipple { gateAsset = value }
+                            .padding(vertical = 10.dp),
+                        contentAlignment = Alignment.Center
+                    ) {
+                        Text(
+                            label, color = if (active) Color.White else PomboColors.Overlay50,
+                            fontSize = 12.sp, fontWeight = FontWeight.Medium
+                        )
+                    }
+                }
+            }
+
+            Spacer(Modifier.height(16.dp))
+            if (gateAsset == "token") {
+                SectionLabel("Token")
+                TokenPresetRow(GATE_TOKEN_PRESETS, gatePreset) { gatePreset = it }
+                if (gatePreset == "custom") {
+                    Spacer(Modifier.height(8.dp))
+                    PomboTextField(
+                        value = gateTokenCustom, onValueChange = { gateTokenCustom = it },
+                        placeholder = { Text("0x…", color = PomboColors.Overlay20, fontSize = 13.sp) },
+                        singleLine = true, shape = RoundedCornerShape(12.dp),
+                        textStyle = androidx.compose.ui.text.TextStyle(
+                            fontSize = 13.sp, color = PomboColors.TextPrimary,
+                            fontFamily = androidx.compose.ui.text.font.FontFamily.Monospace
+                        ),
+                        colors = pomboFieldColors(), modifier = Modifier.fillMaxWidth()
+                    )
+                }
+                Text(
+                    when (gatePreset) {
+                        "pol" -> "Gates on the member's native POL balance."
+                        "custom" -> "ERC-20 contract on Polygon."
+                        else -> "${GATE_TOKEN_PRESETS.first { it.first == gatePreset }.second} on Polygon."
+                    },
+                    color = PomboColors.Overlay30, fontSize = 12.sp,
+                    modifier = Modifier.padding(top = 6.dp)
+                )
+
+                Spacer(Modifier.height(16.dp))
+                SectionLabel("Minimum Balance")
+                PomboTextField(
+                    value = gateMinBalanceText, onValueChange = { gateMinBalanceText = it },
+                    placeholder = { Text("e.g. 100", color = PomboColors.Overlay20, fontSize = 14.sp) },
+                    singleLine = true, shape = RoundedCornerShape(12.dp),
+                    keyboardOptions = androidx.compose.foundation.text.KeyboardOptions(
+                        keyboardType = androidx.compose.ui.text.input.KeyboardType.Decimal),
+                    textStyle = androidx.compose.ui.text.TextStyle(fontSize = 14.sp, color = PomboColors.TextPrimary),
+                    colors = pomboFieldColors(), modifier = Modifier.fillMaxWidth()
+                )
+                Text(
+                    "Balance a member must hold to read and write.",
+                    color = PomboColors.Overlay30, fontSize = 12.sp,
+                    modifier = Modifier.padding(top = 6.dp)
+                )
+            } else {
+                SectionLabel("Collection Contract")
+                PomboTextField(
+                    value = gateTokenCustom, onValueChange = { gateTokenCustom = it },
+                    placeholder = { Text("0x…", color = PomboColors.Overlay20, fontSize = 13.sp) },
+                    singleLine = true, shape = RoundedCornerShape(12.dp),
+                    textStyle = androidx.compose.ui.text.TextStyle(
+                        fontSize = 13.sp, color = PomboColors.TextPrimary,
+                        fontFamily = androidx.compose.ui.text.font.FontFamily.Monospace
+                    ),
+                    colors = pomboFieldColors(), modifier = Modifier.fillMaxWidth()
+                )
+                Text(
+                    "ERC-721 collection on Polygon — holding any token grants access.",
+                    color = PomboColors.Overlay30, fontSize = 12.sp,
+                    modifier = Modifier.padding(top = 6.dp)
+                )
+            }
+        }
+
+        if (kind == ChannelKind.PAID) {
+            Spacer(Modifier.height(16.dp))
+            SectionLabel("Payment Token")
+            TokenPresetRow(PAY_TOKEN_PRESETS, paidPreset) { paidPreset = it }
+            if (paidPreset == "custom") {
+                Spacer(Modifier.height(8.dp))
+                PomboTextField(
+                    value = paidTokenCustom, onValueChange = { paidTokenCustom = it },
+                    placeholder = { Text("0x… (e.g. USDC)", color = PomboColors.Overlay20, fontSize = 13.sp) },
+                    singleLine = true, shape = RoundedCornerShape(12.dp),
+                    textStyle = androidx.compose.ui.text.TextStyle(
+                        fontSize = 13.sp, color = PomboColors.TextPrimary,
+                        fontFamily = androidx.compose.ui.text.font.FontFamily.Monospace
+                    ),
+                    colors = pomboFieldColors(), modifier = Modifier.fillMaxWidth()
+                )
+            }
+            Text(
+                when (paidPreset) {
+                    "pol" -> "Priced in Wrapped POL (WPOL) — plain POL is wrapped automatically at payment."
+                    "custom" -> "ERC-20 token subscribers pay with, on Polygon."
+                    else -> "Subscribers pay in ${PAY_TOKEN_PRESETS.first { it.first == paidPreset }.second}."
+                },
+                color = PomboColors.Overlay30, fontSize = 12.sp,
+                modifier = Modifier.padding(top = 6.dp)
+            )
+
+            Spacer(Modifier.height(16.dp))
+            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                Column(Modifier.weight(1f)) {
+                    SectionLabel("Price")
+                    PomboTextField(
+                        value = paidPriceText, onValueChange = { paidPriceText = it },
+                        placeholder = { Text("e.g. 5", color = PomboColors.Overlay20, fontSize = 14.sp) },
+                        singleLine = true, shape = RoundedCornerShape(12.dp),
+                        keyboardOptions = androidx.compose.foundation.text.KeyboardOptions(
+                            keyboardType = androidx.compose.ui.text.input.KeyboardType.Decimal),
+                        textStyle = androidx.compose.ui.text.TextStyle(fontSize = 14.sp, color = PomboColors.TextPrimary),
+                        colors = pomboFieldColors(), modifier = Modifier.fillMaxWidth()
+                    )
+                }
+                Column(Modifier.weight(1f)) {
+                    SectionLabel("Period (days)")
+                    PomboTextField(
+                        value = paidDurationDays, onValueChange = { paidDurationDays = it },
+                        singleLine = true, shape = RoundedCornerShape(12.dp),
+                        keyboardOptions = androidx.compose.foundation.text.KeyboardOptions(
+                            keyboardType = androidx.compose.ui.text.input.KeyboardType.Number),
+                        textStyle = androidx.compose.ui.text.TextStyle(fontSize = 14.sp, color = PomboColors.TextPrimary),
+                        colors = pomboFieldColors(), modifier = Modifier.fillMaxWidth()
+                    )
+                }
+            }
+        }
+
+        if (kind == ChannelKind.CLOSED) {
+            Spacer(Modifier.height(16.dp))
+            SectionLabel("Members")
+            PomboTextField(
+                value = membersText, onValueChange = { membersText = it },
+                placeholder = {
+                    Text("0x… addresses, one per line", color = PomboColors.Overlay20, fontSize = 14.sp)
+                },
+                shape = RoundedCornerShape(12.dp), maxLines = 4,
+                textStyle = androidx.compose.ui.text.TextStyle(
+                    fontSize = 13.sp, color = PomboColors.TextPrimary,
+                    fontFamily = androidx.compose.ui.text.font.FontFamily.Monospace
+                ),
+                colors = pomboFieldColors(), modifier = Modifier.fillMaxWidth()
+            )
+            Text(
+                buildString {
+                    append("${members.size} valid address${if (members.size == 1) "" else "es"} — each is granted access on-chain.")
+                    if (invalidMembers > 0) append("  $invalidMembers line${if (invalidMembers == 1) "" else "s"} will be ignored.")
+                },
+                color = if (invalidMembers > 0) PomboColors.Danger.copy(alpha = 0.80f)
+                    else PomboColors.Overlay30,
+                fontSize = 12.sp,
+                modifier = Modifier.padding(top = 6.dp)
+            )
+
+        }
+
+        // Author visibility applies to every gated variant (Closed
+        // included) and is IMMUTABLE after creation.
+        if (kind == ChannelKind.CLOSED || kind == ChannelKind.GATED || kind == ChannelKind.PAID) {
+            Spacer(Modifier.height(16.dp))
+            SectionLabel("Identity on the wire")
+            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                listOf(
+                    Triple(false, "Sealed", Icons.Outlined.People),
+                    Triple(true, "Visible", Icons.Outlined.Public)
+                ).forEach { (value, label, icon) ->
+                    val active = wireVisible == value
+                    val activeText = if (value) Color(0xFFFBBF24).copy(alpha = 0.90f) else Color.White
+                    Row(
+                        Modifier.weight(1f)
+                            .background(
+                                if (active) PomboColors.Overlay10 else PomboColors.Overlay5,
+                                RoundedCornerShape(8.dp)
+                            )
+                            .border(
+                                1.dp,
+                                Color.White.copy(alpha = if (active) 0.10f else 0.05f),
+                                RoundedCornerShape(8.dp)
+                            )
+                            .clickableNoRipple { wireVisible = value }
+                            .padding(vertical = 8.dp),
+                        horizontalArrangement = Arrangement.Center,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Icon(
+                            icon, contentDescription = null,
+                            tint = if (active) activeText else PomboColors.Overlay50,
+                            modifier = Modifier.size(14.dp)
+                        )
+                        Spacer(Modifier.width(6.dp))
+                        Text(
+                            label,
+                            color = if (active) activeText else PomboColors.Overlay50,
+                            fontSize = 12.sp, fontWeight = FontWeight.Medium
+                        )
+                    }
+                }
+            }
+            Text(
+                if (wireVisible)
+                    "Authors visible on the network and to members. Storage drops removed members within minutes."
+                else
+                    "Authors hidden from the network; only members see who wrote what. Removed members can still reach storage until you reset the publish key.",
+                color = PomboColors.Overlay30, fontSize = 12.sp,
+                modifier = Modifier.padding(top = 6.dp)
+            )
+        }
+
+        // ---- Message storage (web #storage-section) ----
+        Spacer(Modifier.height(20.dp))
+        Box(Modifier.fillMaxWidth().height(1.dp).background(PomboColors.Overlay5))
+        Spacer(Modifier.height(16.dp))
+        SectionLabel("Storage Provider")
+        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            listOf(
+                Triple("streamr", "Pombo", Icons.Outlined.Public),
+                Triple("custom", "Custom", Icons.Outlined.Code)
+            ).forEach { (value, label, icon) ->
+                val active = storageProvider == value
+                Row(
+                    Modifier.weight(1f)
+                        .background(
+                            if (active) PomboColors.Overlay10 else PomboColors.Overlay5,
+                            RoundedCornerShape(8.dp)
+                        )
+                        .border(
+                            1.dp, Color.White.copy(alpha = if (active) 0.10f else 0.05f),
+                            RoundedCornerShape(8.dp)
+                        )
+                        .clickableNoRipple { storageProvider = value }
+                        .padding(vertical = 10.dp),
+                    horizontalArrangement = Arrangement.Center,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Icon(
+                        icon, contentDescription = null,
+                        tint = if (active) Color.White else PomboColors.Overlay50,
+                        modifier = Modifier.size(14.dp)
+                    )
+                    Spacer(Modifier.width(8.dp))
+                    Text(
+                        label,
+                        color = if (active) Color.White else PomboColors.Overlay50,
+                        fontSize = 12.sp, fontWeight = FontWeight.Medium
+                    )
+                }
+            }
+        }
+
+        if (storageProvider == "streamr") {
+            // Web #streamr-address-display: a 10px label over a bordered
+            // read-only box holding the FULL address, wrapped.
+            Spacer(Modifier.height(12.dp))
+            Text(
+                "STORAGE CLUSTER", color = PomboColors.Overlay30,
+                fontSize = 10.sp, letterSpacing = 0.8.sp
+            )
+            Spacer(Modifier.height(6.dp))
+            Text(
+                com.pombo.android.ChannelManager.STORAGE_NODE,
+                color = PomboColors.Overlay50, fontSize = 12.sp,
+                fontFamily = androidx.compose.ui.text.font.FontFamily.Monospace,
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .background(PomboColors.Overlay5, RoundedCornerShape(8.dp))
+                    .border(1.dp, PomboColors.Overlay10, RoundedCornerShape(8.dp))
+                    .padding(horizontal = 12.dp, vertical = 8.dp)
+            )
+        } else {
+            // Same box as the Pombo address above (web #custom-storage-
+            // address: `px-3 py-2 text-xs font-mono`). An OutlinedTextField
+            // forces a 56dp minimum, which made this field tower over it.
+            Spacer(Modifier.height(12.dp))
+            Text(
+                "STORAGE CLUSTER", color = PomboColors.Overlay30,
+                fontSize = 10.sp, letterSpacing = 0.8.sp
+            )
+            Spacer(Modifier.height(6.dp))
+            val badAddress = customStorage.isNotBlank() && !customStorageValid
+            androidx.compose.foundation.text.BasicTextField(
+                value = customStorage, onValueChange = { customStorage = it },
+                singleLine = true,
+                textStyle = androidx.compose.ui.text.TextStyle(
+                    fontSize = 12.sp, color = PomboColors.TextPrimary,
+                    fontFamily = androidx.compose.ui.text.font.FontFamily.Monospace
+                ),
+                cursorBrush = androidx.compose.ui.graphics.SolidColor(PomboColors.Accent),
+                modifier = Modifier.fillMaxWidth()
+                    .background(PomboColors.Overlay5, RoundedCornerShape(8.dp))
+                    .border(
+                        1.dp,
+                        if (badAddress) PomboColors.Danger.copy(alpha = 0.50f) else PomboColors.Overlay10,
+                        RoundedCornerShape(8.dp)
+                    )
+                    .padding(horizontal = 12.dp, vertical = 8.dp),
+                decorationBox = { inner ->
+                    if (customStorage.isEmpty()) Text(
+                        "0x...", color = PomboColors.Overlay20, fontSize = 12.sp,
+                        fontFamily = androidx.compose.ui.text.font.FontFamily.Monospace
+                    )
+                    inner()
+                }
+            )
+            if (customStorage.isNotBlank() && !customStorageValid) {
+                Text(
+                    "Enter a valid EVM address (0x followed by 40 hex characters).",
+                    color = PomboColors.Danger.copy(alpha = 0.80f), fontSize = 12.sp,
+                    modifier = Modifier.padding(top = 6.dp)
+                )
+            }
+        }
+
+        // Retention slider — web #storage-days-input, range 1..365.
+        // Above 30 days the effective value snaps to exact months.
+        Spacer(Modifier.height(16.dp))
+        Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+            Text(
+                "MESSAGE RETENTION", color = PomboColors.Overlay70,
+                fontSize = 12.sp, fontWeight = FontWeight.Medium, letterSpacing = 0.8.sp,
+                modifier = Modifier.weight(1f)
+            )
+            Text(
+                retentionLabel(storageDays.toInt()),
+                color = PomboColors.Accent, fontSize = 13.sp, fontWeight = FontWeight.Medium
+            )
+        }
+        androidx.compose.material3.Slider(
+            value = storageDays,
+            onValueChange = { storageDays = snapRetentionDays(it.roundToInt()).toFloat() },
+            valueRange = 1f..365f,
+            colors = androidx.compose.material3.SliderDefaults.colors(
+                thumbColor = PomboColors.Accent,
+                activeTrackColor = PomboColors.Accent,
+                inactiveTrackColor = PomboColors.Overlay10
+            ),
+            modifier = Modifier.fillMaxWidth()
+        )
+        // Web puts scale ticks under the slider, not a hint sentence.
+        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+            listOf("1 day", "6 months", "1 year").forEach {
+                Text(it, color = PomboColors.Overlay60, fontSize = 10.sp)
+            }
+        }
+
+    }
+}
+
+/**
+ * A full-screen form: back arrow and title, a scrolling body, and a footer with
+ * the estimated cost and the action.
+ *
+ * NOT an androidx Dialog: a Dialog is its own window, and on a real phone
+ * that window is laid out beyond the display bounds, so its footer fell off
+ * the bottom of the screen. It also hid the app's toasts and double-padded
+ * the status bar. Rendering the panel in the activity's own window makes
+ * the insets the same ones the rest of the app uses.
+ */
+@Composable
+internal fun FormPanel(
+    title: String,
+    onBack: () -> Unit,
+    cost: String,
+    actionLabel: String,
+    onAction: () -> Unit,
+    // Dialogs and toasts that must sit above the panel.
+    overlay: @Composable androidx.compose.foundation.layout.BoxScope.() -> Unit = {},
+    content: @Composable ColumnScope.() -> Unit
+) {
+    androidx.activity.compose.BackHandler(onBack = onBack)
     Box(
         Modifier
             .fillMaxSize()
@@ -1387,9 +1928,9 @@ internal fun CreateChannelDialog(vm: AppViewModel, onDismiss: () -> Unit, onCrea
                 Icon(
                     Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Cancel",
                     tint = PomboColors.Overlay40,
-                    modifier = Modifier.size(20.dp).clickableNoRipple(onDismiss)
+                    modifier = Modifier.size(20.dp).clickableNoRipple(onBack)
                 )
-                Text("Create Channel", color = PomboColors.Overlay90, fontSize = 18.sp, fontWeight = FontWeight.Medium)
+                Text(title, color = PomboColors.Overlay90, fontSize = 18.sp, fontWeight = FontWeight.Medium)
             }
             Box(Modifier.fillMaxWidth().height(1.dp).background(PomboColors.Overlay5))
 
@@ -1399,492 +1940,7 @@ internal fun CreateChannelDialog(vm: AppViewModel, onDismiss: () -> Unit, onCrea
                     .verticalScroll(androidx.compose.foundation.rememberScrollState())
                     .padding(20.dp)
             ) {
-                // Type tabs (web sidebar). Five entries since N-D — a scroll
-                // row of chips instead of equal weights, or "Protected" clips.
-                SectionLabel("Type")
-                Row(
-                    Modifier.fillMaxWidth()
-                        .horizontalScroll(androidx.compose.foundation.rememberScrollState()),
-                    horizontalArrangement = Arrangement.spacedBy(8.dp)
-                ) {
-                    ChannelKind.entries.forEach { k ->
-                        val active = k == kind
-                        Box(
-                            Modifier
-                                .background(
-                                    if (active) PomboColors.Overlay10 else PomboColors.Overlay3,
-                                    RoundedCornerShape(8.dp)
-                                )
-                                .clickableNoRipple { kind = k }
-                                .padding(horizontal = 14.dp, vertical = 10.dp),
-                            contentAlignment = Alignment.Center
-                        ) {
-                            Text(
-                                k.label,
-                                color = if (active) Color.White else PomboColors.Overlay60,
-                                fontSize = 14.sp
-                            )
-                        }
-                    }
-                }
-
-                // Type blurb
-                Spacer(Modifier.height(12.dp))
-                Column(
-                    Modifier.fillMaxWidth()
-                        .background(PomboColors.Overlay5, RoundedCornerShape(12.dp))
-                        .border(1.dp, PomboColors.Overlay5, RoundedCornerShape(12.dp))
-                        .padding(16.dp)
-                ) {
-                    Text(kind.blurb, color = PomboColors.Overlay50, fontSize = 14.sp, lineHeight = 20.sp)
-                }
-
-                Spacer(Modifier.height(20.dp))
-                SectionLabel("Name")
-                OutlinedTextField(
-                    value = name, onValueChange = { name = it },
-                    placeholder = { Text("Channel name", color = PomboColors.Overlay20, fontSize = 14.sp) },
-                    singleLine = true, shape = RoundedCornerShape(12.dp),
-                    textStyle = androidx.compose.ui.text.TextStyle(fontSize = 14.sp, color = PomboColors.TextPrimary),
-                    colors = pomboFieldColors(), modifier = Modifier.fillMaxWidth()
-                )
-
-                if (kind == ChannelKind.PROTECTED) {
-                    Spacer(Modifier.height(16.dp))
-                    SectionLabel("Password")
-                    OutlinedTextField(
-                        value = password, onValueChange = { password = it },
-                        placeholder = { Text("Channel password", color = PomboColors.Overlay20, fontSize = 14.sp) },
-                        singleLine = true, shape = RoundedCornerShape(12.dp),
-                        // Web has a reveal toggle (#channel-password-toggle):
-                        // this password can never be recovered, so letting the
-                        // user check it before committing it on-chain matters.
-                        visualTransformation = if (showPassword)
-                            androidx.compose.ui.text.input.VisualTransformation.None
-                        else PasswordVisualTransformation(),
-                        trailingIcon = {
-                            Icon(
-                                if (showPassword) Icons.Filled.Visibility else Icons.Filled.VisibilityOff,
-                                contentDescription = if (showPassword) "Hide password" else "Show password",
-                                tint = PomboColors.Overlay40,
-                                modifier = Modifier.size(18.dp)
-                                    .clickableNoRipple { showPassword = !showPassword }
-                            )
-                        },
-                        textStyle = androidx.compose.ui.text.TextStyle(fontSize = 14.sp, color = PomboColors.TextPrimary),
-                        colors = pomboFieldColors(), modifier = Modifier.fillMaxWidth()
-                    )
-                    Text(
-                        "Everyone needs this password to read the channel.",
-                        color = PomboColors.Overlay30, fontSize = 12.sp,
-                        modifier = Modifier.padding(top = 6.dp)
-                    )
-                }
-
-                if (kind == ChannelKind.GATED) {
-                    Spacer(Modifier.height(16.dp))
-                    SectionLabel("Asset Type")
-                    Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                        listOf("token" to "Token", "nft" to "NFT").forEach { (value, label) ->
-                            val active = gateAsset == value
-                            Box(
-                                Modifier.weight(1f)
-                                    .background(
-                                        if (active) PomboColors.Overlay10 else PomboColors.Overlay5,
-                                        RoundedCornerShape(8.dp)
-                                    )
-                                    .clickableNoRipple { gateAsset = value }
-                                    .padding(vertical = 10.dp),
-                                contentAlignment = Alignment.Center
-                            ) {
-                                Text(
-                                    label, color = if (active) Color.White else PomboColors.Overlay50,
-                                    fontSize = 12.sp, fontWeight = FontWeight.Medium
-                                )
-                            }
-                        }
-                    }
-
-                    Spacer(Modifier.height(16.dp))
-                    if (gateAsset == "token") {
-                        SectionLabel("Token")
-                        TokenPresetRow(GATE_TOKEN_PRESETS, gatePreset) { gatePreset = it }
-                        if (gatePreset == "custom") {
-                            Spacer(Modifier.height(8.dp))
-                            OutlinedTextField(
-                                value = gateTokenCustom, onValueChange = { gateTokenCustom = it },
-                                placeholder = { Text("0x…", color = PomboColors.Overlay20, fontSize = 13.sp) },
-                                singleLine = true, shape = RoundedCornerShape(12.dp),
-                                textStyle = androidx.compose.ui.text.TextStyle(
-                                    fontSize = 13.sp, color = PomboColors.TextPrimary,
-                                    fontFamily = androidx.compose.ui.text.font.FontFamily.Monospace
-                                ),
-                                colors = pomboFieldColors(), modifier = Modifier.fillMaxWidth()
-                            )
-                        }
-                        Text(
-                            when (gatePreset) {
-                                "pol" -> "Gates on the member's native POL balance."
-                                "custom" -> "ERC-20 contract on Polygon."
-                                else -> "${GATE_TOKEN_PRESETS.first { it.first == gatePreset }.second} on Polygon."
-                            },
-                            color = PomboColors.Overlay30, fontSize = 12.sp,
-                            modifier = Modifier.padding(top = 6.dp)
-                        )
-
-                        Spacer(Modifier.height(16.dp))
-                        SectionLabel("Minimum Balance")
-                        OutlinedTextField(
-                            value = gateMinBalanceText, onValueChange = { gateMinBalanceText = it },
-                            placeholder = { Text("e.g. 100", color = PomboColors.Overlay20, fontSize = 14.sp) },
-                            singleLine = true, shape = RoundedCornerShape(12.dp),
-                            keyboardOptions = androidx.compose.foundation.text.KeyboardOptions(
-                                keyboardType = androidx.compose.ui.text.input.KeyboardType.Decimal),
-                            textStyle = androidx.compose.ui.text.TextStyle(fontSize = 14.sp, color = PomboColors.TextPrimary),
-                            colors = pomboFieldColors(), modifier = Modifier.fillMaxWidth()
-                        )
-                        Text(
-                            "Balance a member must hold to read and write.",
-                            color = PomboColors.Overlay30, fontSize = 12.sp,
-                            modifier = Modifier.padding(top = 6.dp)
-                        )
-                    } else {
-                        SectionLabel("Collection Contract")
-                        OutlinedTextField(
-                            value = gateTokenCustom, onValueChange = { gateTokenCustom = it },
-                            placeholder = { Text("0x…", color = PomboColors.Overlay20, fontSize = 13.sp) },
-                            singleLine = true, shape = RoundedCornerShape(12.dp),
-                            textStyle = androidx.compose.ui.text.TextStyle(
-                                fontSize = 13.sp, color = PomboColors.TextPrimary,
-                                fontFamily = androidx.compose.ui.text.font.FontFamily.Monospace
-                            ),
-                            colors = pomboFieldColors(), modifier = Modifier.fillMaxWidth()
-                        )
-                        Text(
-                            "ERC-721 collection on Polygon — holding any token grants access.",
-                            color = PomboColors.Overlay30, fontSize = 12.sp,
-                            modifier = Modifier.padding(top = 6.dp)
-                        )
-                    }
-                }
-
-                if (kind == ChannelKind.PAID) {
-                    Spacer(Modifier.height(16.dp))
-                    SectionLabel("Payment Token")
-                    TokenPresetRow(PAY_TOKEN_PRESETS, paidPreset) { paidPreset = it }
-                    if (paidPreset == "custom") {
-                        Spacer(Modifier.height(8.dp))
-                        OutlinedTextField(
-                            value = paidTokenCustom, onValueChange = { paidTokenCustom = it },
-                            placeholder = { Text("0x… (e.g. USDC)", color = PomboColors.Overlay20, fontSize = 13.sp) },
-                            singleLine = true, shape = RoundedCornerShape(12.dp),
-                            textStyle = androidx.compose.ui.text.TextStyle(
-                                fontSize = 13.sp, color = PomboColors.TextPrimary,
-                                fontFamily = androidx.compose.ui.text.font.FontFamily.Monospace
-                            ),
-                            colors = pomboFieldColors(), modifier = Modifier.fillMaxWidth()
-                        )
-                    }
-                    Text(
-                        when (paidPreset) {
-                            "pol" -> "Priced in Wrapped POL (WPOL) — plain POL is wrapped automatically at payment."
-                            "custom" -> "ERC-20 token subscribers pay with, on Polygon."
-                            else -> "Subscribers pay in ${PAY_TOKEN_PRESETS.first { it.first == paidPreset }.second}."
-                        },
-                        color = PomboColors.Overlay30, fontSize = 12.sp,
-                        modifier = Modifier.padding(top = 6.dp)
-                    )
-
-                    Spacer(Modifier.height(16.dp))
-                    Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-                        Column(Modifier.weight(1f)) {
-                            SectionLabel("Price")
-                            OutlinedTextField(
-                                value = paidPriceText, onValueChange = { paidPriceText = it },
-                                placeholder = { Text("e.g. 5", color = PomboColors.Overlay20, fontSize = 14.sp) },
-                                singleLine = true, shape = RoundedCornerShape(12.dp),
-                                keyboardOptions = androidx.compose.foundation.text.KeyboardOptions(
-                                    keyboardType = androidx.compose.ui.text.input.KeyboardType.Decimal),
-                                textStyle = androidx.compose.ui.text.TextStyle(fontSize = 14.sp, color = PomboColors.TextPrimary),
-                                colors = pomboFieldColors(), modifier = Modifier.fillMaxWidth()
-                            )
-                        }
-                        Column(Modifier.weight(1f)) {
-                            SectionLabel("Period (days)")
-                            OutlinedTextField(
-                                value = paidDurationDays, onValueChange = { paidDurationDays = it },
-                                singleLine = true, shape = RoundedCornerShape(12.dp),
-                                keyboardOptions = androidx.compose.foundation.text.KeyboardOptions(
-                                    keyboardType = androidx.compose.ui.text.input.KeyboardType.Number),
-                                textStyle = androidx.compose.ui.text.TextStyle(fontSize = 14.sp, color = PomboColors.TextPrimary),
-                                colors = pomboFieldColors(), modifier = Modifier.fillMaxWidth()
-                            )
-                        }
-                    }
-                }
-
-                if (kind == ChannelKind.CLOSED) {
-                    Spacer(Modifier.height(16.dp))
-                    SectionLabel("Members")
-                    OutlinedTextField(
-                        value = membersText, onValueChange = { membersText = it },
-                        placeholder = {
-                            Text("0x… addresses, one per line", color = PomboColors.Overlay20, fontSize = 14.sp)
-                        },
-                        shape = RoundedCornerShape(12.dp), maxLines = 4,
-                        textStyle = androidx.compose.ui.text.TextStyle(
-                            fontSize = 13.sp, color = PomboColors.TextPrimary,
-                            fontFamily = androidx.compose.ui.text.font.FontFamily.Monospace
-                        ),
-                        colors = pomboFieldColors(), modifier = Modifier.fillMaxWidth()
-                    )
-                    Text(
-                        buildString {
-                            append("${members.size} valid address${if (members.size == 1) "" else "es"} — each is granted access on-chain.")
-                            if (invalidMembers > 0) append("  $invalidMembers line${if (invalidMembers == 1) "" else "s"} will be ignored.")
-                        },
-                        color = if (invalidMembers > 0) PomboColors.Danger.copy(alpha = 0.80f)
-                            else PomboColors.Overlay30,
-                        fontSize = 12.sp,
-                        modifier = Modifier.padding(top = 6.dp)
-                    )
-
-                }
-
-                // Author visibility applies to every gated variant (Closed
-                // included) and is IMMUTABLE after creation.
-                if (kind == ChannelKind.CLOSED || kind == ChannelKind.GATED || kind == ChannelKind.PAID) {
-                    Spacer(Modifier.height(16.dp))
-                    SectionLabel("Identity on the wire")
-                    Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                        listOf(
-                            Triple(false, "Sealed", Icons.Outlined.People),
-                            Triple(true, "Visible", Icons.Outlined.Public)
-                        ).forEach { (value, label, icon) ->
-                            val active = wireVisible == value
-                            val activeText = if (value) Color(0xFFFBBF24).copy(alpha = 0.90f) else Color.White
-                            Row(
-                                Modifier.weight(1f)
-                                    .background(
-                                        if (active) PomboColors.Overlay10 else PomboColors.Overlay5,
-                                        RoundedCornerShape(8.dp)
-                                    )
-                                    .border(
-                                        1.dp,
-                                        Color.White.copy(alpha = if (active) 0.10f else 0.05f),
-                                        RoundedCornerShape(8.dp)
-                                    )
-                                    .clickableNoRipple { wireVisible = value }
-                                    .padding(vertical = 8.dp),
-                                horizontalArrangement = Arrangement.Center,
-                                verticalAlignment = Alignment.CenterVertically
-                            ) {
-                                Icon(
-                                    icon, contentDescription = null,
-                                    tint = if (active) activeText else PomboColors.Overlay50,
-                                    modifier = Modifier.size(14.dp)
-                                )
-                                Spacer(Modifier.width(6.dp))
-                                Text(
-                                    label,
-                                    color = if (active) activeText else PomboColors.Overlay50,
-                                    fontSize = 12.sp, fontWeight = FontWeight.Medium
-                                )
-                            }
-                        }
-                    }
-                    Text(
-                        if (wireVisible)
-                            "Every message exposes its author's account, attributable by anyone, forever. Removed members' messages are rejected by readers, but can still reach storage."
-                        else
-                            "Full author privacy. Removed members can pollute storage until you reset the key with a paid on-chain action.",
-                        color = PomboColors.Overlay30, fontSize = 12.sp,
-                        modifier = Modifier.padding(top = 6.dp)
-                    )
-                }
-
-                Spacer(Modifier.height(20.dp))
-                Box(Modifier.fillMaxWidth().height(1.dp).background(PomboColors.Overlay5))
-                Spacer(Modifier.height(16.dp))
-
-                // Closed channels are never discoverable, so the web hides this
-                // section outright rather than showing a toggle that cannot be
-                // honoured (ChannelModalsUI.js:184-190).
-                if (kind != ChannelKind.CLOSED) {
-                    ToggleRow(
-                        label = "LISTED",
-                        hint = "Channel appears in Explore",
-                        checked = visible,
-                        onToggle = { visible = !visible }
-                    )
-
-                    if (visible) {
-                        Spacer(Modifier.height(16.dp))
-                        SectionLabel("Description")
-                        OutlinedTextField(
-                            value = description, onValueChange = { if (it.length <= 200) description = it },
-                            placeholder = { Text("What's this channel about?", color = PomboColors.Overlay20, fontSize = 14.sp) },
-                            shape = RoundedCornerShape(12.dp), maxLines = 3,
-                            textStyle = androidx.compose.ui.text.TextStyle(fontSize = 14.sp, color = PomboColors.TextPrimary),
-                            colors = pomboFieldColors(), modifier = Modifier.fillMaxWidth()
-                        )
-                        Spacer(Modifier.height(16.dp))
-                        SectionLabel("Language")
-                        ChipPicker(CHANNEL_LANGUAGES, language) { language = it }
-                        Spacer(Modifier.height(16.dp))
-                        SectionLabel("Category")
-                        ChipPicker(CHANNEL_CATEGORIES, category) { category = it }
-                    }
-                    Spacer(Modifier.height(16.dp))
-                }
-
-                // Read-only. Public/password: public subscribe WITHOUT
-                // publish. Gated: an immutable flag on the gate — the
-                // contract refuses everyone but the owner and moderators at
-                // ingest, and the shared publish key is only handed to them.
-                ToggleRow(
-                    label = "READ-ONLY",
-                    hint = "Only you and your moderators can post; everyone else reads",
-                    checked = readOnly,
-                    onToggle = { readOnly = !readOnly }
-                )
-
-                // ---- Message storage (web #storage-section) ----
-                Spacer(Modifier.height(20.dp))
-                Box(Modifier.fillMaxWidth().height(1.dp).background(PomboColors.Overlay5))
-                Spacer(Modifier.height(16.dp))
-                SectionLabel("Storage Provider")
-                Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    listOf(
-                        Triple("streamr", "Pombo", Icons.Outlined.Public),
-                        Triple("custom", "Custom", Icons.Outlined.Code)
-                    ).forEach { (value, label, icon) ->
-                        val active = storageProvider == value
-                        Row(
-                            Modifier.weight(1f)
-                                .background(
-                                    if (active) PomboColors.Overlay10 else PomboColors.Overlay5,
-                                    RoundedCornerShape(8.dp)
-                                )
-                                .border(
-                                    1.dp, Color.White.copy(alpha = if (active) 0.10f else 0.05f),
-                                    RoundedCornerShape(8.dp)
-                                )
-                                .clickableNoRipple { storageProvider = value }
-                                .padding(vertical = 10.dp),
-                            horizontalArrangement = Arrangement.Center,
-                            verticalAlignment = Alignment.CenterVertically
-                        ) {
-                            Icon(
-                                icon, contentDescription = null,
-                                tint = if (active) Color.White else PomboColors.Overlay50,
-                                modifier = Modifier.size(14.dp)
-                            )
-                            Spacer(Modifier.width(8.dp))
-                            Text(
-                                label,
-                                color = if (active) Color.White else PomboColors.Overlay50,
-                                fontSize = 12.sp, fontWeight = FontWeight.Medium
-                            )
-                        }
-                    }
-                }
-
-                if (storageProvider == "streamr") {
-                    // Web #streamr-address-display: a 10px label over a bordered
-                    // read-only box holding the FULL address, wrapped.
-                    Spacer(Modifier.height(12.dp))
-                    Text(
-                        "STORAGE CLUSTER", color = PomboColors.Overlay30,
-                        fontSize = 10.sp, letterSpacing = 0.8.sp
-                    )
-                    Spacer(Modifier.height(6.dp))
-                    Text(
-                        com.pombo.android.ChannelManager.STORAGE_NODE,
-                        color = PomboColors.Overlay50, fontSize = 12.sp,
-                        fontFamily = androidx.compose.ui.text.font.FontFamily.Monospace,
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .background(PomboColors.Overlay5, RoundedCornerShape(8.dp))
-                            .border(1.dp, PomboColors.Overlay10, RoundedCornerShape(8.dp))
-                            .padding(horizontal = 12.dp, vertical = 8.dp)
-                    )
-                } else {
-                    // Same box as the Pombo address above (web #custom-storage-
-                    // address: `px-3 py-2 text-xs font-mono`). An OutlinedTextField
-                    // forces a 56dp minimum, which made this field tower over it.
-                    Spacer(Modifier.height(12.dp))
-                    Text(
-                        "STORAGE CLUSTER", color = PomboColors.Overlay30,
-                        fontSize = 10.sp, letterSpacing = 0.8.sp
-                    )
-                    Spacer(Modifier.height(6.dp))
-                    val badAddress = customStorage.isNotBlank() && !customStorageValid
-                    androidx.compose.foundation.text.BasicTextField(
-                        value = customStorage, onValueChange = { customStorage = it },
-                        singleLine = true,
-                        textStyle = androidx.compose.ui.text.TextStyle(
-                            fontSize = 12.sp, color = PomboColors.TextPrimary,
-                            fontFamily = androidx.compose.ui.text.font.FontFamily.Monospace
-                        ),
-                        cursorBrush = androidx.compose.ui.graphics.SolidColor(PomboColors.Accent),
-                        modifier = Modifier.fillMaxWidth()
-                            .background(PomboColors.Overlay5, RoundedCornerShape(8.dp))
-                            .border(
-                                1.dp,
-                                if (badAddress) PomboColors.Danger.copy(alpha = 0.50f) else PomboColors.Overlay10,
-                                RoundedCornerShape(8.dp)
-                            )
-                            .padding(horizontal = 12.dp, vertical = 8.dp),
-                        decorationBox = { inner ->
-                            if (customStorage.isEmpty()) Text(
-                                "0x...", color = PomboColors.Overlay20, fontSize = 12.sp,
-                                fontFamily = androidx.compose.ui.text.font.FontFamily.Monospace
-                            )
-                            inner()
-                        }
-                    )
-                    if (customStorage.isNotBlank() && !customStorageValid) {
-                        Text(
-                            "Enter a valid EVM address (0x followed by 40 hex characters).",
-                            color = PomboColors.Danger.copy(alpha = 0.80f), fontSize = 12.sp,
-                            modifier = Modifier.padding(top = 6.dp)
-                        )
-                    }
-                }
-
-                // Retention slider — web #storage-days-input, range 1..365.
-                // Above 30 days the effective value snaps to exact months.
-                Spacer(Modifier.height(16.dp))
-                Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
-                    Text(
-                        "MESSAGE RETENTION", color = PomboColors.Overlay70,
-                        fontSize = 12.sp, fontWeight = FontWeight.Medium, letterSpacing = 0.8.sp,
-                        modifier = Modifier.weight(1f)
-                    )
-                    Text(
-                        retentionLabel(storageDays.toInt()),
-                        color = PomboColors.Accent, fontSize = 13.sp, fontWeight = FontWeight.Medium
-                    )
-                }
-                androidx.compose.material3.Slider(
-                    value = storageDays,
-                    onValueChange = { storageDays = snapRetentionDays(it.roundToInt()).toFloat() },
-                    valueRange = 1f..365f,
-                    colors = androidx.compose.material3.SliderDefaults.colors(
-                        thumbColor = PomboColors.Accent,
-                        activeTrackColor = PomboColors.Accent,
-                        inactiveTrackColor = PomboColors.Overlay10
-                    ),
-                    modifier = Modifier.fillMaxWidth()
-                )
-                // Web puts scale ticks under the slider, not a hint sentence.
-                Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
-                    listOf("1 day", "6 months", "1 year").forEach {
-                        Text(it, color = PomboColors.Overlay60, fontSize = 10.sp)
-                    }
-                }
-
+                content()
                 Spacer(Modifier.height(24.dp))
             }
 
@@ -1902,43 +1958,25 @@ internal fun CreateChannelDialog(vm: AppViewModel, onDismiss: () -> Unit, onCrea
                     Text("Est. cost:", color = PomboColors.Overlay40, fontSize = 14.sp)
                     Spacer(Modifier.width(8.dp))
                     Text(
-                        gasCosts?.formattedFor(kind.id) ?: "calculating...",
+                        cost,
                         color = PomboColors.Overlay80, fontSize = 14.sp, fontWeight = FontWeight.Medium
                     )
                 }
                 // Web `bg-[#F6851B]/15 border-[#F6851B]/40 rounded-lg px-5
-                // py-2.5` — never disabled, submit() does the validating.
+                // py-2.5` — never disabled, onAction does the validating.
                 Box(
                     Modifier
                         .background(PomboColors.Accent.copy(alpha = 0.15f), RoundedCornerShape(8.dp))
                         .border(1.dp, PomboColors.Accent.copy(alpha = 0.40f), RoundedCornerShape(8.dp))
-                        .clickableNoRipple { submit() }
+                        .clickableNoRipple(onAction)
                         .padding(horizontal = 20.dp, vertical = 10.dp),
                     contentAlignment = Alignment.Center
                 ) {
-                    Text("Create Channel", color = Color.White, fontSize = 14.sp, fontWeight = FontWeight.Medium)
+                    Text(actionLabel, color = Color.White, fontSize = 14.sp, fontWeight = FontWeight.Medium)
                 }
             }
         }
-
-        // Validation and pre-flight feedback live INSIDE the dialog window —
-        // the app's toast host is in the main window and would be covered.
-        DialogToast(notice) { notice = null }
-        if (confirmingPassword) ConfirmPasswordDialog(
-            expected = password,
-            onCancel = { confirmingPassword = false },
-            onConfirmed = { confirmingPassword = false; runPreflight() }
-        )
-        lowBalance?.let { low ->
-            ConfirmPopup(
-                title = "Low POL balance",
-                message = "Your balance (${low.balance}) is close to the estimated cost " +
-                    "(${low.estimate}). If gas spikes, the transaction may fail. Continue anyway?",
-                confirmLabel = "Create anyway",
-                onConfirm = { lowBalance = null; onCreate(pendingSpec ?: buildSpec()) },
-                onCancel = { lowBalance = null }
-            )
-        }
+        overlay()
     }
 }
 
@@ -1962,216 +2000,181 @@ fun CreateDmInboxDialog(
     val gasCosts by vm.gasCosts.collectAsState()
     LaunchedEffect(Unit) { vm.refreshGas() }
 
-    PomboDialogFrame("Create DM inbox", onDismiss, icon = Icons.Outlined.MailOutline) {
-            Column(
-                Modifier.fillMaxWidth()
-            ) {
+    FormPanel(
+        title = "Create DM Inbox",
+        onBack = onDismiss,
+        cost = gasCosts?.formattedFor("dmInbox") ?: "calculating...",
+        actionLabel = "Create Inbox",
+        onAction = {
+            if (storageProvider != "custom" || customStorageValid) {
+                onCreate(storageProvider, customStorage.trim().ifEmpty { null }, storageDays.toInt())
+                onDismiss()
+            }
+        }
+    ) {
+        Row(
+            Modifier.fillMaxWidth()
+                .background(PomboColors.Overlay5, RoundedCornerShape(12.dp))
+                .border(1.dp, PomboColors.Overlay5, RoundedCornerShape(12.dp))
+                .padding(14.dp)
+        ) {
+            Icon(
+                Icons.Outlined.ErrorOutline, contentDescription = null,
+                tint = PomboColors.Accent, modifier = Modifier.size(20.dp)
+            )
+            Spacer(Modifier.width(12.dp))
+            Column {
+                Text(
+                    buildAnnotatedString {
+                        withStyle(SpanStyle(color = PomboColors.Overlay90, fontWeight = FontWeight.SemiBold)) {
+                            append("One-time setup")
+                        }
+                        append(" — Creating your DM inbox requires a small gas fee. Once created, there are no additional costs.")
+                    },
+                    color = PomboColors.Overlay70, fontSize = 13.sp, lineHeight = 19.sp
+                )
+                Spacer(Modifier.height(8.dp))
+                Text(
+                    "Anyone with your Pombo/Ethereum address can send you direct messages. " +
+                        "You can also message any address that has a DM inbox.",
+                    color = PomboColors.Overlay50, fontSize = 13.sp, lineHeight = 19.sp
+                )
+            }
+        }
+
+        Spacer(Modifier.height(20.dp))
+        Box(Modifier.fillMaxWidth().height(1.dp).background(PomboColors.Overlay5))
+        Spacer(Modifier.height(16.dp))
+
+        // ---- Message storage (same controls as the channel dialog) ----
+        Text(
+            "STORAGE PROVIDER", color = PomboColors.Overlay70,
+            fontSize = 12.sp, fontWeight = FontWeight.Medium, letterSpacing = 0.8.sp
+        )
+        Spacer(Modifier.height(10.dp))
+        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            listOf(
+                Triple("streamr", "Pombo", Icons.Outlined.Public),
+                Triple("custom", "Custom", Icons.Outlined.Code)
+            ).forEach { (value, label, icon) ->
+                val active = storageProvider == value
                 Row(
-                    Modifier.fillMaxWidth()
-                        .background(PomboColors.Overlay5, RoundedCornerShape(12.dp))
-                        .border(1.dp, PomboColors.Overlay5, RoundedCornerShape(12.dp))
-                        .padding(14.dp)
+                    Modifier.weight(1f)
+                        .background(
+                            if (active) PomboColors.Overlay10 else PomboColors.Overlay5,
+                            RoundedCornerShape(8.dp)
+                        )
+                        .border(
+                            1.dp, Color.White.copy(alpha = if (active) 0.10f else 0.05f),
+                            RoundedCornerShape(8.dp)
+                        )
+                        .clickableNoRipple { storageProvider = value }
+                        .padding(vertical = 10.dp),
+                    horizontalArrangement = Arrangement.Center,
+                    verticalAlignment = Alignment.CenterVertically
                 ) {
                     Icon(
-                        Icons.Outlined.ErrorOutline, contentDescription = null,
-                        tint = PomboColors.Accent, modifier = Modifier.size(20.dp)
+                        icon, contentDescription = null,
+                        tint = if (active) Color.White else PomboColors.Overlay50,
+                        modifier = Modifier.size(14.dp)
                     )
-                    Spacer(Modifier.width(12.dp))
-                    Column {
-                        Text(
-                            buildAnnotatedString {
-                                withStyle(SpanStyle(color = PomboColors.Overlay90, fontWeight = FontWeight.SemiBold)) {
-                                    append("One-time setup")
-                                }
-                                append(" — Creating your DM inbox requires a small gas fee. Once created, there are no additional costs.")
-                            },
-                            color = PomboColors.Overlay70, fontSize = 13.sp, lineHeight = 19.sp
-                        )
-                        Spacer(Modifier.height(8.dp))
-                        Text(
-                            "Anyone with your Pombo/Ethereum address can send you direct messages. " +
-                                "You can also message any address that has a DM inbox.",
-                            color = PomboColors.Overlay50, fontSize = 13.sp, lineHeight = 19.sp
-                        )
-                    }
-                }
-
-                Spacer(Modifier.height(20.dp))
-                Box(Modifier.fillMaxWidth().height(1.dp).background(PomboColors.Overlay5))
-                Spacer(Modifier.height(16.dp))
-
-                // ---- Message storage (same controls as the channel dialog) ----
-                Text(
-                    "STORAGE PROVIDER", color = PomboColors.Overlay70,
-                    fontSize = 12.sp, fontWeight = FontWeight.Medium, letterSpacing = 0.8.sp
-                )
-                Spacer(Modifier.height(10.dp))
-                Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    listOf(
-                        Triple("streamr", "Pombo", Icons.Outlined.Public),
-                        Triple("custom", "Custom", Icons.Outlined.Code)
-                    ).forEach { (value, label, icon) ->
-                        val active = storageProvider == value
-                        Row(
-                            Modifier.weight(1f)
-                                .background(
-                                    if (active) PomboColors.Overlay10 else PomboColors.Overlay5,
-                                    RoundedCornerShape(8.dp)
-                                )
-                                .border(
-                                    1.dp, Color.White.copy(alpha = if (active) 0.10f else 0.05f),
-                                    RoundedCornerShape(8.dp)
-                                )
-                                .clickableNoRipple { storageProvider = value }
-                                .padding(vertical = 10.dp),
-                            horizontalArrangement = Arrangement.Center,
-                            verticalAlignment = Alignment.CenterVertically
-                        ) {
-                            Icon(
-                                icon, contentDescription = null,
-                                tint = if (active) Color.White else PomboColors.Overlay50,
-                                modifier = Modifier.size(14.dp)
-                            )
-                            Spacer(Modifier.width(8.dp))
-                            Text(
-                                label,
-                                color = if (active) Color.White else PomboColors.Overlay50,
-                                fontSize = 12.sp, fontWeight = FontWeight.Medium
-                            )
-                        }
-                    }
-                }
-
-                if (storageProvider == "streamr") {
-                    Spacer(Modifier.height(12.dp))
+                    Spacer(Modifier.width(8.dp))
                     Text(
-                        "STORAGE PROVIDER", color = PomboColors.Overlay30,
-                        fontSize = 10.sp, letterSpacing = 0.8.sp
-                    )
-                    Spacer(Modifier.height(6.dp))
-                    Text(
-                        com.pombo.android.ChannelManager.STORAGE_NODE,
-                        color = PomboColors.Overlay50, fontSize = 12.sp,
-                        fontFamily = androidx.compose.ui.text.font.FontFamily.Monospace,
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .background(PomboColors.Overlay5, RoundedCornerShape(8.dp))
-                            .border(1.dp, PomboColors.Overlay10, RoundedCornerShape(8.dp))
-                            .padding(horizontal = 12.dp, vertical = 8.dp)
-                    )
-                } else {
-                    Spacer(Modifier.height(12.dp))
-                    Text(
-                        "STORAGE PROVIDER", color = PomboColors.Overlay30,
-                        fontSize = 10.sp, letterSpacing = 0.8.sp
-                    )
-                    Spacer(Modifier.height(6.dp))
-                    val badAddress = customStorage.isNotBlank() && !customStorageValid
-                    androidx.compose.foundation.text.BasicTextField(
-                        value = customStorage, onValueChange = { customStorage = it },
-                        singleLine = true,
-                        textStyle = androidx.compose.ui.text.TextStyle(
-                            fontSize = 12.sp, color = PomboColors.TextPrimary,
-                            fontFamily = androidx.compose.ui.text.font.FontFamily.Monospace
-                        ),
-                        cursorBrush = androidx.compose.ui.graphics.SolidColor(PomboColors.Accent),
-                        modifier = Modifier.fillMaxWidth()
-                            .background(PomboColors.Overlay5, RoundedCornerShape(8.dp))
-                            .border(
-                                1.dp,
-                                if (badAddress) PomboColors.Danger.copy(alpha = 0.50f) else PomboColors.Overlay10,
-                                RoundedCornerShape(8.dp)
-                            )
-                            .padding(horizontal = 12.dp, vertical = 8.dp),
-                        decorationBox = { inner ->
-                            if (customStorage.isEmpty()) Text(
-                                "0x...", color = PomboColors.Overlay20, fontSize = 12.sp,
-                                fontFamily = androidx.compose.ui.text.font.FontFamily.Monospace
-                            )
-                            inner()
-                        }
-                    )
-                    if (badAddress) {
-                        Text(
-                            "Enter a valid EVM address (0x followed by 40 hex characters).",
-                            color = PomboColors.Danger.copy(alpha = 0.80f), fontSize = 12.sp,
-                            modifier = Modifier.padding(top = 6.dp)
-                        )
-                    }
-                }
-
-                Spacer(Modifier.height(16.dp))
-                Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
-                    Text(
-                        "MESSAGE RETENTION", color = PomboColors.Overlay70,
-                        fontSize = 12.sp, fontWeight = FontWeight.Medium, letterSpacing = 0.8.sp,
-                        modifier = Modifier.weight(1f)
-                    )
-                    Text(
-                        retentionLabel(storageDays.toInt()),
-                        color = PomboColors.Accent, fontSize = 13.sp, fontWeight = FontWeight.Medium
-                    )
-                }
-                androidx.compose.material3.Slider(
-                    value = storageDays,
-                    onValueChange = { storageDays = snapRetentionDays(it.roundToInt()).toFloat() },
-                    valueRange = 1f..365f,
-                    colors = androidx.compose.material3.SliderDefaults.colors(
-                        thumbColor = PomboColors.Accent,
-                        activeTrackColor = PomboColors.Accent,
-                        inactiveTrackColor = PomboColors.Overlay10
-                    ),
-                    modifier = Modifier.fillMaxWidth()
-                )
-                Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
-                    listOf("1 day", "6 months", "1 year").forEach {
-                        Text(it, color = PomboColors.Overlay60, fontSize = 10.sp)
-                    }
-                }
-                Spacer(Modifier.height(8.dp))
-            }
-
-            // Footer — estimate left, action right (web bg-[#0a0a0a] strip).
-            Box(Modifier.fillMaxWidth().height(1.dp).background(PomboColors.Overlay5))
-            Row(
-                Modifier.fillMaxWidth()
-                    .background(PomboColors.Surface2, RoundedCornerShape(bottomStart = 16.dp, bottomEnd = 16.dp))
-                    .padding(horizontal = 20.dp, vertical = 14.dp),
-                verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.SpaceBetween
-            ) {
-                Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.weight(1f)) {
-                    Text("Est. cost:", color = PomboColors.Overlay40, fontSize = 13.sp)
-                    Spacer(Modifier.width(6.dp))
-                    Text(
-                        gasCosts?.formattedFor("dmInbox") ?: "calculating...",
-                        color = PomboColors.Overlay80, fontSize = 13.sp, fontWeight = FontWeight.Medium
-                    )
-                }
-                Spacer(Modifier.width(10.dp))
-                Box(
-                    Modifier
-                        .background(PomboColors.Accent.copy(alpha = 0.15f), RoundedCornerShape(8.dp))
-                        .border(1.dp, PomboColors.Accent.copy(alpha = 0.40f), RoundedCornerShape(8.dp))
-                        .clickableNoRipple {
-                            if (storageProvider == "custom" && !customStorageValid) return@clickableNoRipple
-                            onCreate(
-                                storageProvider,
-                                customStorage.trim().ifEmpty { null },
-                                storageDays.toInt()
-                            )
-                            onDismiss()
-                        }
-                        .padding(horizontal = 16.dp, vertical = 10.dp),
-                    contentAlignment = Alignment.Center
-                ) {
-                    Text(
-                        "Create Inbox", color = Color.White, fontSize = 14.sp,
-                        fontWeight = FontWeight.Medium, maxLines = 1, softWrap = false
+                        label,
+                        color = if (active) Color.White else PomboColors.Overlay50,
+                        fontSize = 12.sp, fontWeight = FontWeight.Medium
                     )
                 }
             }
         }
+
+        if (storageProvider == "streamr") {
+            Spacer(Modifier.height(12.dp))
+            Text(
+                "STORAGE CLUSTER", color = PomboColors.Overlay30,
+                fontSize = 10.sp, letterSpacing = 0.8.sp
+            )
+            Spacer(Modifier.height(6.dp))
+            Text(
+                com.pombo.android.ChannelManager.STORAGE_NODE,
+                color = PomboColors.Overlay50, fontSize = 12.sp,
+                fontFamily = androidx.compose.ui.text.font.FontFamily.Monospace,
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .background(PomboColors.Overlay5, RoundedCornerShape(8.dp))
+                    .border(1.dp, PomboColors.Overlay10, RoundedCornerShape(8.dp))
+                    .padding(horizontal = 12.dp, vertical = 8.dp)
+            )
+        } else {
+            Spacer(Modifier.height(12.dp))
+            Text(
+                "STORAGE CLUSTER", color = PomboColors.Overlay30,
+                fontSize = 10.sp, letterSpacing = 0.8.sp
+            )
+            Spacer(Modifier.height(6.dp))
+            val badAddress = customStorage.isNotBlank() && !customStorageValid
+            androidx.compose.foundation.text.BasicTextField(
+                value = customStorage, onValueChange = { customStorage = it },
+                singleLine = true,
+                textStyle = androidx.compose.ui.text.TextStyle(
+                    fontSize = 12.sp, color = PomboColors.TextPrimary,
+                    fontFamily = androidx.compose.ui.text.font.FontFamily.Monospace
+                ),
+                cursorBrush = androidx.compose.ui.graphics.SolidColor(PomboColors.Accent),
+                modifier = Modifier.fillMaxWidth()
+                    .background(PomboColors.Overlay5, RoundedCornerShape(8.dp))
+                    .border(
+                        1.dp,
+                        if (badAddress) PomboColors.Danger.copy(alpha = 0.50f) else PomboColors.Overlay10,
+                        RoundedCornerShape(8.dp)
+                    )
+                    .padding(horizontal = 12.dp, vertical = 8.dp),
+                decorationBox = { inner ->
+                    if (customStorage.isEmpty()) Text(
+                        "0x...", color = PomboColors.Overlay20, fontSize = 12.sp,
+                        fontFamily = androidx.compose.ui.text.font.FontFamily.Monospace
+                    )
+                    inner()
+                }
+            )
+            if (badAddress) {
+                Text(
+                    "Enter a valid EVM address (0x followed by 40 hex characters).",
+                    color = PomboColors.Danger.copy(alpha = 0.80f), fontSize = 12.sp,
+                    modifier = Modifier.padding(top = 6.dp)
+                )
+            }
+        }
+
+        Spacer(Modifier.height(16.dp))
+        Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+            Text(
+                "MESSAGE RETENTION", color = PomboColors.Overlay70,
+                fontSize = 12.sp, fontWeight = FontWeight.Medium, letterSpacing = 0.8.sp,
+                modifier = Modifier.weight(1f)
+            )
+            Text(
+                retentionLabel(storageDays.toInt()),
+                color = PomboColors.Accent, fontSize = 13.sp, fontWeight = FontWeight.Medium
+            )
+        }
+        androidx.compose.material3.Slider(
+            value = storageDays,
+            onValueChange = { storageDays = snapRetentionDays(it.roundToInt()).toFloat() },
+            valueRange = 1f..365f,
+            colors = androidx.compose.material3.SliderDefaults.colors(
+                thumbColor = PomboColors.Accent,
+                activeTrackColor = PomboColors.Accent,
+                inactiveTrackColor = PomboColors.Overlay10
+            ),
+            modifier = Modifier.fillMaxWidth()
+        )
+        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+            listOf("1 day", "6 months", "1 year").forEach {
+                Text(it, color = PomboColors.Overlay60, fontSize = 10.sp)
+            }
+        }
+    }
 }
 
 /** Web ChannelModalsUI.updateStorageDaysDisplay — days collapse into months. */
@@ -2337,8 +2340,9 @@ private fun ToggleRow(label: String, hint: String, checked: Boolean, onToggle: (
 /** Horizontal chip picker used for language and category. */
 @Composable
 private fun ChipPicker(options: List<Pair<String, String>>, selected: String, onPick: (String) -> Unit) {
+    val scroll = androidx.compose.foundation.rememberScrollState()
     Row(
-        Modifier.fillMaxWidth().horizontalScroll(androidx.compose.foundation.rememberScrollState()),
+        Modifier.fillMaxWidth().chipScroller(scroll),
         horizontalArrangement = Arrangement.spacedBy(6.dp)
     ) {
         options.forEach { (value, label) ->
@@ -2348,13 +2352,53 @@ private fun ChipPicker(options: List<Pair<String, String>>, selected: String, on
                 color = if (active) PomboColors.Bg else PomboColors.Overlay60,
                 fontSize = 12.sp, fontWeight = FontWeight.Medium,
                 modifier = Modifier
-                    .background(if (active) Color.White else PomboColors.Overlay5, RoundedCornerShape(6.dp))
+                    .background(if (active) Color.White else PomboColors.Overlay8, RoundedCornerShape(6.dp))
                     .clickableNoRipple { onPick(value) }
                     .padding(horizontal = 10.dp, vertical = 5.dp)
             )
         }
     }
 }
+
+/**
+ * A chip row that runs to the screen edges through the create form's 20dp
+ * padding, first chip still aligned with the fields, and fades out where it
+ * continues.
+ */
+private fun Modifier.chipScroller(state: androidx.compose.foundation.ScrollState): Modifier {
+    val bleed = 20.dp
+    return layout { measurable, constraints ->
+        val px = bleed.roundToPx()
+        val placeable = measurable.measure(
+            constraints.copy(minWidth = constraints.minWidth + 2 * px, maxWidth = constraints.maxWidth + 2 * px)
+        )
+        layout(placeable.width - 2 * px, placeable.height) { placeable.place(-px, 0) }
+    }
+        .edgeFade(state, width = bleed + 24.dp)
+        .horizontalScroll(state)
+        .padding(horizontal = bleed)
+}
+
+/** Fades a horizontal scroller out at whichever edge still has content past it. */
+private fun Modifier.edgeFade(state: androidx.compose.foundation.ScrollState, width: androidx.compose.ui.unit.Dp = 28.dp): Modifier =
+    graphicsLayer(compositingStrategy = androidx.compose.ui.graphics.CompositingStrategy.Offscreen)
+        .drawWithContent {
+            drawContent()
+            val w = width.toPx()
+            if (state.canScrollBackward) drawRect(
+                androidx.compose.ui.graphics.Brush.horizontalGradient(listOf(Color.Transparent, Color.Black), endX = w),
+                size = androidx.compose.ui.geometry.Size(w, size.height),
+                blendMode = androidx.compose.ui.graphics.BlendMode.DstIn
+            )
+            if (state.canScrollForward) drawRect(
+                androidx.compose.ui.graphics.Brush.horizontalGradient(
+                    listOf(Color.Black, Color.Transparent), startX = size.width - w, endX = size.width
+                ),
+                topLeft = androidx.compose.ui.geometry.Offset(size.width - w, 0f),
+                size = androidx.compose.ui.geometry.Size(w, size.height),
+                blendMode = androidx.compose.ui.graphics.BlendMode.DstIn
+            )
+        }
 
 @Composable
 internal fun JoinChannelDialog(onDismiss: () -> Unit, onJoin: (String, String?, String?) -> Unit) {
@@ -2784,6 +2828,68 @@ internal fun pomboFieldColors() = OutlinedTextFieldDefaults.colors(
     focusedContainerColor = PomboColors.Surface8,
     unfocusedContainerColor = PomboColors.Surface8
 )
+
+/**
+ * The app's text field: Material's outlined field, look and behaviour, at
+ * 48dp instead of its 56dp minimum.
+ */
+@OptIn(androidx.compose.material3.ExperimentalMaterial3Api::class)
+@Composable
+internal fun PomboTextField(
+    value: String,
+    onValueChange: (String) -> Unit,
+    modifier: Modifier = Modifier,
+    enabled: Boolean = true,
+    textStyle: androidx.compose.ui.text.TextStyle = androidx.compose.material3.LocalTextStyle.current,
+    label: @Composable (() -> Unit)? = null,
+    placeholder: @Composable (() -> Unit)? = null,
+    trailingIcon: @Composable (() -> Unit)? = null,
+    visualTransformation: VisualTransformation = VisualTransformation.None,
+    keyboardOptions: androidx.compose.foundation.text.KeyboardOptions = androidx.compose.foundation.text.KeyboardOptions.Default,
+    keyboardActions: androidx.compose.foundation.text.KeyboardActions = androidx.compose.foundation.text.KeyboardActions.Default,
+    singleLine: Boolean = false,
+    maxLines: Int = if (singleLine) 1 else Int.MAX_VALUE,
+    shape: androidx.compose.ui.graphics.Shape = OutlinedTextFieldDefaults.shape,
+    colors: androidx.compose.material3.TextFieldColors = pomboFieldColors()
+) {
+    val interactionSource = remember { androidx.compose.foundation.interaction.MutableInteractionSource() }
+    val color = textStyle.color.takeOrElse { PomboColors.TextPrimary }
+    androidx.compose.foundation.text.BasicTextField(
+        value = value,
+        onValueChange = onValueChange,
+        modifier = modifier.defaultMinSize(minHeight = 48.dp),
+        enabled = enabled,
+        textStyle = textStyle.copy(color = if (enabled) color else color.copy(alpha = 0.38f)),
+        keyboardOptions = keyboardOptions,
+        keyboardActions = keyboardActions,
+        singleLine = singleLine,
+        maxLines = maxLines,
+        visualTransformation = visualTransformation,
+        interactionSource = interactionSource,
+        cursorBrush = androidx.compose.ui.graphics.SolidColor(colors.cursorColor),
+        decorationBox = { innerTextField ->
+            OutlinedTextFieldDefaults.DecorationBox(
+                value = value,
+                innerTextField = innerTextField,
+                enabled = enabled,
+                singleLine = singleLine,
+                visualTransformation = visualTransformation,
+                interactionSource = interactionSource,
+                label = label,
+                placeholder = placeholder,
+                trailingIcon = trailingIcon,
+                colors = colors,
+                contentPadding = OutlinedTextFieldDefaults.contentPadding(top = 12.dp, bottom = 12.dp),
+                container = {
+                    OutlinedTextFieldDefaults.Container(
+                        enabled = enabled, isError = false,
+                        interactionSource = interactionSource, colors = colors, shape = shape
+                    )
+                }
+            )
+        }
+    )
+}
 
 /**
  * Password prompt shown before opening a Protected channel — the password is

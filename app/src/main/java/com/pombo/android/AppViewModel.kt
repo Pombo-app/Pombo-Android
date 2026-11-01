@@ -2040,6 +2040,12 @@ class AppViewModel(app: Application) : AndroidViewModel(app), PomboBridge.Listen
         if (!_isGuest.value) settingsStore.homeTab = tab.id
     }
 
+    /** The Create DM Inbox panel: opened from Home and from Settings, drawn by the shell over both. */
+    private val _dmSetupOpen = MutableStateFlow(false)
+    val dmSetupOpen: StateFlow<Boolean> = _dmSetupOpen.asStateFlow()
+    fun openDmSetup() { _dmSetupOpen.value = true }
+    fun closeDmSetup() { _dmSetupOpen.value = false }
+
     // ==================== P2P file transfers ====================
 
     /** Live per-file transfer state, keyed by fileId. */

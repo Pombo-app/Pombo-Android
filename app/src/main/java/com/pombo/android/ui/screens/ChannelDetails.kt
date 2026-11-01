@@ -33,7 +33,6 @@ import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.Icon
-import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
@@ -321,7 +320,7 @@ private fun ChannelDetailsMain(
 
     if (editing) {
         Spacer(Modifier.height(8.dp))
-        OutlinedTextField(
+        PomboTextField(
             value = editName, onValueChange = { editName = it },
             placeholder = { Text("Enter name", color = PomboColors.Overlay25, fontSize = 14.sp) },
             singleLine = true, shape = RoundedCornerShape(8.dp),
@@ -348,7 +347,7 @@ private fun ChannelDetailsMain(
         }
         if (channel.type != "dm" && !memberLocalRename) {
             Spacer(Modifier.height(8.dp))
-            OutlinedTextField(
+            PomboTextField(
                 value = editDesc, onValueChange = { editDesc = it },
                 placeholder = { Text("Enter description", color = PomboColors.Overlay25, fontSize = 14.sp) },
                 shape = RoundedCornerShape(8.dp), maxLines = 3,
@@ -1623,7 +1622,7 @@ private fun ChannelStoragePanel(vm: AppViewModel, channel: Channel, canModerate:
             }
             if (customProvider) {
                 Spacer(Modifier.height(6.dp))
-                OutlinedTextField(
+                PomboTextField(
                     value = customAddress,
                     onValueChange = { customAddress = it.trim() },
                     placeholder = {

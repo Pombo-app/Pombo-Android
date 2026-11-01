@@ -102,6 +102,7 @@ fun MainShell(vm: AppViewModel) {
     }
     var showCreate by remember { mutableStateOf(false) }
     var showJoin by remember { mutableStateOf(false) }
+    val dmSetupOpen by vm.dmSetupOpen.collectAsState()
     var showConnect by remember { mutableStateOf(false) }
     var walletOpen by remember { mutableStateOf(false) }
     val isGuest by vm.isGuest.collectAsState()
@@ -224,6 +225,11 @@ fun MainShell(vm: AppViewModel) {
         if (showCreate) CreateChannelDialog(vm, onDismiss = { showCreate = false }) { spec ->
             vm.createChannel(spec); showCreate = false
         }
+        if (dmSetupOpen) CreateDmInboxDialog(
+            vm,
+            onDismiss = vm::closeDmSetup,
+            onCreate = { provider, custom, days -> vm.setupDmInbox(provider, custom, days) }
+        )
     }
 
     if (walletOpen) com.pombo.android.ui.WalletSheet(vm) { walletOpen = false }

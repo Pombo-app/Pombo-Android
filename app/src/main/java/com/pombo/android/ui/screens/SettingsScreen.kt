@@ -58,7 +58,6 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.draw.clip
 import kotlinx.coroutines.launch
 import androidx.compose.material3.Icon
-import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Text
 import androidx.compose.ui.window.Dialog
 import androidx.compose.runtime.LaunchedEffect
@@ -319,7 +318,7 @@ private fun AccountPanel(vm: AppViewModel) {
         Row(verticalAlignment = Alignment.CenterVertically) {
             Column(Modifier.widthIn(max = 180.dp)) {
                 SettingsFieldLabel("Display Name")
-                OutlinedTextField(
+                PomboTextField(
                     // Web: with ENS active the field CARRIES the ENS name.
                     value = ensName ?: editing,
                     onValueChange = { if (it.length <= 18) editing = it },
@@ -712,18 +711,11 @@ private fun ContentPanel(vm: AppViewModel) {
 private fun DmInboxPanel(vm: AppViewModel) {
     val health by vm.inboxHealth.collectAsState()
     val storage by vm.inboxStorage.collectAsState()
-    var showDmSetup by remember { mutableStateOf(false) }
     // Storage and health both load on open; nothing waits behind a button.
     LaunchedEffect(Unit) {
         vm.loadInboxStorage()
         vm.diagnoseInbox()
     }
-
-    if (showDmSetup) CreateDmInboxDialog(
-        vm,
-        onDismiss = { showDmSetup = false },
-        onCreate = { provider, custom, days -> vm.setupDmInbox(provider, custom, days) }
-    )
 
     SettingsSection {
         Text("Check and repair your DM inbox", color = PomboColors.Overlay40, fontSize = 12.sp)
@@ -799,7 +791,7 @@ private fun DmInboxPanel(vm: AppViewModel) {
                     Modifier.weight(1f)
                         .background(PomboColors.Accent.copy(alpha = 0.15f), RoundedCornerShape(12.dp))
                         .border(1.dp, PomboColors.Accent.copy(alpha = 0.30f), RoundedCornerShape(12.dp))
-                        .clickableNoRipple { showDmSetup = true }
+                        .clickableNoRipple { vm.openDmSetup() }
                         .padding(vertical = 10.dp),
                     horizontalArrangement = Arrangement.Center,
                     verticalAlignment = Alignment.CenterVertically
@@ -1497,6 +1489,11 @@ private fun SecurityPanel(vm: AppViewModel) {
 
     // No scroller of its own — the settings pager scrolls every panel.
     Column(Modifier.fillMaxSize()) {
+        BackupSection(vm)
+        Spacer(Modifier.height(20.dp))
+        Box(Modifier.fillMaxWidth().height(1.dp).background(PomboColors.Overlay5))
+        Spacer(Modifier.height(20.dp))
+
         if (noDeviceLock) {
             Text(
                 "This device has no screen lock. Set one up to export your key or " +
@@ -1573,10 +1570,6 @@ private fun SecurityPanel(vm: AppViewModel) {
             }
         }
 
-        Spacer(Modifier.height(20.dp))
-        Box(Modifier.fillMaxWidth().height(1.dp).background(PomboColors.Overlay5))
-        Spacer(Modifier.height(20.dp))
-        BackupSection(vm)
         Spacer(Modifier.height(20.dp))
         Box(Modifier.fillMaxWidth().height(1.dp).background(PomboColors.Overlay5))
         Spacer(Modifier.height(20.dp))

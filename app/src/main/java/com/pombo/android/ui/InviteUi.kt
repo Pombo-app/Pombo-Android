@@ -11,7 +11,7 @@ import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.outlined.WarningAmber
 import androidx.compose.material3.Icon
-import androidx.compose.material3.OutlinedTextField
+import com.pombo.android.ui.screens.PomboTextField
 import androidx.compose.material3.Text
 import androidx.compose.runtime.*
 import androidx.compose.foundation.layout.Box
@@ -257,7 +257,7 @@ fun InviteToChannelDialog(
                     letterSpacing = 0.35.sp
                 )
                 Spacer(Modifier.height(6.dp))
-                OutlinedTextField(
+                PomboTextField(
                     value = address,
                     onValueChange = { address = it.trim() },
                     placeholder = { Text("0x… or name.eth", color = w(0.20f), fontSize = 14.sp) },
