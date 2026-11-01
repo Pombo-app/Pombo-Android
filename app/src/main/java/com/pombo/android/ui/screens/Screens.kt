@@ -34,6 +34,7 @@ import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.AttachFile
 import androidx.compose.material.icons.filled.Lock
+import androidx.compose.material.icons.filled.Public
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
@@ -58,6 +59,9 @@ import kotlinx.coroutines.launch
 import kotlin.math.roundToInt
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.drawWithContent
+import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.layout.layout
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.text.input.VisualTransformation
@@ -1092,14 +1096,12 @@ object GateModes {
  * (gatePay auto-wraps the payer's shortfall from plain POL).
  */
 val GATE_TOKEN_PRESETS = listOf(
-    Triple("pol", "POL", "0x0000000000000000000000000000000000001010"),
     Triple("usdc", "USDC", "0x3c499c542cef5e3811e1192ce70d8cc03d5c3359"),
-    Triple("data", "DATA", "0x3a9a81d576d83ff21f26f325066054540720fc34")
+    Triple("pol", "POL", "0x0000000000000000000000000000000000001010")
 )
 val PAY_TOKEN_PRESETS = listOf(
-    Triple("pol", "POL", "0x0d500b1d8e8ef31e21c99d1db9a6444d3adf1270"),
     Triple("usdc", "USDC", "0x3c499c542cef5e3811e1192ce70d8cc03d5c3359"),
-    Triple("data", "DATA", "0x3a9a81d576d83ff21f26f325066054540720fc34")
+    Triple("pol", "POL", "0x0d500b1d8e8ef31e21c99d1db9a6444d3adf1270")
 )
 
 val CHANNEL_LANGUAGES = listOf(
@@ -1109,10 +1111,10 @@ val CHANNEL_LANGUAGES = listOf(
 )
 
 val CHANNEL_CATEGORIES = listOf(
-    "politics" to "Politics", "news" to "News", "tech" to "Tech & AI",
+    "general" to "General", "politics" to "Politics", "news" to "News", "tech" to "Tech & AI",
     "crypto" to "Crypto & Web3", "finance" to "Business & Finance", "science" to "Science",
     "gaming" to "Gaming", "entertainment" to "Entertainment", "sports" to "Sports",
-    "education" to "Education", "comedy" to "Comedy & Memes", "general" to "General",
+    "education" to "Education", "comedy" to "Comedy & Memes",
     // index.html:727-728 — the web offers these two; omitting them meant an
     // Android user could not classify a channel the web can.
     "nsfw" to "NSFW 18+", "adult" to "Adult 18+"
@@ -1186,7 +1188,7 @@ internal fun CreateChannelDialog(vm: AppViewModel, onDismiss: () -> Unit, onCrea
     var wireVisible by remember { mutableStateOf(false) }
     var name by remember { mutableStateOf("") }
     var password by remember { mutableStateOf("") }
-    var visible by remember { mutableStateOf(false) }
+    var visible by remember { mutableStateOf(true) }
     var description by remember { mutableStateOf("") }
     var language by remember { mutableStateOf("en") }
     var category by remember { mutableStateOf("general") }
@@ -1199,7 +1201,7 @@ internal fun CreateChannelDialog(vm: AppViewModel, onDismiss: () -> Unit, onCrea
 
     // N-D gate fields (Gated/Paid tabs)
     var gateAsset by remember { mutableStateOf("token") }      // token | nft
-    var gatePreset by remember { mutableStateOf("pol") }       // pol | usdc | data | custom
+    var gatePreset by remember { mutableStateOf("usdc") }      // usdc | pol | custom
     var gateTokenCustom by remember { mutableStateOf("") }
     var gateMinBalanceText by remember { mutableStateOf("") }
     var paidPreset by remember { mutableStateOf("usdc") }
@@ -1402,28 +1404,34 @@ internal fun CreateChannelDialog(vm: AppViewModel, onDismiss: () -> Unit, onCrea
                 // Type tabs (web sidebar). Five entries since N-D — a scroll
                 // row of chips instead of equal weights, or "Protected" clips.
                 SectionLabel("Type")
+                val typeScroll = androidx.compose.foundation.rememberScrollState()
                 Row(
-                    Modifier.fillMaxWidth()
-                        .horizontalScroll(androidx.compose.foundation.rememberScrollState()),
+                    Modifier.fillMaxWidth().chipScroller(typeScroll),
                     horizontalArrangement = Arrangement.spacedBy(8.dp)
                 ) {
                     ChannelKind.entries.forEach { k ->
                         val active = k == kind
-                        Box(
+                        val fg = if (active) Color.White else PomboColors.Overlay60
+                        Row(
                             Modifier
                                 .background(
-                                    if (active) PomboColors.Overlay10 else PomboColors.Overlay3,
+                                    if (active) PomboColors.Overlay12 else PomboColors.Overlay6,
                                     RoundedCornerShape(8.dp)
                                 )
                                 .clickableNoRipple { kind = k }
                                 .padding(horizontal = 14.dp, vertical = 10.dp),
-                            contentAlignment = Alignment.Center
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(10.dp)
                         ) {
-                            Text(
-                                k.label,
-                                color = if (active) Color.White else PomboColors.Overlay60,
-                                fontSize = 14.sp
-                            )
+                            val iconModifier = Modifier.size(16.dp)
+                            when (k) {
+                                ChannelKind.OPEN -> Icon(Icons.Filled.Public, null, tint = fg, modifier = iconModifier)
+                                ChannelKind.PROTECTED -> Icon(com.pombo.android.ui.PomboIcons.LockClosed, null, tint = fg, modifier = iconModifier)
+                                ChannelKind.CLOSED -> EthereumIcon(tint = fg, modifier = iconModifier)
+                                ChannelKind.GATED -> Icon(com.pombo.android.ui.PomboIcons.CheckBadge, null, tint = fg, modifier = iconModifier)
+                                ChannelKind.PAID -> Icon(com.pombo.android.ui.PomboIcons.CurrencyDollar, null, tint = fg, modifier = iconModifier)
+                            }
+                            Text(k.label, color = fg, fontSize = 14.sp)
                         }
                     }
                 }
@@ -1447,6 +1455,52 @@ internal fun CreateChannelDialog(vm: AppViewModel, onDismiss: () -> Unit, onCrea
                     singleLine = true, shape = RoundedCornerShape(12.dp),
                     textStyle = androidx.compose.ui.text.TextStyle(fontSize = 14.sp, color = PomboColors.TextPrimary),
                     colors = pomboFieldColors(), modifier = Modifier.fillMaxWidth()
+                )
+
+                Spacer(Modifier.height(20.dp))
+                Box(Modifier.fillMaxWidth().height(1.dp).background(PomboColors.Overlay5))
+                Spacer(Modifier.height(16.dp))
+
+                // Closed channels are never discoverable, so the web hides this
+                // section outright rather than showing a toggle that cannot be
+                // honoured (ChannelModalsUI.js:184-190).
+                if (kind != ChannelKind.CLOSED) {
+                    ToggleRow(
+                        label = "LISTED",
+                        hint = "Channel appears in Explore",
+                        checked = visible,
+                        onToggle = { visible = !visible }
+                    )
+
+                    if (visible) {
+                        Spacer(Modifier.height(16.dp))
+                        SectionLabel("Description")
+                        OutlinedTextField(
+                            value = description, onValueChange = { if (it.length <= 200) description = it },
+                            placeholder = { Text("What's this channel about?", color = PomboColors.Overlay20, fontSize = 14.sp) },
+                            shape = RoundedCornerShape(12.dp), maxLines = 3,
+                            textStyle = androidx.compose.ui.text.TextStyle(fontSize = 14.sp, color = PomboColors.TextPrimary),
+                            colors = pomboFieldColors(), modifier = Modifier.fillMaxWidth()
+                        )
+                        Spacer(Modifier.height(16.dp))
+                        SectionLabel("Language")
+                        ChipPicker(CHANNEL_LANGUAGES, language) { language = it }
+                        Spacer(Modifier.height(16.dp))
+                        SectionLabel("Category")
+                        ChipPicker(CHANNEL_CATEGORIES, category) { category = it }
+                    }
+                    Spacer(Modifier.height(16.dp))
+                }
+
+                // Read-only. Public/password: public subscribe WITHOUT
+                // publish. Gated: an immutable flag on the gate — the
+                // contract refuses everyone but the owner and moderators at
+                // ingest, and the shared publish key is only handed to them.
+                ToggleRow(
+                    label = "READ-ONLY",
+                    hint = "Only you and moderators can send messages",
+                    checked = readOnly,
+                    onToggle = { readOnly = !readOnly }
                 )
 
                 if (kind == ChannelKind.PROTECTED) {
@@ -1695,59 +1749,13 @@ internal fun CreateChannelDialog(vm: AppViewModel, onDismiss: () -> Unit, onCrea
                     }
                     Text(
                         if (wireVisible)
-                            "Every message exposes its author's account, attributable by anyone, forever. Removed members' messages are rejected by readers, but can still reach storage."
+                            "Authors visible on the network and to members. Storage drops removed members within minutes."
                         else
-                            "Full author privacy. Removed members can pollute storage until you reset the key with a paid on-chain action.",
+                            "Authors hidden from the network; only members see who wrote what. Removed members can still reach storage until you reset the publish key.",
                         color = PomboColors.Overlay30, fontSize = 12.sp,
                         modifier = Modifier.padding(top = 6.dp)
                     )
                 }
-
-                Spacer(Modifier.height(20.dp))
-                Box(Modifier.fillMaxWidth().height(1.dp).background(PomboColors.Overlay5))
-                Spacer(Modifier.height(16.dp))
-
-                // Closed channels are never discoverable, so the web hides this
-                // section outright rather than showing a toggle that cannot be
-                // honoured (ChannelModalsUI.js:184-190).
-                if (kind != ChannelKind.CLOSED) {
-                    ToggleRow(
-                        label = "LISTED",
-                        hint = "Channel appears in Explore",
-                        checked = visible,
-                        onToggle = { visible = !visible }
-                    )
-
-                    if (visible) {
-                        Spacer(Modifier.height(16.dp))
-                        SectionLabel("Description")
-                        OutlinedTextField(
-                            value = description, onValueChange = { if (it.length <= 200) description = it },
-                            placeholder = { Text("What's this channel about?", color = PomboColors.Overlay20, fontSize = 14.sp) },
-                            shape = RoundedCornerShape(12.dp), maxLines = 3,
-                            textStyle = androidx.compose.ui.text.TextStyle(fontSize = 14.sp, color = PomboColors.TextPrimary),
-                            colors = pomboFieldColors(), modifier = Modifier.fillMaxWidth()
-                        )
-                        Spacer(Modifier.height(16.dp))
-                        SectionLabel("Language")
-                        ChipPicker(CHANNEL_LANGUAGES, language) { language = it }
-                        Spacer(Modifier.height(16.dp))
-                        SectionLabel("Category")
-                        ChipPicker(CHANNEL_CATEGORIES, category) { category = it }
-                    }
-                    Spacer(Modifier.height(16.dp))
-                }
-
-                // Read-only. Public/password: public subscribe WITHOUT
-                // publish. Gated: an immutable flag on the gate — the
-                // contract refuses everyone but the owner and moderators at
-                // ingest, and the shared publish key is only handed to them.
-                ToggleRow(
-                    label = "READ-ONLY",
-                    hint = "Only you and your moderators can post; everyone else reads",
-                    checked = readOnly,
-                    onToggle = { readOnly = !readOnly }
-                )
 
                 // ---- Message storage (web #storage-section) ----
                 Spacer(Modifier.height(20.dp))
@@ -2337,8 +2345,9 @@ private fun ToggleRow(label: String, hint: String, checked: Boolean, onToggle: (
 /** Horizontal chip picker used for language and category. */
 @Composable
 private fun ChipPicker(options: List<Pair<String, String>>, selected: String, onPick: (String) -> Unit) {
+    val scroll = androidx.compose.foundation.rememberScrollState()
     Row(
-        Modifier.fillMaxWidth().horizontalScroll(androidx.compose.foundation.rememberScrollState()),
+        Modifier.fillMaxWidth().chipScroller(scroll),
         horizontalArrangement = Arrangement.spacedBy(6.dp)
     ) {
         options.forEach { (value, label) ->
@@ -2348,13 +2357,53 @@ private fun ChipPicker(options: List<Pair<String, String>>, selected: String, on
                 color = if (active) PomboColors.Bg else PomboColors.Overlay60,
                 fontSize = 12.sp, fontWeight = FontWeight.Medium,
                 modifier = Modifier
-                    .background(if (active) Color.White else PomboColors.Overlay5, RoundedCornerShape(6.dp))
+                    .background(if (active) Color.White else PomboColors.Overlay8, RoundedCornerShape(6.dp))
                     .clickableNoRipple { onPick(value) }
                     .padding(horizontal = 10.dp, vertical = 5.dp)
             )
         }
     }
 }
+
+/**
+ * A chip row that runs to the screen edges through the create form's 20dp
+ * padding, first chip still aligned with the fields, and fades out where it
+ * continues.
+ */
+private fun Modifier.chipScroller(state: androidx.compose.foundation.ScrollState): Modifier {
+    val bleed = 20.dp
+    return layout { measurable, constraints ->
+        val px = bleed.roundToPx()
+        val placeable = measurable.measure(
+            constraints.copy(minWidth = constraints.minWidth + 2 * px, maxWidth = constraints.maxWidth + 2 * px)
+        )
+        layout(placeable.width - 2 * px, placeable.height) { placeable.place(-px, 0) }
+    }
+        .edgeFade(state, width = bleed + 24.dp)
+        .horizontalScroll(state)
+        .padding(horizontal = bleed)
+}
+
+/** Fades a horizontal scroller out at whichever edge still has content past it. */
+private fun Modifier.edgeFade(state: androidx.compose.foundation.ScrollState, width: androidx.compose.ui.unit.Dp = 28.dp): Modifier =
+    graphicsLayer(compositingStrategy = androidx.compose.ui.graphics.CompositingStrategy.Offscreen)
+        .drawWithContent {
+            drawContent()
+            val w = width.toPx()
+            if (state.canScrollBackward) drawRect(
+                androidx.compose.ui.graphics.Brush.horizontalGradient(listOf(Color.Transparent, Color.Black), endX = w),
+                size = androidx.compose.ui.geometry.Size(w, size.height),
+                blendMode = androidx.compose.ui.graphics.BlendMode.DstIn
+            )
+            if (state.canScrollForward) drawRect(
+                androidx.compose.ui.graphics.Brush.horizontalGradient(
+                    listOf(Color.Black, Color.Transparent), startX = size.width - w, endX = size.width
+                ),
+                topLeft = androidx.compose.ui.geometry.Offset(size.width - w, 0f),
+                size = androidx.compose.ui.geometry.Size(w, size.height),
+                blendMode = androidx.compose.ui.graphics.BlendMode.DstIn
+            )
+        }
 
 @Composable
 internal fun JoinChannelDialog(onDismiss: () -> Unit, onJoin: (String, String?, String?) -> Unit) {
@@ -2784,6 +2833,7 @@ internal fun pomboFieldColors() = OutlinedTextFieldDefaults.colors(
     focusedContainerColor = PomboColors.Surface8,
     unfocusedContainerColor = PomboColors.Surface8
 )
+
 
 /**
  * Password prompt shown before opening a Protected channel — the password is
