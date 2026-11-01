@@ -1497,6 +1497,11 @@ private fun SecurityPanel(vm: AppViewModel) {
 
     // No scroller of its own — the settings pager scrolls every panel.
     Column(Modifier.fillMaxSize()) {
+        BackupSection(vm)
+        Spacer(Modifier.height(20.dp))
+        Box(Modifier.fillMaxWidth().height(1.dp).background(PomboColors.Overlay5))
+        Spacer(Modifier.height(20.dp))
+
         if (noDeviceLock) {
             Text(
                 "This device has no screen lock. Set one up to export your key or " +
@@ -1573,10 +1578,6 @@ private fun SecurityPanel(vm: AppViewModel) {
             }
         }
 
-        Spacer(Modifier.height(20.dp))
-        Box(Modifier.fillMaxWidth().height(1.dp).background(PomboColors.Overlay5))
-        Spacer(Modifier.height(20.dp))
-        BackupSection(vm)
         Spacer(Modifier.height(20.dp))
         Box(Modifier.fillMaxWidth().height(1.dp).background(PomboColors.Overlay5))
         Spacer(Modifier.height(20.dp))
