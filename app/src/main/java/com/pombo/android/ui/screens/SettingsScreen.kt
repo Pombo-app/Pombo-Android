@@ -58,7 +58,6 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.draw.clip
 import kotlinx.coroutines.launch
 import androidx.compose.material3.Icon
-import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Text
 import androidx.compose.ui.window.Dialog
 import androidx.compose.runtime.LaunchedEffect
@@ -319,7 +318,7 @@ private fun AccountPanel(vm: AppViewModel) {
         Row(verticalAlignment = Alignment.CenterVertically) {
             Column(Modifier.widthIn(max = 180.dp)) {
                 SettingsFieldLabel("Display Name")
-                OutlinedTextField(
+                PomboTextField(
                     // Web: with ENS active the field CARRIES the ENS name.
                     value = ensName ?: editing,
                     onValueChange = { if (it.length <= 18) editing = it },

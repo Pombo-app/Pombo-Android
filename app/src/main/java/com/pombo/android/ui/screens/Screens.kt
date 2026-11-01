@@ -43,7 +43,6 @@ import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.Icon
 import androidx.compose.material.icons.outlined.Close
 import androidx.compose.material3.OutlinedButton
-import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.OutlinedTextFieldDefaults
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
@@ -59,8 +58,10 @@ import kotlinx.coroutines.launch
 import kotlin.math.roundToInt
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.foundation.layout.defaultMinSize
 import androidx.compose.ui.draw.drawWithContent
 import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.graphics.takeOrElse
 import androidx.compose.ui.layout.layout
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.PasswordVisualTransformation
@@ -759,7 +760,7 @@ fun CreateAccountWizard(vm: AppViewModel, onDismiss: () -> Unit) {
                 ) {
                     Text("DISPLAY NAME", color = PomboColors.Overlay40, fontSize = 11.sp, fontWeight = FontWeight.Medium, letterSpacing = 0.08.em)
                     Spacer(Modifier.height(8.dp))
-                    OutlinedTextField(
+                    PomboTextField(
                         value = name,
                         onValueChange = { if (it.length <= 18) name = it },
                         placeholder = { Text("Your name (optional)", color = PomboColors.Overlay20, fontSize = 14.sp) },
@@ -999,7 +1000,7 @@ fun OnboardingScreen(vm: AppViewModel, canCancel: Boolean = false) {
                 ) { Text("Cancel", color = PomboColors.TextSecondary) }
             }
         } else {
-            OutlinedTextField(
+            PomboTextField(
                 value = importText,
                 onValueChange = { importText = it },
                 label = { Text("Private key or recovery phrase") },
@@ -1449,7 +1450,7 @@ internal fun CreateChannelDialog(vm: AppViewModel, onDismiss: () -> Unit, onCrea
 
                 Spacer(Modifier.height(20.dp))
                 SectionLabel("Name")
-                OutlinedTextField(
+                PomboTextField(
                     value = name, onValueChange = { name = it },
                     placeholder = { Text("Channel name", color = PomboColors.Overlay20, fontSize = 14.sp) },
                     singleLine = true, shape = RoundedCornerShape(12.dp),
@@ -1475,7 +1476,7 @@ internal fun CreateChannelDialog(vm: AppViewModel, onDismiss: () -> Unit, onCrea
                     if (visible) {
                         Spacer(Modifier.height(16.dp))
                         SectionLabel("Description")
-                        OutlinedTextField(
+                        PomboTextField(
                             value = description, onValueChange = { if (it.length <= 200) description = it },
                             placeholder = { Text("What's this channel about?", color = PomboColors.Overlay20, fontSize = 14.sp) },
                             shape = RoundedCornerShape(12.dp), maxLines = 3,
@@ -1506,7 +1507,7 @@ internal fun CreateChannelDialog(vm: AppViewModel, onDismiss: () -> Unit, onCrea
                 if (kind == ChannelKind.PROTECTED) {
                     Spacer(Modifier.height(16.dp))
                     SectionLabel("Password")
-                    OutlinedTextField(
+                    PomboTextField(
                         value = password, onValueChange = { password = it },
                         placeholder = { Text("Channel password", color = PomboColors.Overlay20, fontSize = 14.sp) },
                         singleLine = true, shape = RoundedCornerShape(12.dp),
@@ -1565,7 +1566,7 @@ internal fun CreateChannelDialog(vm: AppViewModel, onDismiss: () -> Unit, onCrea
                         TokenPresetRow(GATE_TOKEN_PRESETS, gatePreset) { gatePreset = it }
                         if (gatePreset == "custom") {
                             Spacer(Modifier.height(8.dp))
-                            OutlinedTextField(
+                            PomboTextField(
                                 value = gateTokenCustom, onValueChange = { gateTokenCustom = it },
                                 placeholder = { Text("0x…", color = PomboColors.Overlay20, fontSize = 13.sp) },
                                 singleLine = true, shape = RoundedCornerShape(12.dp),
@@ -1588,7 +1589,7 @@ internal fun CreateChannelDialog(vm: AppViewModel, onDismiss: () -> Unit, onCrea
 
                         Spacer(Modifier.height(16.dp))
                         SectionLabel("Minimum Balance")
-                        OutlinedTextField(
+                        PomboTextField(
                             value = gateMinBalanceText, onValueChange = { gateMinBalanceText = it },
                             placeholder = { Text("e.g. 100", color = PomboColors.Overlay20, fontSize = 14.sp) },
                             singleLine = true, shape = RoundedCornerShape(12.dp),
@@ -1604,7 +1605,7 @@ internal fun CreateChannelDialog(vm: AppViewModel, onDismiss: () -> Unit, onCrea
                         )
                     } else {
                         SectionLabel("Collection Contract")
-                        OutlinedTextField(
+                        PomboTextField(
                             value = gateTokenCustom, onValueChange = { gateTokenCustom = it },
                             placeholder = { Text("0x…", color = PomboColors.Overlay20, fontSize = 13.sp) },
                             singleLine = true, shape = RoundedCornerShape(12.dp),
@@ -1628,7 +1629,7 @@ internal fun CreateChannelDialog(vm: AppViewModel, onDismiss: () -> Unit, onCrea
                     TokenPresetRow(PAY_TOKEN_PRESETS, paidPreset) { paidPreset = it }
                     if (paidPreset == "custom") {
                         Spacer(Modifier.height(8.dp))
-                        OutlinedTextField(
+                        PomboTextField(
                             value = paidTokenCustom, onValueChange = { paidTokenCustom = it },
                             placeholder = { Text("0x… (e.g. USDC)", color = PomboColors.Overlay20, fontSize = 13.sp) },
                             singleLine = true, shape = RoundedCornerShape(12.dp),
@@ -1653,7 +1654,7 @@ internal fun CreateChannelDialog(vm: AppViewModel, onDismiss: () -> Unit, onCrea
                     Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(12.dp)) {
                         Column(Modifier.weight(1f)) {
                             SectionLabel("Price")
-                            OutlinedTextField(
+                            PomboTextField(
                                 value = paidPriceText, onValueChange = { paidPriceText = it },
                                 placeholder = { Text("e.g. 5", color = PomboColors.Overlay20, fontSize = 14.sp) },
                                 singleLine = true, shape = RoundedCornerShape(12.dp),
@@ -1665,7 +1666,7 @@ internal fun CreateChannelDialog(vm: AppViewModel, onDismiss: () -> Unit, onCrea
                         }
                         Column(Modifier.weight(1f)) {
                             SectionLabel("Period (days)")
-                            OutlinedTextField(
+                            PomboTextField(
                                 value = paidDurationDays, onValueChange = { paidDurationDays = it },
                                 singleLine = true, shape = RoundedCornerShape(12.dp),
                                 keyboardOptions = androidx.compose.foundation.text.KeyboardOptions(
@@ -1680,7 +1681,7 @@ internal fun CreateChannelDialog(vm: AppViewModel, onDismiss: () -> Unit, onCrea
                 if (kind == ChannelKind.CLOSED) {
                     Spacer(Modifier.height(16.dp))
                     SectionLabel("Members")
-                    OutlinedTextField(
+                    PomboTextField(
                         value = membersText, onValueChange = { membersText = it },
                         placeholder = {
                             Text("0x… addresses, one per line", color = PomboColors.Overlay20, fontSize = 14.sp)
@@ -2834,6 +2835,67 @@ internal fun pomboFieldColors() = OutlinedTextFieldDefaults.colors(
     unfocusedContainerColor = PomboColors.Surface8
 )
 
+/**
+ * The app's text field: Material's outlined field, look and behaviour, at
+ * 48dp instead of its 56dp minimum.
+ */
+@OptIn(androidx.compose.material3.ExperimentalMaterial3Api::class)
+@Composable
+internal fun PomboTextField(
+    value: String,
+    onValueChange: (String) -> Unit,
+    modifier: Modifier = Modifier,
+    enabled: Boolean = true,
+    textStyle: androidx.compose.ui.text.TextStyle = androidx.compose.material3.LocalTextStyle.current,
+    label: @Composable (() -> Unit)? = null,
+    placeholder: @Composable (() -> Unit)? = null,
+    trailingIcon: @Composable (() -> Unit)? = null,
+    visualTransformation: VisualTransformation = VisualTransformation.None,
+    keyboardOptions: androidx.compose.foundation.text.KeyboardOptions = androidx.compose.foundation.text.KeyboardOptions.Default,
+    keyboardActions: androidx.compose.foundation.text.KeyboardActions = androidx.compose.foundation.text.KeyboardActions.Default,
+    singleLine: Boolean = false,
+    maxLines: Int = if (singleLine) 1 else Int.MAX_VALUE,
+    shape: androidx.compose.ui.graphics.Shape = OutlinedTextFieldDefaults.shape,
+    colors: androidx.compose.material3.TextFieldColors = pomboFieldColors()
+) {
+    val interactionSource = remember { androidx.compose.foundation.interaction.MutableInteractionSource() }
+    val color = textStyle.color.takeOrElse { PomboColors.TextPrimary }
+    androidx.compose.foundation.text.BasicTextField(
+        value = value,
+        onValueChange = onValueChange,
+        modifier = modifier.defaultMinSize(minHeight = 48.dp),
+        enabled = enabled,
+        textStyle = textStyle.copy(color = if (enabled) color else color.copy(alpha = 0.38f)),
+        keyboardOptions = keyboardOptions,
+        keyboardActions = keyboardActions,
+        singleLine = singleLine,
+        maxLines = maxLines,
+        visualTransformation = visualTransformation,
+        interactionSource = interactionSource,
+        cursorBrush = androidx.compose.ui.graphics.SolidColor(colors.cursorColor),
+        decorationBox = { innerTextField ->
+            OutlinedTextFieldDefaults.DecorationBox(
+                value = value,
+                innerTextField = innerTextField,
+                enabled = enabled,
+                singleLine = singleLine,
+                visualTransformation = visualTransformation,
+                interactionSource = interactionSource,
+                label = label,
+                placeholder = placeholder,
+                trailingIcon = trailingIcon,
+                colors = colors,
+                contentPadding = OutlinedTextFieldDefaults.contentPadding(top = 12.dp, bottom = 12.dp),
+                container = {
+                    OutlinedTextFieldDefaults.Container(
+                        enabled = enabled, isError = false,
+                        interactionSource = interactionSource, colors = colors, shape = shape
+                    )
+                }
+            )
+        }
+    )
+}
 
 /**
  * Password prompt shown before opening a Protected channel — the password is
