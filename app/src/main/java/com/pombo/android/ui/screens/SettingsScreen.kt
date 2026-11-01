@@ -711,18 +711,11 @@ private fun ContentPanel(vm: AppViewModel) {
 private fun DmInboxPanel(vm: AppViewModel) {
     val health by vm.inboxHealth.collectAsState()
     val storage by vm.inboxStorage.collectAsState()
-    var showDmSetup by remember { mutableStateOf(false) }
     // Storage and health both load on open; nothing waits behind a button.
     LaunchedEffect(Unit) {
         vm.loadInboxStorage()
         vm.diagnoseInbox()
     }
-
-    if (showDmSetup) CreateDmInboxDialog(
-        vm,
-        onDismiss = { showDmSetup = false },
-        onCreate = { provider, custom, days -> vm.setupDmInbox(provider, custom, days) }
-    )
 
     SettingsSection {
         Text("Check and repair your DM inbox", color = PomboColors.Overlay40, fontSize = 12.sp)
@@ -798,7 +791,7 @@ private fun DmInboxPanel(vm: AppViewModel) {
                     Modifier.weight(1f)
                         .background(PomboColors.Accent.copy(alpha = 0.15f), RoundedCornerShape(12.dp))
                         .border(1.dp, PomboColors.Accent.copy(alpha = 0.30f), RoundedCornerShape(12.dp))
-                        .clickableNoRipple { showDmSetup = true }
+                        .clickableNoRipple { vm.openDmSetup() }
                         .padding(vertical = 10.dp),
                     horizontalArrangement = Arrangement.Center,
                     verticalAlignment = Alignment.CenterVertically

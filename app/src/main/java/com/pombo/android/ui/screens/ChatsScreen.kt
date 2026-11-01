@@ -144,7 +144,6 @@ internal fun ChatsTab(vm: AppViewModel, onContacts: () -> Unit, onConnect: () ->
 
     val hasDmInbox by vm.hasDmInbox.collectAsState()
     var showNewDm by remember { mutableStateOf(false) }
-    var showDmSetup by remember { mutableStateOf(false) }
     LaunchedEffect(isGuest) { vm.refreshDmInbox() }
 
     Box(Modifier.fillMaxSize()) {
@@ -404,7 +403,7 @@ internal fun ChatsTab(vm: AppViewModel, onContacts: () -> Unit, onConnect: () ->
             Box(Modifier.align(Alignment.BottomEnd).padding(end = 24.dp, bottom = 40.dp)) {
                 when (hasDmInbox) {
                     true -> NewDmIconButton { showNewDm = true }
-                    false -> AccentPillButton("Create DM Inbox", Icons.Filled.MailOutline) { showDmSetup = true }
+                    false -> AccentPillButton("Create DM Inbox", Icons.Filled.MailOutline) { vm.openDmSetup() }
                     null -> PillButtonPlaceholder()
                 }
             }
@@ -412,11 +411,6 @@ internal fun ChatsTab(vm: AppViewModel, onContacts: () -> Unit, onConnect: () ->
         if (showNewDm) NewDmDialog(
             onDismiss = { showNewDm = false },
             onStart = { address, localName -> showNewDm = false; vm.startDm(address, localName) }
-        )
-        if (showDmSetup) CreateDmInboxDialog(
-            vm,
-            onDismiss = { showDmSetup = false },
-            onCreate = { provider, custom, days -> vm.setupDmInbox(provider, custom, days) }
         )
     }
 }
