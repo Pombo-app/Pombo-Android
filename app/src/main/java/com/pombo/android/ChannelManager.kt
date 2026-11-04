@@ -835,6 +835,8 @@ class ChannelManager(
         // Keyed by peer, not by account: a peer both accounts talk to would
         // otherwise show the next account what the previous one received.
         synchronized(dmReceived) { dmReceived.clear() }
+        synchronized(dmPeerReactions) { dmPeerReactions.clear() }
+        synchronized(dmPeerOverrides) { dmPeerOverrides.clear() }
         dmSentRows.clear()
         inboxCatchUpJob?.cancel()
         inboxSeenTs = 0L
@@ -3506,6 +3508,36 @@ class ChannelManager(
      */
     private val dmReceived = HashMap<String, MutableList<UiMessage>>()
 
+    /**
+     * The peer's reactions read from my inbox, per peer, as the latest add or
+     * remove per (message, emoji). [_reactions] belongs to the open channel and
+     * every open resets it, so this is what puts them back.
+     */
+    private val dmPeerReactions = HashMap<String, MutableMap<Pair<String, String>, Boolean>>()
+
+    private fun rememberPeerReaction(peer: String, messageId: String, emoji: String, add: Boolean) {
+        if (messageId.isEmpty() || emoji.isEmpty()) return
+        synchronized(dmPeerReactions) { dmPeerReactions.getOrPut(peer) { HashMap() }[messageId to emoji] = add }
+    }
+
+    /**
+     * The peer's latest edit or delete per target, per peer. Their target can
+     * be read again after it (a catch-up window, Search older), and every
+     * open clears [deletedIds] and [pendingOverrides].
+     */
+    private val dmPeerOverrides = HashMap<String, MutableMap<String, JSONObject>>()
+
+    private fun rememberPeerOverride(peer: String, data: JSONObject) {
+        val targetId = data.optString("targetId").ifEmpty { return }
+        synchronized(dmPeerOverrides) {
+            val perPeer = dmPeerOverrides.getOrPut(peer) { HashMap() }
+            if (perPeer[targetId]?.optString("type") != "delete") perPeer[targetId] = data
+        }
+    }
+
+    private fun peerOverride(peer: String, targetId: String): JSONObject? =
+        synchronized(dmPeerOverrides) { dmPeerOverrides[peer]?.get(targetId) }
+
     /** Storage rows this session wrote to peers' inboxes, with the throwaway keys that signed them. */
     private val dmSentRows = com.pombo.android.core.DmSentRows()
     private val _inboxPurgeProviders = MutableStateFlow(0)
@@ -3692,6 +3724,7 @@ class ChannelManager(
 
         when (data.optString("type")) {
             "edit", "delete" -> {
+                rememberPeerOverride(sender, data)
                 if (onScreen) applyOverride(data, sender)
                 // Off screen, still rewrite the inbox cache: that cache is what
                 // the next open merges from, so skipping it is what made a
@@ -3700,13 +3733,12 @@ class ChannelManager(
                 return
             }
             "reaction" -> {
-                // Dropped when off screen rather than written into another
-                // channel's reaction map. Reopening the DM replays the inbox
-                // history through this same router, which restores it.
-                if (onScreen) applyReaction(
-                    data.optString("messageId"), data.optString("emoji"), sender,
-                    data.optString("action") != "remove"
-                )
+                val messageId = data.optString("messageId")
+                val emoji = data.optString("emoji")
+                val add = data.optString("action") != "remove"
+                rememberPeerReaction(sender, messageId, emoji, add)
+                // Off screen it would land in whatever channel is open.
+                if (onScreen) applyReaction(messageId, emoji, sender, add)
                 return
             }
             // Images ride the same chunked transport as channels, just sealed
@@ -3733,6 +3765,13 @@ class ChannelManager(
                 seq = meta.optInt("sequenceNumber", -1).takeIf { it >= 0 },
                 publisherId = publisherIdRaw
             )
+        }?.let { m ->
+            val override = peerOverride(sender, m.id)
+            when (override?.optString("type")) {
+                "delete" -> null
+                "edit" -> m.copy(text = override.optString("text"), edited = true)
+                else -> m
+            }
         } ?: return
 
         val list = synchronized(dmReceived) { dmReceived.getOrPut(sender) { mutableListOf() } }
@@ -4351,6 +4390,17 @@ class ChannelManager(
         // bounded.
         inboxSubscribeJob?.join()
         if (!stillCurrent(generation)) return
+        // Before the merge: a delete must screen it, and an edit waits for a
+        // target that only a Search older window brings in.
+        synchronized(dmPeerOverrides) { dmPeerOverrides[peer]?.values?.toList() }?.let { overrides ->
+            synchronized(this) {
+                overrides.forEach { o ->
+                    val targetId = o.optString("targetId")
+                    if (o.optString("type") == "delete") deletedIds.add(targetId)
+                    else pendingOverrides[targetId] = o to peer
+                }
+            }
+        }
         // Keyed by the recovered sender, so this is already the peer's — the
         // filter is the same invariant as above, stated once for both halves:
         // a conversation shows my messages and this peer's, nothing else.
@@ -4371,9 +4421,12 @@ class ChannelManager(
             .mapNotNull { it.imageId }
             .distinct()
             .forEach { hydrateFromLedger(it) }
+        synchronized(dmPeerReactions) { dmPeerReactions[peer]?.toMap() }?.forEach { (key, add) ->
+            if (add) applyReaction(key.first, key.second, peer, true)
+        }
         // Own reactions never come back from the peer's inbox either — overlay
         // the local record (web dm.js loadDMTimeline reads sentReactions the
-        // same way). The peer's reactions to me replay through the inbox.
+        // same way).
         sentReactionsStore?.forStream(channel.messageStreamId)?.let { stored ->
             stored.keys().forEach { messageId ->
                 val perMsg = stored.optJSONObject(messageId) ?: return@forEach
@@ -4594,7 +4647,14 @@ class ChannelManager(
                             )?.let { fresh.add(it) }
                         }
                     }
-                    "edit", "delete" -> applyOverride(plain, peer)
+                    "edit", "delete" -> { rememberPeerOverride(peer, plain); applyOverride(plain, peer) }
+                    "reaction" -> {
+                        val messageId = plain.optString("messageId")
+                        val emoji = plain.optString("emoji")
+                        val add = plain.optString("action") != "remove"
+                        rememberPeerReaction(peer, messageId, emoji, add)
+                        applyReaction(messageId, emoji, peer, add)
+                    }
                 }
             }
 
