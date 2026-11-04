@@ -297,6 +297,7 @@ class ChannelManager(
             // account's other devices cannot get anywhere else
             onLocalStateChanged()
         },
+        onKeysImported = { messageStreamId -> refreshAfterEpochKey(messageStreamId) },
         checkGateAccess = { messageStreamId, requester ->
             val channel = channelByStream(messageStreamId)
             if (channel?.type != "gated") true

@@ -37,7 +37,7 @@ class SyncManager(
     /** Snapshot of this device's state, in the web's payload shape. */
     private val exportLocal: () -> JSONObject,
     /** Applies merged state back into the local stores. */
-    private val importMerged: (JSONObject) -> Unit,
+    private val importMerged: suspend (JSONObject) -> Unit,
     /**
      * Settings → Account. Read on every trigger rather than captured, so
      * changing the mode (or switching account, since the setting is scoped)

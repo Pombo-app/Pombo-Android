@@ -48,6 +48,8 @@ class EpochKeyManager(
     private val resendKeys: suspend (keysStreamId: String) -> List<Entry>,
     /** Fired on adoption — the channel layer re-pulls history so parked messages open. */
     private val onKeyAdopted: (messageStreamId: String, keyId: String) -> Unit,
+    /** Fired when [applyPersisted] gives a hydrated channel keys it lacked. Not a local change: nothing to push back. */
+    private val onKeysImported: (messageStreamId: String) -> Unit = {},
     /** Checked before wrapping a key for a requester: FAIL-CLOSED, and true on ungated channels. */
     private val checkGateAccess: suspend (messageStreamId: String, requester: String) -> Boolean =
         { _, _ -> true },
@@ -1905,15 +1907,33 @@ class EpochKeyManager(
     }
 
     /**
-     * Re-read the store into every already-hydrated state: [loadPersistedState]
-     * runs once per channel, so a sync pull that lands after it would otherwise
-     * wait for a restart. [loadPersisted] unions, so adopted keys are untouched.
+     * Fold an imported epochKeys slice (sync pull, backup restore) into the
+     * store and into every hydrated state in one locked step, then tell the
+     * channel layer which channels gained keys.
+     * Besides [persist], the only writer of the store: a save outside the lock
+     * is overwritten by the next [persist] of a state that never saw it.
      */
-    suspend fun refreshPersisted() = mutex.withLock {
-        for ((messageStreamId, s) in state) {
-            if (s.loaded) loadPersisted(messageStreamId, s)
+    suspend fun applyPersisted(slice: JSONObject) {
+        val gained = mutableSetOf<String>()
+        mutex.withLock {
+            for (messageStreamId in slice.keys()) {
+                val incoming = slice.optJSONObject(messageStreamId) ?: continue
+                val local = store.load(messageStreamId)
+                store.save(messageStreamId,
+                    if (local == null) incoming else SyncMerge.foldEpochKeySlice(local, incoming))
+                val s = state[messageStreamId] ?: continue
+                if (!s.loaded) continue
+                val held = heldKeyIds(s)
+                loadPersisted(messageStreamId, s)
+                dropHeldKidsLocked(s)
+                if (heldKeyIds(s) != held) gained.add(messageStreamId)
+            }
         }
+        gained.forEach { onKeysImported(it) }
     }
+
+    private fun heldKeyIds(s: ChannelState): Set<String> =
+        s.epochs.keys + listOfNotNull(s.pubKey?.keyId, s.intKey?.keyId)
 
     // ---- Shared publish key (Sealed) ----
 
