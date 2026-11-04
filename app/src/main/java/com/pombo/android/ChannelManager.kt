@@ -1583,8 +1583,10 @@ class ChannelManager(
         val onAdmin: Boolean,
         val onKeys: Boolean = false,
         val onInteractions: Boolean = false,
-        /** False on channels with no -4/-5, where those can never be true. */
+        /** False on channels with no -4, where [onKeys] can never be true. */
         val hasKeys: Boolean = false,
+        /** False on channels with no -5, where [onInteractions] can never be true. */
+        val hasInteractions: Boolean = false,
         /**
          * False when a stream lookup failed. Absence then proves nothing, and
          * calling it partial sends the admin to spend gas on a repair that
@@ -1594,7 +1596,7 @@ class ChannelManager(
     ) {
         val partial: Boolean get() =
             allStreamsRead &&
-                !(onMessage && onAdmin && (!hasKeys || (onKeys && onInteractions)))
+                !(onMessage && onAdmin && (!hasKeys || onKeys) && (!hasInteractions || onInteractions))
     }
 
     data class StorageInfo(
@@ -1751,7 +1753,8 @@ class ChannelManager(
                 val k = n.lowercase()
                 byAddr[k] = set(byAddr[k] ?: StorageNode(
                     n, onMessage = false, onAdmin = false,
-                    hasKeys = hasKeys, allStreamsRead = allStreamsRead))
+                    hasKeys = hasKeys, hasInteractions = interactionsStreamId.isNotEmpty(),
+                    allStreamsRead = allStreamsRead))
             }
         }
         mark(msgNodes) { it.copy(onMessage = true) }

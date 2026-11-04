@@ -81,7 +81,8 @@ class StorageStreamsTest {
     private fun node(
         onMessage: Boolean, onAdmin: Boolean, onKeys: Boolean,
         hasKeys: Boolean, allStreamsRead: Boolean = true,
-        onInteractions: Boolean = onKeys
+        onInteractions: Boolean = onKeys,
+        hasInteractions: Boolean = hasKeys
     ) = ChannelManager.StorageNode(
         address = "0xnode",
         onMessage = onMessage,
@@ -89,6 +90,7 @@ class StorageStreamsTest {
         onKeys = onKeys,
         onInteractions = onInteractions,
         hasKeys = hasKeys,
+        hasInteractions = hasInteractions,
         allStreamsRead = allStreamsRead
     )
 
@@ -120,6 +122,22 @@ class StorageStreamsTest {
     @Test
     fun `a channel with no keys stream is complete on the two it has`() {
         assertFalse(node(onMessage = true, onAdmin = true, onKeys = false, hasKeys = false).partial)
+    }
+
+    @Test
+    fun `a node missing from the interactions stream of a channel with no keys stream is partial`() {
+        assertTrue(node(
+            onMessage = true, onAdmin = true, onKeys = false, hasKeys = false,
+            onInteractions = false, hasInteractions = true
+        ).partial)
+    }
+
+    @Test
+    fun `a channel with no keys stream is complete on the three it has`() {
+        assertFalse(node(
+            onMessage = true, onAdmin = true, onKeys = false, hasKeys = false,
+            onInteractions = true, hasInteractions = true
+        ).partial)
     }
 
     /**
