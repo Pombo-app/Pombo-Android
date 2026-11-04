@@ -246,7 +246,9 @@ fun ChatScreen(vm: AppViewModel) {
     // windowed paginate can prove a channel is actually empty. Without this a
     // brand-new channel sits on "Loading messages..." forever.
     val isDm = channel?.type == "dm"
-    val searchOlder by vm.dmSearchOlder.collectAsState()
+    val searchPrompt by vm.dmSearchPrompt.collectAsState()
+    val searchOlder = searchPrompt != ChannelManager.DmSearchPrompt.NONE
+    val dmRetentionDays by vm.dmRetentionDays.collectAsState()
     // Web `_autoLoadIfContentShort`: keep fetching only while the content
     // cannot scroll at all (scrollHeight <= clientHeight there).
     val contentShort by remember {
@@ -1025,7 +1027,7 @@ fun ChatScreen(vm: AppViewModel) {
                         // than scanning older weeks on its own.
                         searchOlder -> Row(
                             Modifier.fillMaxWidth()
-                                .clickableNoRipple { vm.loadMoreDmHistory() }
+                                .clickableNoRipple { vm.onDmSearchPrompt() }
                                 .padding(vertical = 12.dp),
                             horizontalArrangement = Arrangement.Center,
                             verticalAlignment = Alignment.CenterVertically
@@ -1037,7 +1039,11 @@ fun ChatScreen(vm: AppViewModel) {
                             )
                             Spacer(Modifier.width(8.dp))
                             Text(
-                                "No messages found in this time range — Search older",
+                                when (searchPrompt) {
+                                    ChannelManager.DmSearchPrompt.RETRY -> "Couldn't search this time range — Try again"
+                                    ChannelManager.DmSearchPrompt.ALL -> "No messages found in this time range — Search all"
+                                    else -> "No messages found in this time range — Search older"
+                                },
                                 color = PomboColors.Overlay30, fontSize = 14.sp
                             )
                         }
@@ -1066,7 +1072,11 @@ fun ChatScreen(vm: AppViewModel) {
                             contentAlignment = Alignment.Center
                         ) {
                             Text(
-                                "— beginning of conversation —",
+                                // A DM inbox drops what is older than its
+                                // retention: that edge is not the start.
+                                dmRetentionDays?.takeIf { isDm }
+                                    ?.let { "No older messages — this inbox keeps $it days" }
+                                    ?: "— beginning of conversation —",
                                 color = PomboColors.Overlay12,
                                 fontSize = 12.sp
                             )

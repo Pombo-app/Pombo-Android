@@ -1359,20 +1359,21 @@ class AppViewModel(app: Application) : AndroidViewModel(app), PomboBridge.Listen
     fun loadMoreHistory() { viewModelScope.launch { manager.loadMoreHistory() } }
 
     /**
-     * True when a DM's last windowed search came back empty but older history
-     * still exists. The UI then offers "Search older" instead of automatically
-     * scanning further empty windows (web ChatAreaUI).
+     * What the top of an open DM offers once a window came back empty or
+     * unread: the UI then waits for a tap instead of automatically scanning
+     * further empty windows (web ChatAreaUI).
      */
-    private val _dmSearchOlder = MutableStateFlow(false)
-    val dmSearchOlder: StateFlow<Boolean> = _dmSearchOlder.asStateFlow()
+    val dmSearchPrompt get() = manager.dmSearchPrompt
+    /** Set once the open DM reached its inbox retention. */
+    val dmRetentionDays get() = manager.dmRetentionDays
 
-    fun loadMoreDmHistory() = viewModelScope.launch {
-        _dmSearchOlder.value = false
-        val page = manager.loadMoreDmHistory()
-        _dmSearchOlder.value = page.noResultsInWindow
+    fun loadMoreDmHistory() = viewModelScope.launch { manager.loadMoreDmHistory() }
+
+    /** A tap on the DM prompt: the next search step, Search all, or a retry. */
+    fun onDmSearchPrompt() = viewModelScope.launch {
+        if (manager.dmSearchPrompt.value == ChannelManager.DmSearchPrompt.RETRY) manager.retryDmSearch()
+        else manager.searchOlderDm()
     }
-
-    fun clearDmSearchOlder() { _dmSearchOlder.value = false }
 
     fun amOwnerOfCurrent(): Boolean = current.value?.let { manager.amOwner(it) } ?: false
 
