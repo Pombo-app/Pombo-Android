@@ -1680,7 +1680,7 @@ const api = {
             // or call a node missing, has to see nothing known instead of an
             // empty answer it cannot tell apart from the real thing.
             console.warn('storage info lookup failed for ' + a.streamId + ': ' + (e && e.message || e));
-            return { ok: false, enabled: false, nodes: [], storageDays: null };
+            return { ok: false, enabled: false, nodes: [], storageDays: null, notFound: !!(e && e.code === 'STREAM_NOT_FOUND') };
         }
     },
 

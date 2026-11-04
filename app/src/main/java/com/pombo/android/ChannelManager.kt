@@ -6638,6 +6638,26 @@ class ChannelManager(
     /** Interactions streams a publish already proved absent (web `_interactionsMissing`). */
     private val interactionsMissing = java.util.concurrent.ConcurrentHashMap.newKeySet<String>()
 
+    /** Whether storage keeps an interactions stream, once the chain said (web `_interactionsStored`). */
+    private val interactionsStored = java.util.concurrent.ConcurrentHashMap<String, Boolean>()
+
+    /** False when the -5 is absent or has no node; null when the lookup did not answer. */
+    private suspend fun interactionsKept(interactionsId: String): Boolean? {
+        interactionsStored[interactionsId]?.let { return it }
+        val kept = try {
+            val res = bridge.call("getStreamStorageInfo", JSONObject().put("streamId", interactionsId), 30_000)
+            when {
+                res.optBoolean("ok", false) -> (res.optJSONArray("nodes")?.length() ?: 0) > 0
+                res.optBoolean("notFound", false) -> false
+                else -> null
+            }
+        } catch (e: Exception) {
+            null
+        }
+        kept?.let { interactionsStored[interactionsId] = it }
+        return kept
+    }
+
     /** channels.js sendReaction format — no signature; authorship = publisherId. */
     suspend fun sendReaction(messageId: String, emoji: String, add: Boolean) {
         val channel = _current.value ?: return
@@ -6675,6 +6695,14 @@ class ChannelManager(
             channel.interactionsStreamId.ifEmpty {
                 StreamConstants.deriveInteractionsId(channel.messageStreamId)
             }
+        }
+        // A publish to a -5 that does not exist succeeds all the same: the
+        // reaction is seen live and gone on the next open. Storage decides.
+        if (interactionsId.isNotEmpty() && !interactionsMissing.contains(interactionsId) &&
+            interactionsKept(interactionsId) == false
+        ) {
+            interactionsMissing.add(interactionsId)
+            Log.w(TAG, "No storage on the interactions stream — reacting on the -1")
         }
         var sent = false
         if (interactionsId.isNotEmpty() && !interactionsMissing.contains(interactionsId)) {
