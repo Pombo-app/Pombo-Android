@@ -2203,10 +2203,13 @@ class ChannelManager(
                 // must name the requester) and -3 stays owner-published.
                 // The shared key only ever writes: reading is the clone's job
                 // (members subscribe through ERC-1271), so it gets PUBLISH
-                // alone. Same grant shape on re-key.
+                // alone. Same grant shape on re-key. And the inverse holds:
+                // nothing publishes through the clone on -1/-2 here, so it is
+                // SUBSCRIBE-only — a publish grant it never uses would only let
+                // a modified client self-identify on the wire.
                 val contentPerms = if (sharedPub != null) JSONArray().apply {
                     put(JSONObject().put("userId", gateAddress)
-                        .put("permissions", JSONArray(listOf("subscribe", "publish"))))
+                        .put("permissions", JSONArray(listOf("subscribe"))))
                     put(JSONObject().put("userId", sharedPub.address)
                         .put("permissions", JSONArray(listOf("publish"))))
                 } else clonePerms
