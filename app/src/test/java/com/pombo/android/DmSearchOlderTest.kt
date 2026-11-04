@@ -141,6 +141,25 @@ class DmSearchOlderTest {
     }
 
     @Test
+    fun `each account's search stops at its own inbox retention`() = runBlocking {
+        val other = "0x03e2b466754f187f571ab48c69e3ab592e76d819"
+        coEvery { h.bridge.call(eq("getStreamStorageInfo"), any(), any()) } answers {
+            val days = if (secondArg<JSONObject>().getString("streamId").startsWith(other)) 180 else 2
+            JSONObject().put("ok", true).put("nodes", JSONArray()).put("storageDays", days)
+        }
+        manager.openChannel(conversation)
+        manager.loadMoreDmHistory()
+        assertTrue(windows.last().getLong("windowMs") <= 2 * day)
+
+        h.address = other
+        manager.reloadChannels()
+        manager.openChannel(conversation)
+        manager.loadMoreDmHistory()
+
+        assertEquals(7 * day, windows.last().getLong("windowMs"))
+    }
+
+    @Test
     fun `opening a conversation starts without the last one's prompt`() = runBlocking {
         manager.openChannel(conversation)
         manager.loadMoreDmHistory()
