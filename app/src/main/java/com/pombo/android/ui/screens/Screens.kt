@@ -2401,10 +2401,9 @@ private fun Modifier.edgeFade(state: androidx.compose.foundation.ScrollState, wi
         }
 
 @Composable
-internal fun JoinChannelDialog(onDismiss: () -> Unit, onJoin: (String, String?, String?) -> Unit) {
+internal fun JoinChannelDialog(onDismiss: () -> Unit, onJoin: (String, String?) -> Unit) {
     var id by remember { mutableStateOf("") }
     var password by remember { mutableStateOf("") }
-    var localName by remember { mutableStateOf("") }
 
     PomboDialogFrame("Join a channel", onDismiss) {
         PomboFieldLabel("CHANNEL ID")
@@ -2413,19 +2412,10 @@ internal fun JoinChannelDialog(onDismiss: () -> Unit, onJoin: (String, String?, 
 
         PomboFieldLabel("PASSWORD (IF ANY)")
         PomboDialogField(password, { password = it }, password = true)
-        Spacer(Modifier.height(12.dp))
-
-        PomboFieldLabel("LOCAL NAME (OPTIONAL)")
-        PomboDialogField(localName, { localName = it }, placeholder = "e.g. Notícias")
-        Spacer(Modifier.height(4.dp))
-        Text(
-            "Stored locally only. Channels with a public name keep it.",
-            color = PomboColors.Overlay25, fontSize = 12.sp
-        )
 
         Spacer(Modifier.height(20.dp))
         PomboPrimaryButton("Join", enabled = id.isNotBlank()) {
-            onJoin(id, password.ifEmpty { null }, localName.trim().ifEmpty { null })
+            onJoin(id, password.ifEmpty { null })
         }
     }
 }

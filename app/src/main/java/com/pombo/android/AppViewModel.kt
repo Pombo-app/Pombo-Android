@@ -3085,17 +3085,9 @@ class AppViewModel(app: Application) : AndroidViewModel(app), PomboBridge.Listen
         }
     }
 
-    fun joinChannel(
-        input: String,
-        password: String?,
-        localName: String? = null
-    ) = viewModelScope.launch {
+    fun joinChannel(input: String, password: String?) = viewModelScope.launch {
         runJoinToast("Joining channel…", "Joined channel", "Failed to join channel") {
-            val channel = manager.joinChannel(
-                input, password?.ifEmpty { null },
-                localName = localName,
-                named = !localName.isNullOrBlank()
-            )
+            val channel = manager.joinChannel(input, password?.ifEmpty { null })
             manager.openChannel(channel.messageStreamId)
             autoEnableChannelPush(channel)
         }
