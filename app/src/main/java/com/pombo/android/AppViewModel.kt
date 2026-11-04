@@ -2948,8 +2948,12 @@ class AppViewModel(app: Application) : AndroidViewModel(app), PomboBridge.Listen
         _gasCosts.value = costs
         _balanceWei.value = balance
 
-        val estimate = costs.forType(type)
-        val formattedEstimate = costs.formattedFor(type)
+        return spendVerdict(balance, costs.forType(type))
+    }
+
+    private fun spendVerdict(balance: java.math.BigInteger, estimate: java.math.BigInteger): CostCheck {
+        val estimator = com.pombo.android.core.GasEstimator
+        val formattedEstimate = estimator.formatPOL(estimate)
         val formattedBalance = estimator.formatBalancePOL(balance)
         val safe = estimate.multiply(SAFETY_NUMERATOR).divide(SAFETY_DENOMINATOR)
 
@@ -3583,32 +3587,25 @@ class AppViewModel(app: Application) : AndroidViewModel(app), PomboBridge.Listen
                 return@launch
             }
             val report = bridge.call("diagnoseDmInbox", JSONObject(), 120_000)
-            val msg = report.getJSONObject("messageStream")
-            val eph = report.getJSONObject("ephemeralStream")
-            val perms = report.getJSONObject("permissions")
             val storage = report.getJSONObject("storage")
 
-            _inboxStorage.value = InboxStorage(
-                nodes = storage.optJSONArray("nodes")?.let { arr ->
-                    (0 until arr.length()).mapNotNull { arr.optString(it).ifEmpty { null } }
-                } ?: emptyList(),
-                storageDays = if (storage.isNull("storageDays")) null else storage.optInt("storageDays")
-            )
-
-            // Same issue list and order as the web's runDiagnosis.
-            val issues = buildList {
-                if (!msg.optBoolean("exists")) add("message stream")
-                if (!eph.optBoolean("exists")) add("ephemeral stream")
-                if (msg.optBoolean("exists") && !msg.optBoolean("partitionsCorrect")) add("partition count")
-                if (msg.optBoolean("exists") && !msg.optBoolean("publicKeyPresent")) add("public key")
-                if (!perms.optBoolean("messagePublicPublish")) add("message permissions")
-                if (!perms.optBoolean("ephemeralPublicPublish")) add("ephemeral permissions")
-                if (!storage.optBoolean("enabled")) add("storage")
+            if (com.pombo.android.core.DmInboxHealth.check(storage, "enabled") != null) {
+                _inboxStorage.value = InboxStorage(
+                    nodes = storage.optJSONArray("nodes")?.let { arr ->
+                        (0 until arr.length()).mapNotNull { arr.optString(it).ifEmpty { null } }
+                    } ?: emptyList(),
+                    storageDays = if (storage.isNull("storageDays")) null else storage.optInt("storageDays")
+                )
             }
+
+            val (issues, unchecked) = com.pombo.android.core.DmInboxHealth.findings(report)
             _inboxHealth.value = if (issues.isNotEmpty()) {
-                val summary = if (issues.size == 1) "Missing: ${issues[0]}"
+                var summary = if (issues.size == 1) "Missing: ${issues[0]}"
                 else "${issues.size} issues: ${issues.joinToString(", ")}"
+                if (unchecked.isNotEmpty()) summary += " · not checked: ${unchecked.joinToString(", ")}"
                 InboxHealth.Issues(summary, report)
+            } else if (unchecked.isNotEmpty()) {
+                InboxHealth.Failed("Could not check: ${unchecked.joinToString(", ")}")
             } else {
                 val parts = buildList {
                     storage.optString("provider").ifEmpty { null }?.let { add(it) }
@@ -3626,10 +3623,21 @@ class AppViewModel(app: Application) : AndroidViewModel(app), PomboBridge.Listen
     /** Web runRepair: fixes only what the last diagnosis flagged (needs gas). */
     fun repairInbox() = viewModelScope.launch {
         val diagnosis = (_inboxHealth.value as? InboxHealth.Issues)?.diagnosis ?: return@launch
-        if (!canAffordOrWarn("dmInbox")) return@launch
+        val estimator = com.pombo.android.core.GasEstimator
+        val estimate = runCatching {
+            estimator.getGasPrice().multiply(java.math.BigInteger.valueOf(estimator.inboxRepairUnits(diagnosis)))
+        }.getOrNull()
+        val balance = _address.value?.let { estimator.getBalance(it) }
+        val verdict = if (estimate != null && balance != null) spendVerdict(balance, estimate) else CostCheck.Ok
+        if (verdict is CostCheck.Blocked) {
+            toast(verdict.message, com.pombo.android.ui.ToastKind.ERROR, 6000L)
+            return@launch
+        }
+        val costLine = estimate?.let { " Estimated cost: ${estimator.formatPOL(it)}." }.orEmpty() +
+            if (verdict is CostCheck.Low) " Your balance (${verdict.balance}) is close to it; if gas spikes, a step may fail." else ""
         chainAction(
             "Repair DM inbox",
-            "Recreates whatever the diagnosis flagged — streams, permissions or storage."
+            "Recreates whatever the diagnosis flagged — streams, permissions or storage.$costLine"
         ) {
         _inboxHealth.value = InboxHealth.Repairing("Starting...")
         try {
@@ -3651,13 +3659,17 @@ class AppViewModel(app: Application) : AndroidViewModel(app), PomboBridge.Listen
                     "fail" -> failed++
                 }
             }
+            // Read the chain again rather than trust this run's bookkeeping:
+            // what is still missing is what the next Repair sends.
+            diagnoseInbox().join()
             if (failed > 0) {
-                _inboxHealth.value = InboxHealth.Issues("$fixed fixed, $failed failed", diagnosis)
                 toast("Inbox repair: $fixed fixed, $failed failed", com.pombo.android.ui.ToastKind.WARNING)
             } else {
-                _inboxHealth.value = InboxHealth.Repaired(
-                    if (fixed > 0) "$fixed issue${if (fixed > 1) "s" else ""} fixed" else "Nothing to repair"
-                )
+                if (_inboxHealth.value is InboxHealth.Healthy) {
+                    _inboxHealth.value = InboxHealth.Repaired(
+                        if (fixed > 0) "$fixed issue${if (fixed > 1) "s" else ""} fixed" else "Nothing to repair"
+                    )
+                }
                 toast("Inbox repaired", com.pombo.android.ui.ToastKind.SUCCESS)
             }
             refreshDmInbox()
