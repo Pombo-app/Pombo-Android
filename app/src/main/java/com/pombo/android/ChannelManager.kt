@@ -4336,13 +4336,18 @@ class ChannelManager(
     /** Web CONFIG.dm.searchAllWindowMs: Search all walks the rest of the retention in these. */
     private val dmSearchAllWindowMs = 60L * 24 * 3600 * 1000
 
+    private data class InboxRetention(val inbox: String, val days: Int, val at: Long)
+
     /** Inbox retention, re-read every few minutes: Settings can change it. */
-    @Volatile private var inboxRetention: Pair<Int, Long>? = null
+    @Volatile private var inboxRetention: InboxRetention? = null
 
     private suspend fun inboxRetentionDays(me: String): Int? {
-        inboxRetention?.let { (days, at) -> if (System.currentTimeMillis() - at < 5 * 60_000L) return days }
-        val days = streamStorage("$me/Pombo-DM-1")?.second ?: return null
-        inboxRetention = days to System.currentTimeMillis()
+        val inbox = "$me/Pombo-DM-1"
+        inboxRetention?.let {
+            if (it.inbox == inbox && System.currentTimeMillis() - it.at < 5 * 60_000L) return it.days
+        }
+        val days = streamStorage(inbox)?.second ?: return null
+        inboxRetention = InboxRetention(inbox, days, System.currentTimeMillis())
         return days
     }
 
