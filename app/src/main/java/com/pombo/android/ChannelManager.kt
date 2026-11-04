@@ -836,6 +836,8 @@ class ChannelManager(
         // otherwise show the next account what the previous one received.
         synchronized(dmReceived) { dmReceived.clear() }
         dmSentRows.clear()
+        inboxCatchUpJob?.cancel()
+        inboxSeenTs = 0L
         _channels.value = store.load().distinctBy { it.messageStreamId }
         persisted = _channels.value.associateBy { it.messageStreamId }
         _channelOrder.value = store.loadOrder()
@@ -3625,6 +3627,7 @@ class ChannelManager(
     ) {
         val me = myAddress()?.lowercase() ?: return
         if (envelope !is JSONObject) return
+        meta?.optLong("timestamp", 0L)?.takeIf { it > inboxSeenTs }?.let { inboxSeenTs = it }
 
         // SEALED SENDER INVERTS THE ORDER: open first, identify after. Any
         // lookup keyed by the sender before decryption (peer key choice,
@@ -3771,58 +3774,118 @@ class ChannelManager(
                 .put("last", inboxHistoryCount), 60_000)
             val tResend = System.currentTimeMillis()
             val arr = res.optJSONArray("messages") ?: return
-            val n = arr.length()
-
-            // Open the WHOLE page in one bridge call — no pre-filtering by
-            // publisher, which is a throwaway key on sealed traffic. Every v2
-            // envelope goes in; the ones that open are ours, the ones that
-            // don't come back null and are dropped (opening IS the ownership
-            // test). One batch instead of 100 sequential evaluateJavascript
-            // hops is what keeps the replay fast.
-            val publishers = arrayOfNulls<String>(n)
-            val items = JSONArray()
-            for (i in 0 until n) {
-                val entry = arr.optJSONObject(i)
-                publishers[i] = entry?.optJSONObject("meta")?.optString("publisherId")
-                    ?.lowercase()?.ifEmpty { null }
-                val content = entry?.opt("content")
-                items.put(
-                    if (content is JSONObject && content.optInt("v") == 2 && content.has("epk")) content
-                    else JSONObject.NULL
-                )
-            }
-            val opened = openSealedBatch(items)
-            val tDecrypt = System.currentTimeMillis()
-
-            var withStoredAt = 0
-            var dropped = 0
-            val owner = inbox.substringBefore('/').lowercase()
-            for (i in 0 until n) {
-                // The decrypt runs off the main thread; an account switch can
-                // land during it, and routing writes to whatever account is active.
-                if (myAddress()?.lowercase() != owner) {
-                    android.util.Log.d(TAG, "inbox replay dropped: the account changed")
-                    return
-                }
-                val entry = arr.optJSONObject(i) ?: continue
-                val meta = entry.optJSONObject("meta")
-                if (meta?.has("storedAt") == true) withStoredAt++
-                if (com.pombo.android.core.StoredAt.forwardDated(meta, TIMESTAMP_TOLERANCE_MS)) { dropped++; continue }
-                val res = opened?.takeIf { !it.isNull(i) }?.optJSONObject(i)
-                routeInboxMessage(
-                    entry.opt("content"), publishers[i],
-                    preSender = res?.optString("sender")?.lowercase()?.ifEmpty { null },
-                    preData = res?.optJSONObject("message"),
-                    meta = entry.optJSONObject("meta")
-                )
-            }
+            val page = routeInboxPage(inbox, arr) ?: return
             android.util.Log.d("PomboPerf",
-                "inbox replay: resend=${tResend - t0}ms decrypt=${tDecrypt - tResend}ms " +
-                    "route=${System.currentTimeMillis() - tDecrypt}ms n=$n")
-            android.util.Log.d(TAG, "inbox history: n=$n withStoredAt=$withStoredAt forwardDated=$dropped")
+                "inbox replay: resend=${tResend - t0}ms decrypt=${page.decryptMs}ms " +
+                    "route=${System.currentTimeMillis() - tResend - page.decryptMs}ms n=${arr.length()}")
+            android.util.Log.d(TAG, "inbox history: n=${arr.length()} withStoredAt=${page.withStoredAt} forwardDated=${page.forwardDated}")
         } catch (e: Exception) {
             // No storage on the inbox, or the node is down — live traffic still
             // works, the user just starts without back-history.
+        }
+    }
+
+    private data class InboxPage(val routed: Int, val withStoredAt: Int, val forwardDated: Int, val decryptMs: Long)
+
+    /** Opens a page of inbox rows and routes each one; null when the account changed under it. */
+    private suspend fun routeInboxPage(inbox: String, arr: JSONArray): InboxPage? {
+        val n = arr.length()
+        val t0 = System.currentTimeMillis()
+
+        // Open the WHOLE page in one bridge call — no pre-filtering by
+        // publisher, which is a throwaway key on sealed traffic. Every v2
+        // envelope goes in; the ones that open are ours, the ones that
+        // don't come back null and are dropped (opening IS the ownership
+        // test). One batch instead of 100 sequential evaluateJavascript
+        // hops is what keeps the replay fast.
+        val publishers = arrayOfNulls<String>(n)
+        val items = JSONArray()
+        for (i in 0 until n) {
+            val entry = arr.optJSONObject(i)
+            publishers[i] = entry?.optJSONObject("meta")?.optString("publisherId")
+                ?.lowercase()?.ifEmpty { null }
+            val content = entry?.opt("content")
+            items.put(
+                if (content is JSONObject && content.optInt("v") == 2 && content.has("epk")) content
+                else JSONObject.NULL
+            )
+        }
+        val opened = openSealedBatch(items)
+        val decryptMs = System.currentTimeMillis() - t0
+
+        var routed = 0
+        var withStoredAt = 0
+        var dropped = 0
+        val owner = inbox.substringBefore('/').lowercase()
+        for (i in 0 until n) {
+            // The decrypt runs off the main thread; an account switch can
+            // land during it, and routing writes to whatever account is active.
+            if (myAddress()?.lowercase() != owner) {
+                android.util.Log.d(TAG, "inbox page dropped: the account changed")
+                return null
+            }
+            val entry = arr.optJSONObject(i) ?: continue
+            val meta = entry.optJSONObject("meta")
+            if (meta?.has("storedAt") == true) withStoredAt++
+            if (com.pombo.android.core.StoredAt.forwardDated(meta, TIMESTAMP_TOLERANCE_MS)) { dropped++; continue }
+            val res = opened?.takeIf { !it.isNull(i) }?.optJSONObject(i)
+            routeInboxMessage(
+                entry.opt("content"), publishers[i],
+                preSender = res?.optString("sender")?.lowercase()?.ifEmpty { null },
+                preData = res?.optJSONObject("message"),
+                meta = entry.optJSONObject("meta")
+            )
+            routed++
+        }
+        return InboxPage(routed, withStoredAt, dropped, decryptMs)
+    }
+
+    /** Envelope time of the newest inbox row routed: where a catch-up read starts. */
+    @Volatile private var inboxSeenTs = 0L
+    private val inboxCatchUpRunning = java.util.concurrent.atomic.AtomicBoolean(false)
+    @Volatile private var inboxCatchUpJob: kotlinx.coroutines.Job? = null
+
+    /**
+     * Reads what reached the inbox since the newest row already routed and
+     * routes it like live traffic: a live subscription on a degraded mesh can
+     * deliver less than the stream holds.
+     */
+    internal suspend fun catchUpInbox(reason: String): Int {
+        val me = myAddress()?.lowercase() ?: return 0
+        val inbox = "$me/Pombo-DM-1"
+        val since = inboxSeenTs
+        // Before the first replay there is no starting point; that replay is the catch-up.
+        if (since <= 0L || !inboxCatchUpRunning.compareAndSet(false, true)) return 0
+        try {
+            val now = System.currentTimeMillis()
+            val res = bridge.call("resendWindow", JSONObject()
+                .put("streamId", inbox)
+                .put("partition", StreamConstants.P_MESSAGES)
+                .put("before", now + 1)
+                .put("windowMs", now + 1 - since)
+                .put("budgetMs", 20_000), 30_000)
+            if (res.optBoolean("partial", false) || readErrorOf(res) != null) {
+                Log.w(TAG, "inbox catch-up ($reason) did not finish reading")
+                return 0
+            }
+            val page = routeInboxPage(inbox, res.optJSONArray("messages") ?: JSONArray()) ?: return 0
+            Log.d(TAG, "inbox catch-up ($reason): ${page.routed} row(s) since ${java.time.Instant.ofEpochMilli(since)}")
+            return page.routed
+        } catch (e: Exception) {
+            Log.w(TAG, "inbox catch-up ($reason) failed: ${e.message}")
+            return 0
+        } finally {
+            inboxCatchUpRunning.set(false)
+        }
+    }
+
+    private fun startInboxCatchUp() {
+        inboxCatchUpJob?.cancel()
+        inboxCatchUpJob = scope.launch {
+            while (isActive) {
+                delay(INBOX_CATCH_UP_INTERVAL_MS)
+                if (com.pombo.android.push.ForegroundGate.inForeground) catchUpInbox("tick")
+            }
         }
     }
 
@@ -3936,6 +3999,7 @@ class ChannelManager(
                 catchUpInvites(inbox)
             }
         }
+        startInboxCatchUp()
     }
 
     /** Once per session — the "All" toggle is a filter, not a refresh button. */
@@ -4327,6 +4391,8 @@ class ChannelManager(
         // Older history is reachable by windowed search even when this first
         // page came back empty — the peer may simply not have written recently.
         _hasMoreHistory.value = true
+        // After the timeline is up: the open does not wait on storage.
+        scope.launch { catchUpInbox("open") }
     }
 
     /** Web CONFIG.dm.searchWindowMs — one week per pagination step. */
@@ -8253,6 +8319,8 @@ class ChannelManager(
         const val PRESENCE_INTERVAL_MS = 5_000L
         /** Web config.js previewPresenceIntervalMs. */
         const val PREVIEW_PRESENCE_INTERVAL_MS = 20_000L
+        /** Web config.js dm.catchUpIntervalMs. */
+        const val INBOX_CATCH_UP_INTERVAL_MS = 30_000L
         /** Web config.js subscriptions.adminPollIntervalMs. */
         const val ADMIN_POLL_INTERVAL_MS = 30_000L
         /** Web config.js subscriptions.memberCatchUp*. */

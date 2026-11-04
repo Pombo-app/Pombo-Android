@@ -72,6 +72,7 @@ class AppViewModel(app: Application) : AndroidViewModel(app), PomboBridge.Listen
         if (_status.value == NetStatus.CONNECTED) {
             viewModelScope.launch { sync.autoSync() }
             sync.startSnapshotWatch()
+            viewModelScope.launch { manager.catchUpInbox("foreground") }
         }
         nodeRevival.kick()
     }
