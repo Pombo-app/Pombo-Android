@@ -43,6 +43,11 @@ class SyncManagerLightTest {
     /** Whether storage answers read-backs at all. */
     @Volatile private var storageAnswers = true
     @Volatile private var onPublish: () -> Unit = {}
+    /** The sealed envelope of the last publish, as storage would hand it back. */
+    @Volatile private var lastPublished: Any? = null
+    /** Runs between a pull's read and its import. */
+    @Volatile private var onRead: () -> Unit = {}
+    @Volatile private var imported = 0
     @Volatile private var export = JSONObject("""{"channels":[],"username":"Bob","sliceTs":{"username":1}}""")
     @Volatile private var address = ME
     @Volatile private var key = PK
@@ -82,7 +87,7 @@ class SyncManagerLightTest {
         every { store.confirmedAt = any() } answers { confirmedAt = firstArg() }
         every { store.pendingPush } answers { pendingPush }
         every { store.pendingPush = any() } answers { pendingPush = firstArg() }
-        every { store.appliedTs() } returns emptySet()
+        every { store.appliedTs() } answers { onRead(); emptySet() }
         every { blobStore.unsynced() } returns emptyList()
         coEvery { bridge.call(any(), any(), any()) } answers {
             val method = firstArg<String>()
@@ -92,6 +97,7 @@ class SyncManagerLightTest {
                 "getPeerPublicKey" -> JSONObject().put("publicKey", "0x02aa")
                 "publishAs" -> {
                     onPublish()
+                    lastPublished = args.opt("content")
                     publishedBy(args)
                 }
                 "resend" -> {
@@ -113,7 +119,7 @@ class SyncManagerLightTest {
             bridge, scope, store, blobStore,
             myAddress = { address }, myPrivateKey = { key }, isGuest = { false },
             exportLocal = { JSONObject(export.toString()) },
-            importMerged = {}, syncMode = { mode },
+            importMerged = { imported++ }, syncMode = { mode },
             checkIntervalMs = 50L, confirmAtMs = longArrayOf(10L, 20L, 30L, 40L)
         )
     }
@@ -409,6 +415,34 @@ class SyncManagerLightTest {
 
         // A 50 ms period started from each check's start fits ~20 checks; counted from each end, ~11.
         assertTrue(calls.count { it == "resend" } >= 15)
+    }
+
+    /** A push of this account as another of its devices published it. */
+    private suspend fun pushFromAnotherDevice() {
+        sync.pushSync()
+        waitFor { left.isNotEmpty() }
+        rows = JSONArray().put(JSONObject()
+            .put("content", lastPublished)
+            .put("meta", JSONObject().put("timestamp", 9000L).put("publisherId", "0xanotherdevice")))
+        imported = 0
+    }
+
+    @Test
+    fun `a pull imports what another device of the account pushed`() = runBlocking {
+        pushFromAnotherDevice()
+
+        sync.pullSync()
+
+        assertEquals(1, imported)
+    }
+
+    @Test
+    fun `a pull the account switch lands in does not import into the next account`() = runBlocking {
+        pushFromAnotherDevice()
+        onRead = { address = OTHER; key = OTHER_PK }
+
+        assertEquals(0, sync.pullSync())
+        assertEquals(0, imported)
     }
 
     private companion object {

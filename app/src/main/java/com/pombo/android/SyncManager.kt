@@ -452,6 +452,12 @@ class SyncManager(
                 }
             }
             if (fresh.isEmpty()) return 0
+            // The stores are scoped to whoever is active by now: an account
+            // switch during the fetch would import these slices into the next one.
+            if (myAddress()?.lowercase() != me) {
+                Log.d(TAG, "pull dropped: the account changed")
+                return 0
+            }
 
             val ordered = fresh.sortedBy { it.optLong("ts") }
             val merged = SyncMerge.mergeSeries(
