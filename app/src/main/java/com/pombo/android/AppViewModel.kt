@@ -3559,7 +3559,9 @@ class AppViewModel(app: Application) : AndroidViewModel(app), PomboBridge.Listen
                 return@launch
             }
             val inbox = myInboxStreamId() ?: return@launch
-            val info = bridge.call("getStorageInfo", JSONObject().put("streamId", inbox), 60_000)
+            val info = bridge.call("getStreamStorageInfo", JSONObject().put("streamId", inbox), 60_000)
+            // A lookup that did not answer is not an inbox without storage.
+            if (!info.optBoolean("ok", false)) return@launch
             _inboxStorage.value = InboxStorage(
                 nodes = info.optJSONArray("nodes")?.let { arr ->
                     (0 until arr.length()).mapNotNull { arr.optString(it).ifEmpty { null } }
