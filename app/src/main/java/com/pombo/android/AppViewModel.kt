@@ -796,7 +796,7 @@ class AppViewModel(app: Application) : AndroidViewModel(app), PomboBridge.Listen
         }
     }
 
-    private fun importSyncState(merged: JSONObject) {
+    private suspend fun importSyncState(merged: JSONObject) {
         // Keep the whole merged payload so the next push carries foreign slices.
         settingsStore.syncBase = merged.toString()
 
@@ -818,7 +818,7 @@ class AppViewModel(app: Application) : AndroidViewModel(app), PomboBridge.Listen
             }
             channelStore.saveLeftAt(combined)
         }
-        merged.optJSONObject("epochKeys")?.let { importEpochKeys(it) }
+        merged.optJSONObject("epochKeys")?.let { manager.epochKeys.applyPersisted(it) }
         merged.optJSONObject("ensCache")?.let { slice ->
             if (ensStore.importSyncSlice(slice)) viewModelScope.launch { ensStore.persistNow() }
         }
@@ -2477,23 +2477,6 @@ class AppViewModel(app: Application) : AndroidViewModel(app), PomboBridge.Listen
             epochKeyStore.load(ch.messageStreamId)?.let { out.put(ch.messageStreamId, it) }
         }
         return out
-    }
-
-    /**
-     * Union-merge per channel, local wins: a live session may hold epochs the
-     * backup predates, and a channel key adopted once must never regress.
-     */
-    private fun importEpochKeys(slice: JSONObject) {
-        slice.keys().forEach { streamId ->
-            val incoming = slice.optJSONObject(streamId) ?: return@forEach
-            val local = epochKeyStore.load(streamId)
-            epochKeyStore.save(
-                streamId,
-                if (local == null) incoming
-                else com.pombo.android.core.SyncMerge.foldEpochKeySlice(local, incoming)
-            )
-        }
-        viewModelScope.launch { manager.epochKeys.refreshPersisted() }
     }
 
     fun dismissMnemonic() { _newMnemonic.value = null }

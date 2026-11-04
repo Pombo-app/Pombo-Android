@@ -66,9 +66,9 @@ class HeldKidTest {
         val envelope = EpochKeyCrypto.encryptWithEpochKey(JSONObject().put("text", "hello"), keyHex, heldKid)
         epochKeys.tryDecrypt(stream, keys, envelope, gated = true, live = true)
 
-        // What a sync pull leaves behind after the kid was noted.
+        // A sync pull that brings the key after the kid was noted.
         every { store.load(stream) } returns persisted()
-        epochKeys.refreshPersisted()
+        epochKeys.applyPersisted(JSONObject().put(stream, persisted()))
         epochKeys.ensureChannelKeys(stream, keys)
 
         assertEquals(0, requests().size)
