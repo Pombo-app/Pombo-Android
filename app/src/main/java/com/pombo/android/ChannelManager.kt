@@ -1063,6 +1063,18 @@ class ChannelManager(
     val loadingHistory: StateFlow<Boolean> = _loadingHistory.asStateFlow()
     /** Oldest content timestamp seen on P0 — the cursor for the next page. */
     @Volatile private var oldestTimestamp: Long = 0L
+
+    /** What the top of an open DM offers after a window came back empty or unread. */
+    enum class DmSearchPrompt { NONE, OLDER, ALL, RETRY }
+    private val _dmSearchPrompt = MutableStateFlow(DmSearchPrompt.NONE)
+    val dmSearchPrompt: StateFlow<DmSearchPrompt> = _dmSearchPrompt.asStateFlow()
+    /** Retention of the inbox once the open DM reached it; the start is not the conversation's. */
+    private val _dmRetentionDays = MutableStateFlow<Int?>(null)
+    val dmRetentionDays: StateFlow<Int?> = _dmRetentionDays.asStateFlow()
+    /** Empty "Search older" taps since the open DM last got messages. */
+    @Volatile private var dmSearchStep = 0
+    /** Whether the read behind a RETRY prompt was a tap rather than a scroll page. */
+    @Volatile private var dmRetryIsSearch = false
     /**
      * Identifies the current *viewing session*, not the channel: it advances on
      * every open and every close, so reopening the same channel also invalidates
@@ -4308,23 +4320,88 @@ class ChannelManager(
 
     /** Web CONFIG.dm.searchWindowMs — one week per pagination step. */
     private val dmSearchWindowMs = 7L * 24 * 3600 * 1000
+    /** Web CONFIG.dm.searchStepsMs: the "Search older" taps after an empty week; then Search all. */
+    private val dmSearchStepsMs = listOf(15L * 24 * 3600 * 1000, 60L * 24 * 3600 * 1000)
+    /** Web CONFIG.dm.searchAllWindowMs: Search all walks the rest of the retention in these. */
+    private val dmSearchAllWindowMs = 60L * 24 * 3600 * 1000
 
-    data class DmPage(val loaded: Int, val hasMore: Boolean, val noResultsInWindow: Boolean)
+    /** Inbox retention, re-read every few minutes: Settings can change it. */
+    @Volatile private var inboxRetention: Pair<Int, Long>? = null
+
+    private suspend fun inboxRetentionDays(me: String): Int? {
+        inboxRetention?.let { (days, at) -> if (System.currentTimeMillis() - at < 5 * 60_000L) return days }
+        val days = streamStorage("$me/Pombo-DM-1")?.second ?: return null
+        inboxRetention = days to System.currentTimeMillis()
+        return days
+    }
+
+    /** `failed`: the window was not fully read; the cursor did not move. */
+    data class DmPage(
+        val loaded: Int,
+        val hasMore: Boolean,
+        val noResultsInWindow: Boolean,
+        val failed: Boolean = false
+    )
+
+    /** Scroll page (web: dmManager.fetchOlderDMMessages with its one-week window). */
+    suspend fun loadMoreDmHistory(): DmPage =
+        settleDmPrompt(fetchOlderDmWindow(dmSearchWindowMs), isSearch = false)
 
     /**
-     * One page of older DM history (web: dmManager.fetchOlderDMMessages).
+     * One "Search older" tap (web: dmManager.searchOlderDMMessages). Each tap
+     * after an empty one searches further back; past the last step it is
+     * Search all, which walks what is left of the retention until messages
+     * turn up.
+     */
+    suspend fun searchOlderDm(): DmPage {
+        // The prompt gives way to the spinner while the tap reads.
+        _dmSearchPrompt.value = DmSearchPrompt.NONE
+        val step = dmSearchStep.coerceAtMost(dmSearchStepsMs.size)
+        val generationAtStart = switchGeneration
+        var page: DmPage
+        if (step < dmSearchStepsMs.size) {
+            page = fetchOlderDmWindow(dmSearchStepsMs[step])
+        } else {
+            do {
+                page = fetchOlderDmWindow(dmSearchAllWindowMs)
+            } while (page.noResultsInWindow && stillCurrent(generationAtStart))
+        }
+        if (!stillCurrent(generationAtStart)) return page
+        if (page.noResultsInWindow) dmSearchStep = (step + 1).coerceAtMost(dmSearchStepsMs.size)
+        return settleDmPrompt(page, isSearch = true)
+    }
+
+    private fun settleDmPrompt(page: DmPage, isSearch: Boolean): DmPage {
+        _dmSearchPrompt.value = when {
+            page.failed && page.hasMore -> { dmRetryIsSearch = isSearch; DmSearchPrompt.RETRY }
+            page.noResultsInWindow ->
+                if (dmSearchStep >= dmSearchStepsMs.size) DmSearchPrompt.ALL else DmSearchPrompt.OLDER
+            else -> DmSearchPrompt.NONE
+        }
+        return page
+    }
+
+    /** Repeats the read behind a RETRY prompt, a tap or a scroll page as it was. */
+    suspend fun retryDmSearch(): DmPage {
+        _dmSearchPrompt.value = DmSearchPrompt.NONE
+        return if (dmRetryIsSearch) searchOlderDm() else loadMoreDmHistory()
+    }
+
+    /**
+     * One window of older DM history.
      *
      * Paginates by TIME, not by count, because the inbox is shared across every
      * peer: a `last: N` fetch would be filled by whichever conversation is
-     * busiest and could return nothing for this one. A week-long window returns
-     * what this peer actually sent in that range.
+     * busiest and could return nothing for this one. A window returns what this
+     * peer actually sent in that range, and never reaches past the inbox
+     * retention: nothing older is stored.
      *
      * An empty window is not the end of the conversation — it just means they
-     * did not write that week. The caller surfaces that as "Search older"
+     * did not write in that range. The caller surfaces that as "Search older"
      * rather than silently scanning backwards, which would fire a chain of slow
      * resends the user never asked for.
      */
-    suspend fun loadMoreDmHistory(): DmPage {
+    private suspend fun fetchOlderDmWindow(windowMs: Long): DmPage {
         val channel = _current.value ?: return DmPage(0, false, false)
         if (channel.type != "dm") return DmPage(0, false, false)
         val peer = channel.peerAddress?.lowercase() ?: return DmPage(0, false, false)
@@ -4335,11 +4412,22 @@ class ChannelManager(
         val generationAtStart = switchGeneration
         _loadingHistory.value = true
         try {
+            val retentionDays = inboxRetentionDays(me)
+            val retentionStart = retentionDays?.let { System.currentTimeMillis() - it * 24L * 3600 * 1000 } ?: 0L
+            if (!stillCurrent(generationAtStart)) return DmPage(0, false, false)
+            if (before <= retentionStart) {
+                _hasMoreHistory.value = false
+                _dmRetentionDays.value = retentionDays
+                return DmPage(0, false, false)
+            }
+            val span = minOf(windowMs, before - retentionStart)
+            Log.d(TAG, "DM window ${java.time.Instant.ofEpochMilli(before - span)} → ${java.time.Instant.ofEpochMilli(before)}")
+
             val res = bridge.call("resendWindow", JSONObject()
                 .put("streamId", "$me/Pombo-DM-1")
                 .put("partition", StreamConstants.P_MESSAGES)
                 .put("before", before)
-                .put("windowMs", dmSearchWindowMs)
+                .put("windowMs", span)
                 .put("budgetMs", 45_000), 60_000)
 
             if (!stillCurrent(generationAtStart)) return DmPage(0, false, false)
@@ -4347,7 +4435,15 @@ class ChannelManager(
             val arr = res.optJSONArray("messages") ?: JSONArray()
             val refusal = readErrorOf(res)
             if (refusal != null) _historyError.value = refusal
-            val hasMore = refusal == null && res.optBoolean("hasMore", false)
+            // What a cut-short read returned is only the oldest part of the
+            // window (resends run forward in time): keeping it would move the
+            // cursor past the part never read.
+            if (refusal == null && res.optBoolean("partial", false)) {
+                Log.w(TAG, "DM window did not finish reading")
+                return DmPage(0, true, false, failed = true)
+            }
+            val windowStart = res.optLong("windowStart", before - span)
+            val hasMore = refusal == null && windowStart > retentionStart
             val existing = _messages.value.map { it.id }.toSet()
             val fresh = mutableListOf<UiMessage>()
 
@@ -4421,16 +4517,25 @@ class ChannelManager(
             }
 
             if (!stillCurrent(generationAtStart)) return DmPage(0, false, false)
-            if (fresh.isNotEmpty()) mergeMessages(fresh)
+            if (fresh.isNotEmpty()) {
+                mergeMessages(fresh)
+                dmSearchStep = 0
+            } else if (refusal == null) {
+                // Empty window: the next read starts where this one did, or a
+                // "Search older" tap would scan the same empty window forever.
+                oldestTimestamp = windowStart
+            }
             applyPendingOverrides()
             _hasMoreHistory.value = hasMore
+            if (!hasMore && refusal == null) _dmRetentionDays.value = retentionDays
             return DmPage(
                 loaded = fresh.size,
                 hasMore = hasMore,
                 noResultsInWindow = fresh.isEmpty() && hasMore
             )
         } catch (e: Exception) {
-            return DmPage(0, _hasMoreHistory.value, false)
+            Log.w(TAG, "DM window failed: ${e.message}")
+            return DmPage(0, _hasMoreHistory.value, false, failed = true)
         } finally {
             // Same rule as loadMoreHistory: clearing the flag for a channel the
             // user has left would unlock the new channel's pagination early.
@@ -5299,6 +5404,9 @@ class ChannelManager(
             _loadingHistory.value = false
             _historyError.value = null
             _historyRead.value = HistoryRead.OK
+            _dmSearchPrompt.value = DmSearchPrompt.NONE
+            _dmRetentionDays.value = null
+            dmSearchStep = 0
             _overridesOwed.value = false
             resetPagingBackoff()
             // Both are per-channel verdicts — carrying them across a switch
