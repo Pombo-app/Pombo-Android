@@ -832,6 +832,10 @@ class ChannelManager(
     fun reloadChannels() {
         // The preview scope already belongs to the next account: nothing of this one may land in it.
         scope.launch { channelSwitchMutex.withLock { closeCurrentInternal(previewScope = null); clearReopenSnapshots() } }
+        // Keyed by peer, not by account: a peer both accounts talk to would
+        // otherwise show the next account what the previous one received.
+        synchronized(dmReceived) { dmReceived.clear() }
+        dmSentRows.clear()
         _channels.value = store.load().distinctBy { it.messageStreamId }
         persisted = _channels.value.associateBy { it.messageStreamId }
         _channelOrder.value = store.loadOrder()
@@ -3792,7 +3796,14 @@ class ChannelManager(
 
             var withStoredAt = 0
             var dropped = 0
+            val owner = inbox.substringBefore('/').lowercase()
             for (i in 0 until n) {
+                // The decrypt runs off the main thread; an account switch can
+                // land during it, and routing writes to whatever account is active.
+                if (myAddress()?.lowercase() != owner) {
+                    android.util.Log.d(TAG, "inbox replay dropped: the account changed")
+                    return
+                }
                 val entry = arr.optJSONObject(i) ?: continue
                 val meta = entry.optJSONObject("meta")
                 if (meta?.has("storedAt") == true) withStoredAt++
