@@ -4692,7 +4692,8 @@ class ChannelManager(
             },
             envelopeTs = data.optLong("_timestamp", 0L),
             seq = if (data.has("_seq")) data.optInt("_seq") else null,
-            publisherId = data.optStringOrNull("_publisherId")
+            publisherId = data.optStringOrNull("_publisherId"),
+            replyTo = replyRefOf(data)
         )
     }
 
@@ -4711,7 +4712,7 @@ class ChannelManager(
     ) = files.sendFile(fileName, fileSize, mimeType, openInput)
 
     /** Sends an E2E-encrypted DM to the peer's inbox (partition 0). */
-    private suspend fun sendDm(channel: Channel, text: String) {
+    private suspend fun sendDm(channel: Channel, text: String, replyTo: ReplyRef?) {
         val peer = channel.peerAddress ?: return
         val sender = myAddress() ?: return
         val id = Protocol.generateMessageId()
@@ -4721,15 +4722,17 @@ class ChannelManager(
         // live (the timeline rebuild on reopen was what fixed them).
         mergeMessages(listOf(UiMessage(
             id, text, sender, myUsername(), timestamp,
-            mine = true, pending = true, verified = true,
+            mine = true, pending = true, verified = true, replyTo = replyTo,
             ensName = ensStore.cachedName(sender),
             ensAvatar = ensStore.cachedAvatar(sender)
         )))
-        publishDm(channel, id, text, sender, timestamp)
+        publishDm(channel, id, text, sender, timestamp, replyTo)
     }
 
     /** Publish a DM already on the timeline and settle its send state. */
-    private suspend fun publishDm(channel: Channel, id: String, text: String, sender: String, timestamp: Long) {
+    private suspend fun publishDm(
+        channel: Channel, id: String, text: String, sender: String, timestamp: Long, replyTo: ReplyRef?
+    ) {
         val peer = channel.peerAddress ?: return
         // Wire message, post-D6: no app-layer signature, no `sender`, no
         // `channelId`. Identity travels as the proof inside the sealed
@@ -4739,7 +4742,7 @@ class ChannelManager(
         val wire = JSONObject()
             .put("type", "text").put("id", id).put("text", text)
             .put("senderName", myUsername() ?: JSONObject.NULL)
-            .put("timestamp", timestamp).put("replyTo", JSONObject.NULL)
+            .put("timestamp", timestamp).put("replyTo", replyWire(replyTo))
 
         try {
             if (!isOnline()) throw IllegalStateException(NO_NETWORK)
@@ -6433,7 +6436,7 @@ class ChannelManager(
         val trimmed = text.trim()
         if (trimmed.isEmpty()) return
 
-        if (channel.type == "dm") { sendDm(channel, trimmed); return }
+        if (channel.type == "dm") { sendDm(channel, trimmed, replyTo); return }
         assertMayPublish(channel)
 
         val id = Protocol.generateMessageId()
@@ -6459,7 +6462,7 @@ class ChannelManager(
         }
         if (channel.type == "dm") {
             markSending(id)
-            publishDm(channel, id, msg.text, msg.sender, msg.timestamp)
+            publishDm(channel, id, msg.text, msg.sender, msg.timestamp, msg.replyTo)
             return
         }
         assertMayPublish(channel)
@@ -6496,13 +6499,25 @@ class ChannelManager(
             .put("sender", sender)
             .put("senderName", myUsername() ?: JSONObject.NULL)
             .put("timestamp", timestamp)
-            .put("replyTo", replyTo?.let {
-                JSONObject()
-                    .put("id", it.id)
-                    .put("sender", it.sender)
-                    .put("senderName", it.senderName ?: JSONObject.NULL)
-                    .put("text", it.text)
-            } ?: JSONObject.NULL)
+            .put("replyTo", replyWire(replyTo))
+
+    private fun replyWire(replyTo: ReplyRef?): Any = replyTo?.let {
+        JSONObject()
+            .put("id", it.id)
+            .put("sender", it.sender)
+            .put("senderName", it.senderName ?: JSONObject.NULL)
+            .put("text", it.text)
+    } ?: JSONObject.NULL
+
+    private fun replyRefOf(data: JSONObject): ReplyRef? = data.optJSONObject("replyTo")?.let {
+        val rid = it.optString("id")
+        if (rid.isEmpty()) null else ReplyRef(
+            id = rid,
+            sender = it.optString("sender"),
+            senderName = it.optStringOrNull("senderName"),
+            text = it.optString("text")
+        )
+    }
 
     /** Publish a text already on the timeline and settle its send state. */
     private suspend fun publishText(channel: Channel, id: String, content: JSONObject) {
@@ -7926,15 +7941,7 @@ class ChannelManager(
             envelopeTs = data.optLong("_timestamp", 0L),
             seq = if (data.has("_seq")) data.optInt("_seq") else null,
             publisherId = data.optStringOrNull("_publisherId"),
-            replyTo = data.optJSONObject("replyTo")?.let {
-                val rid = it.optString("id")
-                if (rid.isEmpty()) null else ReplyRef(
-                    id = rid,
-                    sender = it.optString("sender"),
-                    senderName = it.optStringOrNull("senderName"),
-                    text = it.optString("text")
-                )
-            }
+            replyTo = replyRefOf(data)
         )
         mergeMessages(listOf(msg))
         if (!mine) resolveEnsFor(sender)
@@ -8201,15 +8208,7 @@ class ChannelManager(
                 imageId = if (isAudio) entry.optStringOrNull("imageId") else null,
                 imageMime = if (isAudio) entry.optStringOrNull("finalMime") else null,
                 audioDurationMs = if (isAudio) entry.optLong("durationMs", 0L) else 0L,
-                replyTo = entry.optJSONObject("replyTo")?.let {
-                    val rid = it.optString("id")
-                    if (rid.isEmpty()) null else ReplyRef(
-                        id = rid,
-                        sender = it.optString("sender"),
-                        senderName = it.optStringOrNull("senderName"),
-                        text = it.optString("text")
-                    )
-                }
+                replyTo = replyRefOf(entry)
             )
         }
         if (restored.isNotEmpty()) mergeMessages(restored)
