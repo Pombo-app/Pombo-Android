@@ -123,6 +123,23 @@ class ChannelCreateRecoveryTest {
         assertTrue(grants.contains(captured[0].publishKey!!.address))
     }
 
+    /** Web streamr.createStream: the shared keys publish, the clone only reads. */
+    @Test
+    fun `a Sealed creation gives the clone no publish grant on the -1 and the -2`() {
+        create(type = "gated")
+
+        val cloneGrant = { suffix: String ->
+            val call = calls.first { it.first == "setPermissions" && it.second.getString("streamId").endsWith(suffix) }
+            val assignments = call.second.getJSONArray("assignments")
+            (0 until assignments.length()).map { assignments.getJSONObject(it) }
+                .single { it.optString("userId") == "0xgate" }
+                .getJSONArray("permissions").let { p -> (0 until p.length()).map { p.getString(it) } }
+        }
+        assertEquals(listOf("subscribe"), cloneGrant("-1"))
+        assertEquals(listOf("subscribe"), cloneGrant("-2"))
+        assertEquals(listOf("subscribe", "publish"), cloneGrant("-4"))
+    }
+
     @Test
     fun `drops the record only after the channel is saved and its keys adopted`() {
         create(type = "gated")
