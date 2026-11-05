@@ -219,6 +219,8 @@ fun ChatScreen(vm: AppViewModel) {
         }
     }
     val bannedMembers by vm.bannedMembers.collectAsState()
+    val adminUnreadable by vm.adminUnreadable.collectAsState()
+    val paidChecked by vm.paidChecked.collectAsState()
 
     // NATIVE reverse-layout chat (deliberate divergence from the web's
     // top-down DOM): the LazyColumn runs with reverseLayout, so index 0 is the
@@ -385,7 +387,9 @@ fun ChatScreen(vm: AppViewModel) {
         // A ban the moderators keep in ADMIN_STATE rather than on the gate:
         // it hides the author's messages for everyone, so writing here reaches
         // nobody. The reader is told the same thing either way.
-        val clientBanned = bannedMembers.any { it.equals(myAddr, ignoreCase = true) }
+        val clientBanned = ChannelManager.clientBanStands(
+            bannedMembers.any { it.equals(myAddr, ignoreCase = true) },
+            adminUnreadable, paidStatus?.state, paidChecked)
         val accessLost = clientBanned || paidStatus?.state.let {
             it == ChannelManager.SubscriptionState.EXPIRED
                 || it == ChannelManager.SubscriptionState.UNSUBSCRIBED
@@ -762,7 +766,7 @@ fun ChatScreen(vm: AppViewModel) {
                     val subLapsed = subState == ChannelManager.SubscriptionState.EXPIRED
                         || subState == ChannelManager.SubscriptionState.UNSUBSCRIBED
                     val refusal = historyError.takeIf { !accessLost }
-                    if (terminalEmpty && subState == ChannelManager.SubscriptionState.BANNED) {
+                    if (subState == ChannelManager.SubscriptionState.BANNED) {
                         Icon(
                             Icons.Filled.Gavel, contentDescription = null,
                             tint = PomboColors.Overlay25,
@@ -790,7 +794,7 @@ fun ChatScreen(vm: AppViewModel) {
                             textAlign = androidx.compose.ui.text.style.TextAlign.Center,
                             modifier = Modifier.padding(horizontal = 32.dp)
                         )
-                    } else if (terminalEmpty && subLapsed) {
+                    } else if (subLapsed) {
                         val expired = subState == ChannelManager.SubscriptionState.EXPIRED
                         Text(
                             if (expired) "Your subscription has expired" else "No active subscription",
