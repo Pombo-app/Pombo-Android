@@ -1115,7 +1115,8 @@ class AppViewModel(app: Application) : AndroidViewModel(app), PomboBridge.Listen
             try {
                 val channels = manager.channels.value
                 // Never let a first scan report the whole stored history as new.
-                unreadStore.seedWatermarks(channels.map { it.messageStreamId })
+                // A DM starts at zero, as on the web: its first message is what creates it.
+                unreadStore.seedWatermarks(channels.filter { it.type != "dm" }.map { it.messageStreamId })
 
                 val background = channels.filter {
                     it.type != "dm" && it.messageStreamId != manager.current.value?.messageStreamId

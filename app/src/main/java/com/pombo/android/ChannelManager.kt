@@ -2973,6 +2973,14 @@ class ChannelManager(
         else -> m.text
     }
 
+    /** What raises the unread badge (web isContentMessage): never a reaction, edit or delete. */
+    private fun isContentMessage(data: JSONObject): Boolean = when (data.optString("type")) {
+        "text", "message" -> true
+        "image", "audio" -> data.optStringOrNull("imageId") != null
+        "video_announce" -> data.opt("metadata") != null
+        else -> false
+    }
+
     /**
      * One resend window over a background channel's P0, feeding BOTH the list
      * preview and the unread badge — the web's `checkChannelActivity`, minus
@@ -3010,13 +3018,7 @@ class ChannelManager(
                 // Unread: content only, and not my own.
                 if (row.ts <= since) continue
                 if (row.author.equals(me, ignoreCase = true)) continue
-                val isContent = when (row.data.optString("type")) {
-                    "text", "message" -> true
-                    "image", "audio" -> row.data.optStringOrNull("imageId") != null
-                    "video_announce" -> row.data.opt("metadata") != null
-                    else -> false
-                }
-                if (isContent) newContent++
+                if (isContentMessage(row.data)) newContent++
             }
 
             if (rows.isNotEmpty()) {
@@ -3967,6 +3969,13 @@ class ChannelManager(
                     senderAddress = sender
                 )
             )
+            // Web noteMessage. The watermark makes the connect replay and the
+            // catch-up, which route rows already counted, add nothing.
+            val ts = msg.envelopeTs.takeIf { it > 0 } ?: msg.timestamp
+            if (isContentMessage(data) && ts > unreadStore.watermark(channel.messageStreamId)) {
+                unreadStore.increment(channel.messageStreamId)
+                unreadStore.setWatermark(channel.messageStreamId, ts)
+            }
         }
     }
 
