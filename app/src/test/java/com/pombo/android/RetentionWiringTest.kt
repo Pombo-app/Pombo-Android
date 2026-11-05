@@ -89,21 +89,31 @@ class RetentionWiringTest {
     }
 
     /**
-     * The SDK keeps a stream's storage nodes for a day and never hears of a
-     * change made from another device, so what a write skips is decided on
-     * The Graph; the read-back after it stays on the SDK, which follows this
-     * client's own writes.
+     * The Graph lags a write and the SDK cache keeps the old value for good
+     * when the write's receipt read failed, so both what a write skips and
+     * the read-back after it come from the contracts.
      */
     @Test
-    fun `the stored-stream apply decides on The Graph and confirms on the SDK`() {
+    fun `the stored-stream apply decides and confirms on the chain`() {
+        val read = body("private suspend fun readStoredStreams(")
+        assertTrue("readStoredStreams no longer reads the contracts", read.contains("chainStorage("))
+        assertTrue("readStoredStreams reads The Graph again", !read.contains("GraphApi"))
         val apply = body("private suspend fun applyToStoredStreams(")
         assertTrue(
-            "applyToStoredStreams no longer decides on a fresh read",
-            apply.contains("readStoredStreams(channel, fresh = true)")
+            "a write whose receipt read failed is reported failed even when the chain shows it landed",
+            apply.contains("results[s.kind] == \"failed\" && s.read && !needs(s)")
         )
         assertTrue(
-            "applyToStoredStreams no longer confirms on the SDK",
-            apply.contains("val after = readStoredStreams(channel)")
+            "a write whose receipt read failed is followed at once by the next one, which takes the same nonce",
+            apply.contains("awaitStoredStream(stream, needs, extraNodes)")
+        )
+        assertTrue(
+            "a write that never left is waited on as if it were pending",
+            apply.contains("if (!writeLeft(nonceBefore)) \"failed\"")
+        )
+        assertTrue(
+            "the storage panel no longer lists what the contracts hold",
+            body("suspend fun channelStorageInfo(").contains("chainStorage(")
         )
     }
 
