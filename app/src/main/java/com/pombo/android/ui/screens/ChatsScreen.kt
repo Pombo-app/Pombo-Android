@@ -150,6 +150,8 @@ internal fun ChatsTab(vm: AppViewModel, onContacts: () -> Unit, onConnect: () ->
         Column(Modifier.fillMaxSize()) {
             PomboHeader(status) {
                 Row(verticalAlignment = Alignment.CenterVertically) {
+                    HeaderSyncIndicator(vm)
+                    Spacer(Modifier.width(12.dp))
                     Box(if (isGuest) Modifier.alpha(GUEST_LOCKED_ALPHA) else Modifier) {
                         HeaderIconButton(34.dp, if (isGuest) onConnect else onContacts) {
                             Icon(

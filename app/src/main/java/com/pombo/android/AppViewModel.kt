@@ -857,10 +857,7 @@ class AppViewModel(app: Application) : AndroidViewModel(app), PomboBridge.Listen
     }
 
     fun syncNow() = viewModelScope.launch {
-        runWithToast("Syncing…", "Sync complete", "Sync failed") {
-            val applied = sync.fullSync()
-            if (applied == 0) { /* nothing remote was newer — still a success */ }
-        }
+        runWithToast(null, null, "Sync failed") { sync.fullSync() }
     }
 
     // ==================== invites ====================
@@ -4351,23 +4348,23 @@ class AppViewModel(app: Application) : AndroidViewModel(app), PomboBridge.Listen
 
     /** Returns whether the block succeeded, so callers can keep a form open on failure. */
     private suspend fun runWithToast(
-        loading: String,
+        loading: String?,
         success: String?,
         failure: String,
         /** Hands the loading toast's id to flows that update it mid-run. */
         onToastId: ((Long) -> Unit)? = null,
         block: suspend () -> Unit
     ): Boolean {
-        val id = toast(loading, com.pombo.android.ui.ToastKind.LOADING, Long.MAX_VALUE)
-        onToastId?.invoke(id)
+        val id = loading?.let { toast(it, com.pombo.android.ui.ToastKind.LOADING, Long.MAX_VALUE) }
+        id?.let { onToastId?.invoke(it) }
         _busy.value = true
         return try {
             block()
-            dismissToast(id)
+            id?.let { dismissToast(it) }
             success?.let { toast(it, com.pombo.android.ui.ToastKind.SUCCESS) }
             true
         } catch (e: Exception) {
-            dismissToast(id)
+            id?.let { dismissToast(it) }
             android.util.Log.w("PomboAction", "$failure: ${e.message}")
             // Chain failures arrive as raw ethers strings; map the known ones
             // to the web's friendly texts (utils/chainErrors.js). Anything
