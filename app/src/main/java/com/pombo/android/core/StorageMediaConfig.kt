@@ -58,7 +58,7 @@ object StorageMediaConfig {
     const val DOWNLOAD_RETRY_PASSES = 3
 
     /** Upload verify repairs only after this long with no new chunk confirmed (web verifyQuietMs). */
-    const val VERIFY_QUIET_MS = 30_000L
+    const val VERIFY_QUIET_MS = 10_000L
 
     // ===== Download =====
 
