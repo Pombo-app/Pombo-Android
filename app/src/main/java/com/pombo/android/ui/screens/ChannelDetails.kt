@@ -94,93 +94,61 @@ import java.util.Locale
 @Composable
 internal fun ChannelSettingsSheet(vm: AppViewModel, channel: Channel, canModerate: Boolean, onDismiss: () -> Unit) {
     var sub by remember { mutableStateOf<ChannelSubPanel?>(null) }
-    androidx.compose.ui.window.Dialog(
-        onDismissRequest = onDismiss,
-        // Edge-to-edge window + safeDrawingPadding, same as CreateChannelDialog.
-        properties = androidx.compose.ui.window.DialogProperties(
-            usePlatformDefaultWidth = false,
-            decorFitsSystemWindows = false
-        )
+    // Drawn in the activity's window, as FormPanel: a Dialog window is sized
+    // to screenHeightDp, which on some phones leaves out the navigation bar.
+    androidx.activity.compose.BackHandler { if (sub != null) sub = null else onDismiss() }
+    // Minimum bottom clearance, as in CreateChannelDialog: a phone using
+    // gesture navigation with no gesture bar reports a 0 bottom inset and
+    // the panel would sit flush against the screen edge.
+    val bottomInset = WindowInsets.safeDrawing.asPaddingValues().calculateBottomPadding()
+    Column(
+        Modifier
+            .fillMaxSize()
+            .background(PomboColors.Bg)
+            // Swallow taps so nothing behind the panel reacts.
+            .clickableNoRipple { }
+            .safeDrawingPadding()
+            .padding(bottom = (12.dp - bottomInset).coerceAtLeast(0.dp))
     ) {
-        // A Dialog dismisses itself on back, which would skip the sub-panel
-        // level entirely — from Members straight out of Channel Details. Same
-        // rule as the header arrow: leave the sub-panel first.
-        androidx.activity.compose.BackHandler(enabled = sub != null) { sub = null }
-        // On API 29 the Dialog frame leaves the system bars uncovered; a full dim keeps the chat from showing there.
-        val dialogView = androidx.compose.ui.platform.LocalView.current
-        androidx.compose.runtime.SideEffect {
-            (dialogView.parent as? androidx.compose.ui.window.DialogWindowProvider)?.window?.apply {
-                addFlags(android.view.WindowManager.LayoutParams.FLAG_DIM_BEHIND)
-                setDimAmount(1f)
-            }
+        // Header: on mobile the web lays this out `justify-between` with the
+        // back button first and the title pushed to the RIGHT edge
+        // (index.html:1405 — the md:order swap only right-aligns the title on
+        // desktop; on mobile it stays where the DOM puts it, at the end).
+        Row(
+            Modifier.fillMaxWidth().height(52.dp).padding(horizontal = 20.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.SpaceBetween
+        ) {
+            Icon(
+                Icons.AutoMirrored.Filled.ArrowBack,
+                contentDescription = "Back",
+                tint = PomboColors.Overlay40,
+                modifier = Modifier.size(20.dp).clickableNoRipple {
+                    if (sub != null) sub = null else onDismiss()
+                }
+            )
+            Text(
+                sub?.label ?: "Channel Details",
+                color = PomboColors.Overlay90,
+                fontSize = 18.sp, fontWeight = FontWeight.Medium
+            )
         }
-        // Minimum bottom clearance, as in CreateChannelDialog: a phone using
-        // gesture navigation with no gesture bar reports a 0 bottom inset and
-        // the panel would sit flush against the screen edge.
-        val bottomInset = WindowInsets.safeDrawing.asPaddingValues().calculateBottomPadding()
-        Box(Modifier.fillMaxSize()) {
+        Box(Modifier.fillMaxWidth().height(1.dp).background(PomboColors.Overlay5))
+
         Column(
             Modifier
                 .fillMaxSize()
-                .background(PomboColors.Bg)
-                .safeDrawingPadding()
-                .padding(bottom = (12.dp - bottomInset).coerceAtLeast(0.dp))
+                .verticalScroll(androidx.compose.foundation.rememberScrollState())
+                .padding(20.dp)
         ) {
-            // Header: on mobile the web lays this out `justify-between` with the
-            // back button first and the title pushed to the RIGHT edge
-            // (index.html:1405 — the md:order swap only right-aligns the title on
-            // desktop; on mobile it stays where the DOM puts it, at the end).
-            Row(
-                Modifier.fillMaxWidth().height(52.dp).padding(horizontal = 20.dp),
-                verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.SpaceBetween
-            ) {
-                Icon(
-                    Icons.AutoMirrored.Filled.ArrowBack,
-                    contentDescription = "Back",
-                    tint = PomboColors.Overlay40,
-                    modifier = Modifier.size(20.dp).clickableNoRipple {
-                        if (sub != null) sub = null else onDismiss()
-                    }
-                )
-                Text(
-                    sub?.label ?: "Channel Details",
-                    color = PomboColors.Overlay90,
-                    fontSize = 18.sp, fontWeight = FontWeight.Medium
-                )
+            when (sub) {
+                null -> ChannelDetailsMain(vm, channel, canModerate, onOpenSub = { sub = it }, onDismiss = onDismiss)
+                ChannelSubPanel.MEMBERS -> ChannelMembersPanel(vm, channel, canModerate)
+                ChannelSubPanel.MODERATION -> ChannelModerationPanel(vm, channel, canModerate)
+                ChannelSubPanel.STORAGE -> ChannelStoragePanel(vm, channel, canModerate)
+                ChannelSubPanel.HEALTH -> ChannelHealthPanel(vm, channel)
+                ChannelSubPanel.DESTROY -> ChannelDestroyPanel(vm, channel, onDismiss)
             }
-            Box(Modifier.fillMaxWidth().height(1.dp).background(PomboColors.Overlay5))
-
-            Column(
-                Modifier
-                    .fillMaxSize()
-                    .verticalScroll(androidx.compose.foundation.rememberScrollState())
-                    .padding(20.dp)
-            ) {
-                when (sub) {
-                    null -> ChannelDetailsMain(vm, channel, canModerate, onOpenSub = { sub = it }, onDismiss = onDismiss)
-                    ChannelSubPanel.MEMBERS -> ChannelMembersPanel(vm, channel, canModerate)
-                    ChannelSubPanel.MODERATION -> ChannelModerationPanel(vm, channel, canModerate)
-                    ChannelSubPanel.STORAGE -> ChannelStoragePanel(vm, channel, canModerate)
-                    ChannelSubPanel.HEALTH -> ChannelHealthPanel(vm, channel)
-                    ChannelSubPanel.DESTROY -> ChannelDestroyPanel(vm, channel, onDismiss)
-                }
-            }
-        }
-        // Mirror of the main window's toast host. This sheet is its own OS
-        // window layered ABOVE the activity, so every toast fired from inside
-        // it — copy confirmations, member-batch results, moderation and
-        // delete-channel progress — was drawn underneath and never seen. Same
-        // shared state, so dismissal in either window clears both.
-        val sheetToasts by vm.toasts.collectAsState()
-        com.pombo.android.ui.ToastHost(
-            toasts = sheetToasts,
-            onDismiss = vm::dismissToast,
-            modifier = Modifier
-                .align(Alignment.TopCenter)
-                .safeDrawingPadding()
-                .padding(top = 29.dp, start = 8.dp, end = 8.dp)
-        )
         }
     }
 }

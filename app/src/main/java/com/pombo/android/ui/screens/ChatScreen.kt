@@ -275,13 +275,15 @@ fun ChatScreen(vm: AppViewModel) {
         }
     }
 
+    // Moderation is gated on the real on-chain permission, not on who
+    // created the channel — see ChannelManager.canModerate. Channel Details
+    // reads the same flag, so both surfaces agree on what this account can do.
+    val canModerate by vm.canModerate.collectAsState()
+
+    Box(Modifier.fillMaxSize()) {
     Column(Modifier.fillMaxSize().imePadding()) {
         val pins by vm.pins.collectAsState()
         val hidden by vm.hiddenIds.collectAsState()
-        // Moderation is gated on the real on-chain permission, not on who
-        // created the channel — see ChannelManager.canModerate. Channel Details
-        // reads the same flag, so both surfaces agree on what this account can do.
-        val canModerate by vm.canModerate.collectAsState()
         val moderatesGate by vm.moderatesGate.collectAsState()
         val rosterNames by vm.rosterNames.collectAsState()
         val myAddr = vm.address.collectAsState().value
@@ -305,8 +307,6 @@ fun ChatScreen(vm: AppViewModel) {
         val mayWriteHere = mayPublish &&
             (!ch.readOnly || readOnlyWriter ||
                 ch.createdBy?.equals(myAddr, ignoreCase = true) == true)
-
-        if (showInfo) ChannelSettingsSheet(vm, ch, canModerate) { showInfo = false }
 
         // Messages (hidden ones are dropped for non-owners; greyed for the owner).
         // While the initial resend is running the list stays empty: edits,
@@ -1301,6 +1301,8 @@ fun ChatScreen(vm: AppViewModel) {
                 }
             )
         }
+    }
+    if (showInfo) ChannelSettingsSheet(vm, ch, canModerate) { showInfo = false }
     }
 }
 
