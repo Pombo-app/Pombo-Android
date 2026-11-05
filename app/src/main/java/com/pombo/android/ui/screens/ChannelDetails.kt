@@ -70,6 +70,7 @@ import androidx.compose.material.icons.outlined.People
 import androidx.compose.material.icons.outlined.VerifiedUser
 import androidx.compose.material.icons.outlined.Visibility
 import androidx.compose.material.icons.outlined.WarningAmber
+import androidx.compose.material.icons.outlined.Build
 import androidx.compose.ui.layout.layout
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -161,6 +162,7 @@ internal fun ChannelSettingsSheet(vm: AppViewModel, channel: Channel, canModerat
                     ChannelSubPanel.MEMBERS -> ChannelMembersPanel(vm, channel, canModerate)
                     ChannelSubPanel.MODERATION -> ChannelModerationPanel(vm, channel, canModerate)
                     ChannelSubPanel.STORAGE -> ChannelStoragePanel(vm, channel, canModerate)
+                    ChannelSubPanel.HEALTH -> ChannelHealthPanel(vm, channel)
                     ChannelSubPanel.DESTROY -> ChannelDestroyPanel(vm, channel, onDismiss)
                 }
             }
@@ -187,6 +189,7 @@ private enum class ChannelSubPanel(val label: String) {
     MEMBERS("Members"),
     MODERATION("Moderation"),
     STORAGE("Storage"),
+    HEALTH("Channel Health"),
     /** On-chain delete of all three streams — irreversible for everyone. */
     DESTROY("Delete Channel")
 }
@@ -499,6 +502,11 @@ private fun ChannelDetailsMain(
     }
     if (channel.type != "dm") {
         ChannelNavRow("Storage", leadingIcon = com.pombo.android.ui.PomboIcons.Database) { onOpenSub(ChannelSubPanel.STORAGE) }
+        Spacer(Modifier.height(8.dp))
+    }
+    // Repairs streams in the owner's namespace: only the owner sees it.
+    if (channel.type != "dm" && vm.amOwnerOfCurrent()) {
+        ChannelNavRow("Channel Health", leadingIcon = Icons.Outlined.Build) { onOpenSub(ChannelSubPanel.HEALTH) }
         Spacer(Modifier.height(8.dp))
     }
     if (canModerate) {
@@ -1403,6 +1411,64 @@ private fun PermissionLegend() {
                 Spacer(Modifier.width(3.dp))
                 Text(label, color = dim, fontSize = 10.sp)
             }
+        }
+    }
+}
+
+/** Web ChannelHealthUI: diagnoses on open, repairs only what came back broken. */
+@Composable
+private fun ChannelHealthPanel(vm: AppViewModel, channel: Channel) {
+    val healthByChannel by vm.channelHealth.collectAsState()
+    val health = healthByChannel[channel.messageStreamId] ?: AppViewModel.ChannelHealthState.Idle
+    LaunchedEffect(channel.messageStreamId) { vm.diagnoseChannelHealth(channel.messageStreamId) }
+
+    Text("Check and repair this channel's infrastructure", color = PomboColors.Overlay40, fontSize = 12.sp)
+    Spacer(Modifier.height(14.dp))
+    val busy = health is AppViewModel.ChannelHealthState.Loading || health is AppViewModel.ChannelHealthState.Repairing
+    val (cardState, title, detail) = when (val h = health) {
+        is AppViewModel.ChannelHealthState.Idle -> Triple(RepairCardState.IDLE, "Not checked", "Run a diagnosis")
+        is AppViewModel.ChannelHealthState.Loading -> Triple(RepairCardState.LOADING, "Diagnosing...", "Checking streams, permissions and storage")
+        is AppViewModel.ChannelHealthState.Healthy -> Triple(RepairCardState.HEALTHY, "Channel healthy", "All checks passed")
+        is AppViewModel.ChannelHealthState.Issues -> {
+            val n = h.findings.issues.size + h.findings.reported.size
+            Triple(RepairCardState.ISSUES, "Issues found", if (n == 1) "1 issue" else "$n issues")
+        }
+        is AppViewModel.ChannelHealthState.Failed -> Triple(RepairCardState.FAILED, "Error", h.message)
+        is AppViewModel.ChannelHealthState.Repairing -> Triple(RepairCardState.REPAIRING, "Repairing...", h.step)
+        is AppViewModel.ChannelHealthState.Repaired -> Triple(RepairCardState.REPAIRED, "Repaired", h.detail)
+    }
+    RepairStatusCard(cardState, title, detail, onCheckAgain = if (busy) null else ({ vm.diagnoseChannelHealth(channel.messageStreamId) }))
+
+    val findings = when (val h = health) {
+        is AppViewModel.ChannelHealthState.Issues -> h.findings
+        is AppViewModel.ChannelHealthState.Failed -> h.findings
+        else -> null
+    }
+    if (findings != null) {
+        Spacer(Modifier.height(14.dp))
+        @Composable
+        fun line(mark: String, colour: Color, text: String) = Row(Modifier.padding(vertical = 3.dp)) {
+            Text(mark, color = colour, fontSize = 12.sp, modifier = Modifier.width(16.dp))
+            Text(text, color = PomboColors.Overlay60, fontSize = 12.sp)
+        }
+        findings.issues.forEach { line("⚠", Color(0xFFFACC15), it) }
+        findings.reported.forEach { line("✕", PomboColors.Danger, "$it (cannot be repaired here)") }
+        findings.unchecked.forEach { line("?", PomboColors.Overlay30, "$it: could not be checked") }
+    }
+
+    val issues = health as? AppViewModel.ChannelHealthState.Issues
+    if (issues != null && issues.steps.isNotEmpty()) {
+        Spacer(Modifier.height(14.dp))
+        Row(
+            Modifier.fillMaxWidth()
+                .background(PomboColors.Accent.copy(alpha = 0.10f), RoundedCornerShape(8.dp))
+                .border(1.dp, PomboColors.Accent.copy(alpha = 0.20f), RoundedCornerShape(8.dp))
+                .clickableNoRipple { if (!busy) vm.repairChannelHealth(channel.messageStreamId) }
+                .padding(vertical = 8.dp),
+            horizontalArrangement = Arrangement.Center,
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Text("Repair", color = PomboColors.Accent, fontSize = 12.sp, fontWeight = FontWeight.Medium)
         }
     }
 }

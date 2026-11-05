@@ -60,6 +60,18 @@ object GasEstimator {
     /** Rewriting a stream's metadata (partition count, description). Not measured: sized like a permission batch so it errs high. */
     private const val GAS_UPDATE_STREAM_METADATA = 210_000L
 
+    /** Gas units of a Channel Health repair (web channelRepairUnits). The password challenge is a message, not a transaction. */
+    fun channelRepairUnits(steps: List<ChannelHealth.Step>): Long = steps.sumOf { s ->
+        when (s.step) {
+            "create" -> GAS_CREATE_STREAM
+            "partitions", "metadata", "readOnly" -> GAS_UPDATE_STREAM_METADATA
+            "grants" -> if (s.gated) GAS_SET_PERMISSIONS_BATCH else GAS_SET_PUBLIC_PERMISSIONS
+            "storage" -> GAS_ADD_STORAGE_NODE + GAS_SET_STORAGE_DAY_COUNT
+            "retention" -> GAS_SET_STORAGE_DAY_COUNT
+            else -> 0L
+        }
+    }
+
     /**
      * Gas units of the steps a DM inbox repair would send for this diagnosis
      * (web GasEstimator.inboxRepairUnits). Only a false is repaired.

@@ -723,63 +723,25 @@ private fun DmInboxPanel(vm: AppViewModel) {
 
         // ---- Unified status card (web #repair-status-card) ----
         if (health !is AppViewModel.InboxHealth.NoInbox) {
-            val (accent, title, detail) = when (val h = health) {
+            val (cardState, title, detail) = when (val h = health) {
                 is AppViewModel.InboxHealth.Idle ->
-                    Triple(PomboColors.Overlay20, "Not checked", "Run a diagnosis to check inbox health")
+                    Triple(RepairCardState.IDLE, "Not checked", "Run a diagnosis to check inbox health")
                 is AppViewModel.InboxHealth.Loading ->
-                    Triple(PomboColors.Overlay40, "Diagnosing...", "Checking streams, permissions and storage")
+                    Triple(RepairCardState.LOADING, "Diagnosing...", "Checking streams, permissions and storage")
                 is AppViewModel.InboxHealth.Healthy ->
-                    Triple(PomboColors.Success, "Inbox healthy", h.detail)
+                    Triple(RepairCardState.HEALTHY, "Inbox healthy", h.detail)
                 is AppViewModel.InboxHealth.Issues ->
-                    Triple(Color(0xFFFACC15), "Issues found", h.summary)
+                    Triple(RepairCardState.ISSUES, "Issues found", h.summary)
                 is AppViewModel.InboxHealth.Failed ->
-                    Triple(PomboColors.Danger, "Error", h.message)
+                    Triple(RepairCardState.FAILED, "Error", h.message)
                 is AppViewModel.InboxHealth.Repairing ->
-                    Triple(PomboColors.Accent, "Repairing...", h.step)
+                    Triple(RepairCardState.REPAIRING, "Repairing...", h.step)
                 is AppViewModel.InboxHealth.Repaired ->
-                    Triple(PomboColors.Success, "Repaired", h.detail)
-                else -> Triple(PomboColors.Overlay20, "Not checked", "")
+                    Triple(RepairCardState.REPAIRED, "Repaired", h.detail)
+                else -> Triple(RepairCardState.IDLE, "Not checked", "")
             }
-            Row(
-                Modifier.fillMaxWidth()
-                    .background(PomboColors.Overlay3, RoundedCornerShape(12.dp))
-                    .border(1.dp, accent.copy(alpha = 0.15f), RoundedCornerShape(12.dp))
-                    .padding(14.dp),
-                verticalAlignment = Alignment.CenterVertically
-            ) {
-                Box(
-                    Modifier.size(32.dp).background(accent.copy(alpha = 0.10f), CircleShape),
-                    contentAlignment = Alignment.Center
-                ) {
-                    when (health) {
-                        is AppViewModel.InboxHealth.Loading, is AppViewModel.InboxHealth.Repairing ->
-                            androidx.compose.material3.CircularProgressIndicator(
-                                color = accent, strokeWidth = 2.dp, modifier = Modifier.size(16.dp)
-                            )
-                        is AppViewModel.InboxHealth.Healthy, is AppViewModel.InboxHealth.Repaired ->
-                            Icon(Icons.Outlined.VerifiedUser, contentDescription = null, tint = accent, modifier = Modifier.size(16.dp))
-                        is AppViewModel.InboxHealth.Issues ->
-                            Icon(Icons.Outlined.WarningAmber, contentDescription = null, tint = accent, modifier = Modifier.size(16.dp))
-                        is AppViewModel.InboxHealth.Failed ->
-                            Icon(Icons.Outlined.ErrorOutline, contentDescription = null, tint = accent, modifier = Modifier.size(16.dp))
-                        else ->
-                            Icon(Icons.Outlined.Search, contentDescription = null, tint = accent, modifier = Modifier.size(16.dp))
-                    }
-                }
-                Spacer(Modifier.width(12.dp))
-                Column {
-                    Text(title, color = PomboColors.Overlay70, fontSize = 14.sp)
-                    Spacer(Modifier.height(2.dp))
-                    Text(detail, color = PomboColors.Overlay30, fontSize = 12.sp, lineHeight = 16.sp)
-                    if (health is AppViewModel.InboxHealth.Failed) {
-                        Spacer(Modifier.height(6.dp))
-                        Text(
-                            "Check again", color = PomboColors.Overlay50, fontSize = 12.sp,
-                            modifier = Modifier.clickableNoRipple { vm.diagnoseInbox() }
-                        )
-                    }
-                }
-            }
+            RepairStatusCard(cardState, title, detail,
+                onCheckAgain = if (health is AppViewModel.InboxHealth.Failed) ({ vm.diagnoseInbox() }) else null)
             Spacer(Modifier.height(14.dp))
         }
 

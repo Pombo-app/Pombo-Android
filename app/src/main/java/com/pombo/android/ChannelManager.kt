@@ -1716,6 +1716,84 @@ class ChannelManager(
      * ephemeral -2 never has storage by design, and the DM inbox is an
      * account-level stream rather than part of any one conversation.
      */
+    private fun healthChannel(messageStreamId: String): Channel? =
+        _current.value?.takeIf { it.messageStreamId == messageStreamId }
+            ?: _channels.value.firstOrNull { it.messageStreamId == messageStreamId }
+
+    /** Channel Health diagnosis (read-only, no gas). Null when the channel is not in the list. */
+    suspend fun channelHealth(messageStreamId: String): com.pombo.android.core.ChannelHealth.Report? {
+        val channel = healthChannel(messageStreamId) ?: return null
+        val health = com.pombo.android.core.ChannelHealth
+        val expected = health.expected(channel)
+        val facts = bridge.call("channelStreamFacts", health.factsRequest(expected, listOf(STORAGE_NODE)), 120_000)
+        var passwordChecked: Boolean? = null
+        var passwordFound: Boolean? = null
+        if (expected.password) {
+            val pwd = channel.password
+            passwordChecked = pwd != null
+            val adminExists = (0 until (facts.optJSONArray("streams")?.length() ?: 0))
+                .map { facts.getJSONArray("streams").getJSONObject(it) }
+                .any { it.optString("id") == expected.streams.first { s -> s.kind == "admin" }.id && it.optBoolean("exists") }
+            if (pwd != null && adminExists) {
+                passwordFound = probePasswordChallenge(channel.adminStreamId, pwd).let { it.found && it.valid }
+            }
+        }
+        var gateRead: Boolean? = null
+        var gateReadOnly: Boolean? = null
+        expected.gate?.let { gate ->
+            try {
+                gateReadOnly = bridge.call("gateInfo", JSONObject().put("gate", gate).put("fresh", true)).optBoolean("readOnly")
+                gateRead = true
+            } catch (e: Exception) {
+                gateRead = false
+            }
+        }
+        return health.evaluate(channel.messageStreamId, expected, facts, passwordChecked, passwordFound, gateRead, gateReadOnly)
+    }
+
+    /**
+     * Sends a Channel Health repair, one step at a time. Every write asks the
+     * chain first, so a run cut short is resumed by diagnosing again.
+     * @return (steps done, steps failed)
+     */
+    suspend fun repairChannelHealth(
+        report: com.pombo.android.core.ChannelHealth.Report,
+        steps: List<com.pombo.android.core.ChannelHealth.Step>,
+        onStep: (com.pombo.android.core.ChannelHealth.Step) -> Unit = {}
+    ): Pair<Int, Int> {
+        val channel = healthChannel(report.channelId) ?: return 0 to steps.size
+        check(amOwner(channel)) { "Only the channel owner can repair it" }
+        var ok = 0
+        var failed = 0
+        for (s in steps) {
+            val want = report.expected.streams.first { it.kind == s.kind }
+            onStep(s)
+            try {
+                when (s.step) {
+                    "create" -> createStreamRetry(want.id,
+                        com.pombo.android.core.ChannelHealth.linkedMetadata(want, channel.messageStreamId).toString(),
+                        want.partitions, resume = true)
+                    "partitions" -> bridge.call("setStreamPartitions",
+                        JSONObject().put("streamId", want.id).put("partitions", want.partitions), 120_000)
+                    "metadata" -> bridge.call("mergeStreamDescription", JSONObject().put("streamId", want.id)
+                        .put("set", com.pombo.android.core.ChannelHealth.linkedMetadata(want, channel.messageStreamId)), 120_000)
+                    "readOnly" -> bridge.call("mergeStreamDescription", JSONObject().put("streamId", want.id)
+                        .put("set", JSONObject().put("r", s.readOnly == true)), 120_000)
+                    "grants" -> setPermissionsRetry(want.id,
+                        JSONArray().apply { want.grants.forEach { put(it.toJson()) } }, resume = true)
+                    "storage" -> addStorageRetry(want.id, s.node ?: STORAGE_NODE, s.days ?: 180, resume = true)
+                    "retention" -> setStorageDaysRetry(want.id, s.days ?: 180)
+                    "challenge" -> publishPasswordChallenge(want.id, channel.password ?: error("no password"))
+                }
+                ok++
+            } catch (e: Exception) {
+                Log.w(TAG, "Channel Health ${s.step} on ${want.id.takeLast(20)} failed: ${e.message}")
+                failed++
+            }
+        }
+        return ok to failed
+    }
+
     suspend fun channelStorageInfo(): StorageInfo {
         val channel = _current.value ?: return StorageInfo(false, emptyList(), null)
         val keysStreamId = if (channel.type == "gated") {
