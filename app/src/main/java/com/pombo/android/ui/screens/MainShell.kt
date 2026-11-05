@@ -1,5 +1,6 @@
 package com.pombo.android.ui.screens
 
+import androidx.compose.animation.core.animateFloat
 import androidx.compose.foundation.background
 import com.pombo.android.ui.glassPanel
 import androidx.compose.foundation.border
@@ -24,6 +25,7 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
+import androidx.compose.material.icons.filled.Check
 import androidx.compose.ui.draw.alpha
 import androidx.compose.material.icons.outlined.AccountBalanceWallet
 import androidx.compose.material.icons.outlined.AddCircleOutline
@@ -380,6 +382,50 @@ private fun NetworkDot(modifier: Modifier = Modifier) {
                 radius = inner * 1.4f
             ),
             radius = inner
+        )
+    }
+}
+
+/** Web #global-sync-indicator: a spinner while syncing, then a check mark for 1.1 s. */
+@Composable
+internal fun HeaderSyncIndicator(vm: AppViewModel) {
+    val syncing by vm.sync.foregroundSync.collectAsState()
+    var done by remember { mutableStateOf(false) }
+    LaunchedEffect(Unit) {
+        vm.sync.foregroundSyncDone.collect {
+            done = true
+            kotlinx.coroutines.delay(1_100)
+            done = false
+        }
+    }
+    LaunchedEffect(syncing) { if (syncing) done = false }
+    if (!syncing && !done) return
+    val stroke = 2.5.dp
+    if (syncing) {
+        val turn by androidx.compose.animation.core.rememberInfiniteTransition(label = "sync")
+            .animateFloat(
+                0f, 360f,
+                androidx.compose.animation.core.infiniteRepeatable(
+                    androidx.compose.animation.core.tween(800, easing = androidx.compose.animation.core.LinearEasing)
+                ),
+                label = "syncTurn"
+            )
+        androidx.compose.foundation.Canvas(
+            Modifier.size(18.dp).semantics { contentDescription = "Syncing your data" }
+        ) {
+            val width = stroke.toPx()
+            val inset = width / 2f
+            val arcSize = androidx.compose.ui.geometry.Size(size.width - width, size.height - width)
+            val topLeft = androidx.compose.ui.geometry.Offset(inset, inset)
+            val style = androidx.compose.ui.graphics.drawscope.Stroke(width)
+            drawCircle(PomboColors.Accent.copy(alpha = 0.16f), radius = (size.minDimension - width) / 2f, style = style)
+            drawArc(PomboColors.Accent, turn - 135f, 90f, false, topLeft, arcSize, style = style)
+            drawArc(PomboColors.Accent.copy(alpha = 0.72f), turn - 45f, 90f, false, topLeft, arcSize, style = style)
+        }
+    } else {
+        Icon(
+            Icons.Filled.Check, contentDescription = "Sync complete",
+            tint = PomboColors.Accent, modifier = Modifier.size(18.dp)
         )
     }
 }

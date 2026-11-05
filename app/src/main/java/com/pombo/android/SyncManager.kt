@@ -7,8 +7,11 @@ import com.pombo.android.core.SyncMerge
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.SharedFlow
 import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.asSharedFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
 import org.json.JSONArray
@@ -87,6 +90,28 @@ class SyncManager(
 
     private val _syncing = MutableStateFlow(false)
     val syncing: StateFlow<Boolean> = _syncing.asStateFlow()
+
+    /**
+     * The connect sync and the manual one (web runForegroundSync): what the
+     * header shows. [syncing] also covers every unprompted push and pull.
+     */
+    private val foregroundDepth = java.util.concurrent.atomic.AtomicInteger()
+    private val _foregroundSync = MutableStateFlow(false)
+    val foregroundSync: StateFlow<Boolean> = _foregroundSync.asStateFlow()
+    private val _foregroundSyncDone = MutableSharedFlow<Unit>(extraBufferCapacity = 1)
+    /** Fires when the last foreground sync running ends without an error. */
+    val foregroundSyncDone: SharedFlow<Unit> = _foregroundSyncDone.asSharedFlow()
+
+    private fun beginForegroundSync() {
+        foregroundDepth.incrementAndGet()
+        _foregroundSync.value = true
+    }
+
+    private fun endForegroundSync(succeeded: Boolean) {
+        if (foregroundDepth.decrementAndGet() > 0) return
+        _foregroundSync.value = false
+        if (succeeded) _foregroundSyncDone.tryEmit(Unit)
+    }
 
     private val _lastSyncTs = MutableStateFlow(store.lastSyncTs)
     val lastSyncTs: StateFlow<Long> = _lastSyncTs.asStateFlow()
@@ -483,10 +508,16 @@ class SyncManager(
      */
     suspend fun fullSync(): Int {
         var phaseError: Exception? = null
-        try { pushSync() } catch (e: Exception) { phaseError = e; Log.w(TAG, "fullSync push failed: ${e.message}") }
-        val applied = try { pullSync() } catch (e: Exception) { phaseError = phaseError ?: e; Log.w(TAG, "fullSync pull failed: ${e.message}"); 0 }
-        try { pullImageBlobs() } catch (e: Exception) { phaseError = phaseError ?: e; Log.w(TAG, "fullSync blob pull failed: ${e.message}") }
-        try { pushImageBlobs() } catch (e: Exception) { phaseError = phaseError ?: e; Log.w(TAG, "fullSync blob push failed: ${e.message}") }
+        var applied = 0
+        beginForegroundSync()
+        try {
+            try { pushSync() } catch (e: Exception) { phaseError = e; Log.w(TAG, "fullSync push failed: ${e.message}") }
+            applied = try { pullSync() } catch (e: Exception) { phaseError = phaseError ?: e; Log.w(TAG, "fullSync pull failed: ${e.message}"); 0 }
+            try { pullImageBlobs() } catch (e: Exception) { phaseError = phaseError ?: e; Log.w(TAG, "fullSync blob pull failed: ${e.message}") }
+            try { pushImageBlobs() } catch (e: Exception) { phaseError = phaseError ?: e; Log.w(TAG, "fullSync blob push failed: ${e.message}") }
+        } finally {
+            endForegroundSync(phaseError == null)
+        }
         Log.d(TAG, "fullSync done: applied=$applied error=${phaseError?.message ?: "none"}")
         phaseError?.let { throw it }
         return applied
@@ -518,19 +549,26 @@ class SyncManager(
             return 0
         }
         if (_syncing.value) return 0
-        if (store.dirty) {
-            // The debounced auto-push would only republish the same snapshot.
-            cancelAutoPush()
-            try { pushSync() } catch (e: Exception) { Log.w(TAG, "autoSync push failed (dirty kept): ${e.message}") }
-        }
-        val applied = try {
-            if (force) pullSync() else checkForNewSnapshot()
-        } catch (e: Exception) {
-            Log.w(TAG, "autoSync pull failed: ${e.message}"); 0
-        }
-        try { pushImageBlobs() } catch (e: Exception) { Log.w(TAG, "autoSync blob push failed: ${e.message}") }
-        if (force || applied > 0) {
-            try { pullImageBlobs() } catch (e: Exception) { Log.w(TAG, "autoSync blob pull failed: ${e.message}") }
+        var failed = false
+        var applied = 0
+        if (force) beginForegroundSync()
+        try {
+            if (store.dirty) {
+                // The debounced auto-push would only republish the same snapshot.
+                cancelAutoPush()
+                try { pushSync() } catch (e: Exception) { failed = true; Log.w(TAG, "autoSync push failed (dirty kept): ${e.message}") }
+            }
+            applied = try {
+                if (force) pullSync() else checkForNewSnapshot()
+            } catch (e: Exception) {
+                failed = true; Log.w(TAG, "autoSync pull failed: ${e.message}"); 0
+            }
+            try { pushImageBlobs() } catch (e: Exception) { failed = true; Log.w(TAG, "autoSync blob push failed: ${e.message}") }
+            if (force || applied > 0) {
+                try { pullImageBlobs() } catch (e: Exception) { failed = true; Log.w(TAG, "autoSync blob pull failed: ${e.message}") }
+            }
+        } finally {
+            if (force) endForegroundSync(!failed)
         }
         Log.d(TAG, "autoSync done: force=$force applied=$applied")
         return applied

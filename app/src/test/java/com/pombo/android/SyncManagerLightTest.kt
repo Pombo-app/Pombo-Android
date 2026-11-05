@@ -12,6 +12,7 @@ import java.util.concurrent.CopyOnWriteArrayList
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
 import org.json.JSONArray
 import org.json.JSONObject
@@ -135,6 +136,51 @@ class SyncManagerLightTest {
         calls.clear()
         assertNull(sync.pushSync())
         assertFalse("publishAs" in calls)
+    }
+
+    /** Every value [SyncManager.foregroundSync] takes, and how many times it reported success. */
+    private fun watchForeground(): Pair<List<Boolean>, java.util.concurrent.atomic.AtomicInteger> {
+        val states = CopyOnWriteArrayList<Boolean>()
+        val done = java.util.concurrent.atomic.AtomicInteger()
+        scope.launch { sync.foregroundSync.collect { states.add(it) } }
+        scope.launch { sync.foregroundSyncDone.collect { done.incrementAndGet() } }
+        return states to done
+    }
+
+    @Test
+    fun `the connect sync shows in the header and ends with a success`() = runBlocking {
+        dirty = true
+        rows = JSONArray().put(row(5000, "0xeph"))
+        val (states, done) = watchForeground()
+        sync.autoSync(force = true)
+
+        assertTrue(true in states)
+        assertFalse(sync.foregroundSync.value)
+        assertEquals(1, done.get())
+    }
+
+    @Test
+    fun `an unprompted push or foreground check stays out of the header`() = runBlocking {
+        rows = JSONArray().put(row(5000, "0xeph"))
+        val (states, done) = watchForeground()
+        sync.scheduleAutoPush(10L)
+        waitFor { "publishAs" in calls && !dirty }
+        sync.autoSync()
+
+        assertFalse(true in states)
+        assertEquals(0, done.get())
+    }
+
+    @Test
+    fun `a manual sync with a failed phase reports no success`() = runBlocking {
+        dirty = true
+        coEvery { bridge.call("publishAs", any(), any()) } throws IllegalStateException("publish failed")
+        val (states, done) = watchForeground()
+        runCatching { sync.fullSync() }
+
+        assertTrue(true in states)
+        assertFalse(sync.foregroundSync.value)
+        assertEquals(0, done.get())
     }
 
     @Test
