@@ -1628,16 +1628,40 @@ class ChannelManager(
         fun carries(address: String) = nodes.any { it.equals(address, ignoreCase = true) }
     }
 
-    /** [fresh] reads The Graph instead of the SDK's cached copy. */
-    private suspend fun readStoredStreams(channel: Channel, fresh: Boolean = false): List<StoredStream> {
-        return storedStreamsByKind(channel).map { (id, kind) ->
-            val res = if (fresh) {
-                com.pombo.android.core.GraphApi.streamStorage(id)?.let { s -> s.nodes.map { it.nodeAddress } to s.storageDays }
-            } else {
-                streamStorage(id)
-            }
+    /**
+     * The stored streams as the contracts hold them now. The Graph and the SDK
+     * cache both lag a write, and the cache keeps the old value for good when
+     * the write's receipt read failed. [extraNodes] are asked about even when
+     * no index lists them yet, such as a node being added.
+     */
+    private suspend fun readStoredStreams(channel: Channel, extraNodes: List<String> = emptyList()): List<StoredStream> {
+        val kinds = storedStreamsByKind(channel)
+        val state = chainStorage(kinds.map { it.first }, extraNodes + STORAGE_NODE)
+        return kinds.map { (id, kind) ->
+            val res = state[id]
             StoredStream(id, kind, res != null, res?.first ?: emptyList(), res?.second)
         }
+    }
+
+    /** Nodes this session assigned, which no index may list yet. */
+    private val writtenStorageNodes = java.util.Collections.synchronizedSet(mutableSetOf<String>())
+
+    /** Null for a stream whose lookup failed, which is not the same as "no nodes". */
+    private suspend fun chainStorage(streamIds: List<String>, extraNodes: List<String>): Map<String, Pair<List<String>, Int?>?> = try {
+        val res = bridge.call("chainStreamStorage", JSONObject()
+            .put("streamIds", JSONArray(streamIds))
+            .put("nodes", JSONArray(extraNodes.distinctBy { it.lowercase() })), 120_000)
+        val arr = res.optJSONArray("streams") ?: JSONArray()
+        (0 until arr.length()).associate { i ->
+            val s = arr.getJSONObject(i)
+            val nodesArr = s.optJSONArray("nodes") ?: JSONArray()
+            s.optString("id") to if (!s.optBoolean("ok")) null else
+                (0 until nodesArr.length()).map { nodesArr.optString(it) }.filter { it.isNotEmpty() } to
+                    (if (s.isNull("storageDays")) null else s.optInt("storageDays").takeIf { it > 0 })
+        }
+    } catch (e: Exception) {
+        Log.w(TAG, "chain storage lookup failed: ${e.message}")
+        streamIds.associateWith { null }
     }
 
     /**
@@ -1655,11 +1679,10 @@ class ChannelManager(
     private suspend fun applyToStoredStreams(
         channel: Channel,
         needs: (StoredStream) -> Boolean,
+        extraNodes: List<String> = emptyList(),
         apply: suspend (String) -> Unit
     ): StorageWriteResult {
-        // Before: The Graph, which sees changes made from other devices. After:
-        // the SDK, which follows this client's own writes before The Graph indexes them.
-        val before = readStoredStreams(channel, fresh = true)
+        val before = readStoredStreams(channel, extraNodes)
         val results = LinkedHashMap<String, String>()
         var sent = 0
 
@@ -1667,20 +1690,70 @@ class ChannelManager(
         for (stream in before) {
             if (!needs(stream)) { results[stream.kind] = "unchanged"; continue }
             sent += 1
+            val nonceBefore = accountNonces()?.let { maxOf(it.first, it.second) }
             results[stream.kind] = try {
                 apply(stream.id); "applied"
             } catch (e: Exception) {
                 Log.w(TAG, "storage write failed on ${stream.kind} ${stream.id.takeLast(20)}: ${e.message}")
-                "failed"
+                // A receipt read that failed early leaves the write pending: the next one
+                // would take the same nonce and one of the two would be dropped.
+                if (!writeLeft(nonceBefore)) "failed"
+                else if (awaitStoredStream(stream, needs, extraNodes)) "applied" else "failed"
             }
         }
 
         if (sent == 0) return StorageWriteResult(results, 0, null)
 
-        val after = readStoredStreams(channel)
+        val after = readStoredStreams(channel, extraNodes)
+        // A write whose receipt read failed has usually landed: the chain decides.
+        after.forEach { s ->
+            if (results[s.kind] == "failed" && s.read && !needs(s)) results[s.kind] = "applied"
+        }
         val verified = writesConverged(after, needs)
         if (!verified) Log.w(TAG, "storage write did not converge; streams still out of sync")
         return StorageWriteResult(results, sent, verified)
+    }
+
+    /** (mined, pending) transaction counts of this account; null when no endpoint answered. */
+    private suspend fun accountNonces(): Pair<Int, Int>? = try {
+        val r = bridge.call("accountNonces", JSONObject(), 30_000)
+        r.getInt("latest") to r.getInt("pending")
+    } catch (e: Exception) {
+        Log.w(TAG, "nonce read failed: ${e.message}")
+        null
+    }
+
+    /**
+     * Whether a failed write may still have left: unknown counts as yes. A
+     * pending transaction can take a moment to reach the endpoint asked, so
+     * "never left" is only believed when two reads agree.
+     */
+    private suspend fun writeLeft(nonceBefore: Int?): Boolean {
+        nonceBefore ?: return true
+        repeat(2) { attempt ->
+            if (attempt > 0) kotlinx.coroutines.delay(STORAGE_LAND_POLL_MS)
+            val (latest, pending) = accountNonces() ?: return true
+            if (maxOf(latest, pending) > nonceBefore) return true
+        }
+        Log.i(TAG, "storage write never left; not waiting for it")
+        return false
+    }
+
+    /** Polls the contracts until [stream] no longer [needs] the write, or gives up. */
+    private suspend fun awaitStoredStream(
+        stream: StoredStream,
+        needs: (StoredStream) -> Boolean,
+        extraNodes: List<String>
+    ): Boolean {
+        repeat(STORAGE_LAND_POLLS) {
+            kotlinx.coroutines.delay(STORAGE_LAND_POLL_MS)
+            val res = chainStorage(listOf(stream.id), extraNodes + STORAGE_NODE)[stream.id] ?: return@repeat
+            if (!needs(stream.copy(read = true, nodes = res.first, storageDays = res.second))) {
+                Log.i(TAG, "storage write on ${stream.kind} landed after its receipt read failed")
+                return true
+            }
+        }
+        return false
     }
 
     data class StorageWriteResult(
@@ -1806,10 +1879,14 @@ class ChannelManager(
             }
         } else ""
 
-        val msg = streamStorage(channel.messageStreamId)
-        val admin = if (channel.adminStreamId.isNotEmpty()) streamStorage(channel.adminStreamId) else null
-        val keys = if (keysStreamId.isNotEmpty()) streamStorage(keysStreamId) else null
-        val inter = if (interactionsStreamId.isNotEmpty()) streamStorage(interactionsStreamId) else null
+        val state = chainStorage(
+            listOf(channel.messageStreamId, channel.adminStreamId, keysStreamId, interactionsStreamId).filter { it.isNotEmpty() },
+            listOf(STORAGE_NODE) + synchronized(writtenStorageNodes) { writtenStorageNodes.toList() }
+        )
+        val msg = state[channel.messageStreamId]
+        val admin = if (channel.adminStreamId.isNotEmpty()) state[channel.adminStreamId] else null
+        val keys = if (keysStreamId.isNotEmpty()) state[keysStreamId] else null
+        val inter = if (interactionsStreamId.isNotEmpty()) state[interactionsStreamId] else null
 
         val (msgNodes, days) = msg ?: (emptyList<String>() to null)
         val (adminNodes, adminDays) = admin ?: (emptyList<String>() to null)
@@ -1865,6 +1942,7 @@ class ChannelManager(
         if (!amOwner(channel)) throw IllegalStateException("Only the channel admin can change storage")
         val addr = address.trim()
         require(Regex("^0x[a-fA-F0-9]{40}$").matches(addr)) { "Invalid storage node address" }
+        writtenStorageNodes.add(addr.lowercase())
 
         val args = { streamId: String ->
             JSONObject().put("streamId", streamId).put("nodeAddress", addr).apply {
@@ -1877,6 +1955,7 @@ class ChannelManager(
         val out = applyToStoredStreams(
             channel,
             needs = { needsNodeAdd(it, addr) },
+            extraNodes = listOf(addr),
             apply = { bridge.call("addToStorageNode", args(it), 180_000) }
         )
         markStorage(channel, enabled = true)
@@ -1899,6 +1978,7 @@ class ChannelManager(
         val out = applyToStoredStreams(
             channel,
             needs = { needsNodeRemove(it, addr) },
+            extraNodes = listOf(addr),
             apply = {
                 bridge.call("removeFromStorageNode",
                     JSONObject().put("streamId", it).put("nodeAddress", addr), 180_000)
@@ -8448,6 +8528,8 @@ class ChannelManager(
         const val GATE_MODE_NFT = 2
         const val GATE_MODE_PAID = 3
         const val STORAGE_NODE = "0xae340e799e8151f6a4999d245e466197aa217667"
+        private const val STORAGE_LAND_POLLS = 18
+        private const val STORAGE_LAND_POLL_MS = 5_000L
         /** Web CONFIG.push.pushStreamId — the shared relay wake-signal stream. */
         const val PUSH_STREAM_ID = "0xae340e799e8151f6a4999d245e466197aa217667/push"
         const val ONLINE_TIMEOUT_MS = 25_000L

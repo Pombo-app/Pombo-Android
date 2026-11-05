@@ -2302,6 +2302,68 @@ const api = {
     // chain holds for each expected stream. Every field stays null when its
     // read did not answer; only STREAM_NOT_FOUND makes a stream absent.
     // { streams: [{id, grants, stored}] } -> { streams: [{id, exists, partitions, description, grantsOk, nodes, storageDays}] }
+    // Storage nodes per stream as the contract holds them now. The registry
+    // cannot list a stream's nodes, so the candidates are the indexed lists
+    // plus `extra`, each asked one by one. A stream whose lookup fails maps to null.
+    async _chainNodesOf(streamIds, extra) {
+        const storage = function (p) {
+            return new window.ethers.Contract(api._STREAM_STORAGE_REGISTRY, api._STREAM_STORAGE_REGISTRY_ABI, p);
+        };
+        const candidates = new Set((extra || []).map(function (n) { return String(n).toLowerCase(); }));
+        for (const id of streamIds) {
+            const info = await api.getStreamStorageInfo({ streamId: id });
+            if (info.ok) info.nodes.forEach(function (n) { candidates.add(String(n).toLowerCase()); });
+        }
+        const out = {};
+        for (const id of streamIds) {
+            try {
+                const nodes = [];
+                for (const n of candidates) {
+                    const on = await api._gateWithProvider(function (p) { return storage(p).isStorageNodeOf(id, n); });
+                    if (on) nodes.push(n);
+                }
+                out[id] = nodes;
+            } catch (e) {
+                out[id] = null;
+            }
+        }
+        return out;
+    },
+
+    // This account's mined and pending transaction counts, to tell a write
+    // that never left from one whose receipt read failed.
+    async accountNonces() {
+        if (!client) throw new Error('client not connected');
+        const me = await client.getAddress();
+        return api._gateWithProvider(async function (p) {
+            return {
+                latest: await p.getTransactionCount(me, 'latest'),
+                pending: await p.getTransactionCount(me, 'pending')
+            };
+        });
+    },
+
+    // {streamIds, nodes}: what the storage panel shows and decides on, from the
+    // contracts rather than the SDK cache or The Graph, which both lag a write.
+    async chainStreamStorage(a) {
+        if (!client) throw new Error('client not connected');
+        const nodesOf = await api._chainNodesOf(a.streamIds, a.nodes);
+        const out = [];
+        for (const id of a.streamIds) {
+            let storageDays = null;
+            let daysRead = true;
+            try {
+                const md = await api._chainMetadata(id);
+                storageDays = Number.isFinite(md.storageDays) ? md.storageDays : null;
+            } catch (e) {
+                daysRead = false;
+            }
+            const ok = nodesOf[id] !== null && daysRead;
+            out.push({ id: id, ok: ok, nodes: ok ? nodesOf[id] : [], storageDays: ok ? storageDays : null });
+        }
+        return { streams: out };
+    },
+
     async channelStreamFacts(a) {
         if (!client) throw new Error('client not connected');
         // Read the contracts, not the SDK: its cache keeps the old value after a
@@ -2309,17 +2371,8 @@ const api = {
         const registry = function (p) {
             return new window.ethers.Contract(api._STREAM_REGISTRY, api._STREAM_REGISTRY_ABI, p);
         };
-        const storage = function (p) {
-            return new window.ethers.Contract(api._STREAM_STORAGE_REGISTRY, api._STREAM_STORAGE_REGISTRY_ABI, p);
-        };
-        // The registry cannot list a stream's nodes, so the candidates come from
-        // the indexed lists plus the expected ones, and each is asked one by one.
-        const candidates = new Set((a.nodes || []).map(function (n) { return String(n).toLowerCase(); }));
-        for (const s of a.streams) {
-            if (!s.stored) continue;
-            const info = await api.getStreamStorageInfo({ streamId: s.id });
-            if (info.ok) info.nodes.forEach(function (n) { candidates.add(String(n).toLowerCase()); });
-        }
+        const nodesOf = await api._chainNodesOf(
+            a.streams.filter(function (s) { return s.stored; }).map(function (s) { return s.id; }), a.nodes);
         const out = [];
         for (const s of a.streams) {
             const f = { id: s.id, exists: null, partitions: null, description: null, grantsOk: null, nodes: null, storageDays: null };
@@ -2339,16 +2392,7 @@ const api = {
             } else {
                 f.grantsOk = true;
             }
-            if (s.stored) {
-                try {
-                    const nodes = [];
-                    for (const n of candidates) {
-                        const on = await api._gateWithProvider(function (p) { return storage(p).isStorageNodeOf(s.id, n); });
-                        if (on) nodes.push(n);
-                    }
-                    f.nodes = nodes;
-                } catch (e) { /* unknown */ }
-            }
+            if (s.stored) f.nodes = nodesOf[s.id];
         }
         return { streams: out };
     },
