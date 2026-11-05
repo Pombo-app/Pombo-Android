@@ -136,6 +136,14 @@ internal class Moderation(private val manager: ChannelManager) {
     /** address -> epoch the ban starts from; null hides everything. */
     internal val _banSince = MutableStateFlow<Map<String, Int?>>(emptyMap())
 
+    /**
+     * Whether the -3 of the open channel holds a newer state than the one
+     * applied, sealed under a key this account does not hold: then the bans
+     * on screen may be a stale copy from disk. Null until the -3 is read.
+     */
+    internal val _adminUnreadable = MutableStateFlow<Boolean?>(null)
+    private var newestUnreadTs = 0L
+
     private var snapHidden: Set<String> = emptySet()
     private var snapBanned: Map<String, Int?> = emptyMap()
     private var absorbedThrough: Long = 0L
@@ -900,9 +908,11 @@ internal class Moderation(private val manager: ChannelManager) {
     internal suspend fun loadAdminState(channel: Channel, generation: Int) {
         seedFloor(channel)
         try {
+            newestUnreadTs = 0L
             val entries = readAdminEntries(channel) ?: return
             if (!stillCurrent(generation)) return
             for ((content, meta) in entries) applyAdminMessage(channel, content, meta, generation)
+            _adminUnreadable.value = newestUnreadTs > (adminTs[channel.adminStreamId] ?: 0L)
             // Even an empty history is an answer: the stream holds no
             // snapshot, so rev bookkeeping may start from zero.
             adminLoaded.add(channel.adminStreamId)
@@ -1018,10 +1028,16 @@ internal class Moderation(private val manager: ChannelManager) {
                 val keysId = channel.keysStreamId.ifEmpty {
                     StreamConstants.deriveKeysId(channel.messageStreamId)
                 }
-                content = epochKeys.tryDecrypt(
+                val at = com.pombo.android.core.StoredAt.judgeTime(meta)
+                val opened = epochKeys.tryDecrypt(
                     channel.messageStreamId, keysId, content,
-                    gated = true, live = false, timestamp = com.pombo.android.core.StoredAt.judgeTime(meta)
-                ) ?: continue
+                    gated = true, live = false, timestamp = at
+                )
+                if (opened == null) {
+                    newestUnreadTs = maxOf(newestUnreadTs, at)
+                    continue
+                }
+                content = opened
             }
             out.add(content to meta)
         }
@@ -1346,6 +1362,7 @@ internal class Moderation(private val manager: ChannelManager) {
         snapBanned = emptyMap()
         absorbedThrough = 0L
         _banSince.value = emptyMap()
+        _adminUnreadable.value = null
     }
 
     internal data class OwnerWord(val hidden: Set<String>, val banned: Map<String, Int?>, val absorbedThrough: Long)

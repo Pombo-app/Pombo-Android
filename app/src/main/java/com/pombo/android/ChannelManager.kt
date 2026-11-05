@@ -924,6 +924,8 @@ class ChannelManager(
     val hiddenIds: StateFlow<Set<String>> = _hiddenIds.asStateFlow()
     private val _bannedMembers get() = admin._bannedMembers
     val bannedMembers: StateFlow<Set<String>> = _bannedMembers.asStateFlow()
+    /** Null until the open channel's -3 is read; true when a newer state there could not be opened. */
+    val adminUnreadable: StateFlow<Boolean?> = admin._adminUnreadable.asStateFlow()
     /** account -> (name, when they announced it), from the -4 roster. */
     private val _rosterNames = MutableStateFlow<Map<String, Pair<String, Long>>>(emptyMap())
     val rosterNames: StateFlow<Map<String, Pair<String, Long>>> = _rosterNames.asStateFlow()
@@ -986,6 +988,9 @@ class ChannelManager(
 
     private val _paidStatus = MutableStateFlow<PaidStatus?>(null)
     val paidStatus: StateFlow<PaidStatus?> = _paidStatus.asStateFlow()
+    /** The open channel's paid standing has been read (or it has none to read). */
+    private val _paidChecked = MutableStateFlow(true)
+    val paidChecked: StateFlow<Boolean> = _paidChecked.asStateFlow()
     private var paidExpiryJob: kotlinx.coroutines.Job? = null
 
     private suspend fun resolvePaidStatus(channel: Channel): PaidStatus? {
@@ -5456,7 +5461,10 @@ class ChannelManager(
                 if (channel.type == "gated") {
                     launch {
                         val status = resolvePaidStatus(channel)
-                        if (stillCurrent(generation)) setPaidStatus(status)
+                        if (stillCurrent(generation)) {
+                            setPaidStatus(status)
+                            _paidChecked.value = true
+                        }
                     }
                 }
                 // History: content + overrides
@@ -5722,6 +5730,7 @@ class ChannelManager(
             // shows the previous room's key/subscription state on this one.
             _waitingForKeys.value = false
             setPaidStatus(null)
+            _paidChecked.value = channel.type != "gated" || channel.writeOnly || preview
             channelImageRev = 0
             synchronized(online) { online.clear(); onlineNames.clear() }
             clearTyping()   // whoever was typing was typing in the OTHER room
@@ -8562,6 +8571,24 @@ class ChannelManager(
         const val GATE_MODE_NFT = 2
         const val GATE_MODE_PAID = 3
         const val STORAGE_NODE = "0xae340e799e8151f6a4999d245e466197aa217667"
+
+        /**
+         * Whether a ban from the -3 is the viewer's standing. A lapsed
+         * subscriber cannot open the newer -3 states, so a ban seeded from
+         * disk is never corrected: until the -3 has been read in full, a lapse
+         * the chain reports (or a paid read still pending) is the word.
+         */
+        fun clientBanStands(
+            listed: Boolean,
+            adminUnreadable: Boolean?,
+            paid: SubscriptionState?,
+            paidChecked: Boolean
+        ): Boolean {
+            if (!listed) return false
+            if (adminUnreadable == false) return true
+            val lapsed = paid == SubscriptionState.EXPIRED || paid == SubscriptionState.UNSUBSCRIBED
+            return paidChecked && !lapsed
+        }
         private const val STORAGE_LAND_POLLS = 18
         private const val STORAGE_LAND_POLL_MS = 5_000L
         /** Web CONFIG.push.pushStreamId — the shared relay wake-signal stream. */

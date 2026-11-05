@@ -196,6 +196,8 @@ class AppViewModel(app: Application) : AndroidViewModel(app), PomboBridge.Listen
     val pins get() = manager.pins
     val hiddenIds get() = manager.hiddenIds
     val bannedMembers get() = manager.bannedMembers
+    val adminUnreadable get() = manager.adminUnreadable
+    val paidChecked get() = manager.paidChecked
     val banSince get() = manager.banSince
     val rosterNames get() = manager.rosterNames
     val moderatesGate get() = manager.moderatesGate
