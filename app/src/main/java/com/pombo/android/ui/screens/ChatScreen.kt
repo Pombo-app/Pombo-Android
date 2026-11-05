@@ -766,7 +766,7 @@ fun ChatScreen(vm: AppViewModel) {
                     val subLapsed = subState == ChannelManager.SubscriptionState.EXPIRED
                         || subState == ChannelManager.SubscriptionState.UNSUBSCRIBED
                     val refusal = historyError.takeIf { !accessLost }
-                    if (terminalEmpty && subState == ChannelManager.SubscriptionState.BANNED) {
+                    if (subState == ChannelManager.SubscriptionState.BANNED) {
                         Icon(
                             Icons.Filled.Gavel, contentDescription = null,
                             tint = PomboColors.Overlay25,
@@ -794,7 +794,7 @@ fun ChatScreen(vm: AppViewModel) {
                             textAlign = androidx.compose.ui.text.style.TextAlign.Center,
                             modifier = Modifier.padding(horizontal = 32.dp)
                         )
-                    } else if (terminalEmpty && subLapsed) {
+                    } else if (subLapsed) {
                         val expired = subState == ChannelManager.SubscriptionState.EXPIRED
                         Text(
                             if (expired) "Your subscription has expired" else "No active subscription",
