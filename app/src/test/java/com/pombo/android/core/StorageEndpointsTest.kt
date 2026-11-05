@@ -1,6 +1,8 @@
 package com.pombo.android.core
 
 import java.util.concurrent.atomic.AtomicInteger
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.runBlocking
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
@@ -257,22 +259,35 @@ class StorageEndpointsTest {
     }
 
     @Test
-    fun `capabilities expire with the ttl`() = runBlocking {
+    fun `an expired entry is answered at once and refreshed in the background`() = runBlocking {
         val clock = Clock(1_000L)
         val calls = AtomicInteger(0)
         val ep = StorageEndpoints(
             fetcher = { emptyList() },
             ttlMs = 10_000L,
             clock = clock,
-            capabilityFetcher = { calls.incrementAndGet(); FORK }
+            capabilityFetcher = { if (calls.incrementAndGet() == 1) FORK else setOf("purge") },
+            refreshScope = CoroutineScope(Dispatchers.Unconfined)
         )
         ep.probeCapabilities("https://a.example.com")
         clock.t = 1_000L + 9_999L
         ep.probeCapabilities("https://a.example.com")
         assertEquals(1, calls.get())
         clock.t = 1_000L + 10_001L
-        ep.probeCapabilities("https://a.example.com")
+        assertEquals(FORK, ep.probeCapabilities("https://a.example.com"))
         assertEquals(2, calls.get())
+        assertEquals(setOf("purge"), ep.capabilitiesOf("https://a.example.com"))
+    }
+
+    @Test
+    fun `byHealth puts the urls that failed last, keeping the given order otherwise`() {
+        val ep = StorageEndpoints(fetcher = { emptyList() })
+        val urls = listOf("https://a1.example.com", "https://a2.example.com", "https://a3.example.com")
+        assertEquals(urls, ep.byHealth(urls))
+        ep.noteFailure("https://a1.example.com/")
+        assertEquals(listOf("https://a2.example.com", "https://a3.example.com", "https://a1.example.com"), ep.byHealth(urls))
+        ep.noteSuccess("https://a1.example.com")
+        assertEquals(urls, ep.byHealth(urls))
     }
 
     @Test

@@ -59,12 +59,13 @@ class StorageMediaDmVerifyTest {
         }
         every { bridge.inFlight() } returns 0L
         val endpoints = mockk<StorageEndpoints>(relaxed = true)
+        every { endpoints.byHealth(any()) } answers { firstArg() }
         coEvery { endpoints.rotation(any()) } returns providers.map { it.urls.first() }
         coEvery { endpoints.providersWith(any(), "stored") } returns providers
         every { endpoints.supportsMetaFormat(any()) } returns true
         val transport = object : StorageMedia.Transport {
             override suspend fun publishAnnounce(messageStreamId: String, announce: JSONObject, password: String?, isDm: Boolean) = nextTs.getAndIncrement()
-            override suspend fun announceStored(messageStreamId: String, messageId: String) = true
+            override suspend fun announceStored(messageStreamId: String, messageId: String, late: java.util.concurrent.atomic.AtomicBoolean) = true
             override fun myAddress() = "0xme"
             override fun username() = "me"
         }

@@ -702,7 +702,10 @@ class ChannelManager(
                 return publishChannel(channelByStream(messageStreamId), messageStreamId, StreamConstants.P_MESSAGES, announce, password)
             }
 
-            override suspend fun announceStored(messageStreamId: String, messageId: String): Boolean? {
+            override suspend fun announceStored(
+                messageStreamId: String, messageId: String, late: java.util.concurrent.atomic.AtomicBoolean
+            ): Boolean? {
+                if (late.get()) return true
                 val rows = dmSentRows.rowsOf(messageId)
                     .filter { it.streamId == messageStreamId && it.partition == StreamConstants.P_MESSAGES }
                 if (rows.isEmpty()) return null
@@ -711,7 +714,8 @@ class ChannelManager(
                 for (r in rows) {
                     val present = com.pombo.android.core.StoragePurge.storedOnAny(
                         providers, messageStreamId, r.partition,
-                        listOf(com.pombo.android.core.StoragePurge.Target(r.timestamp, r.sequenceNumber)), r.privateKeyHex
+                        listOf(com.pombo.android.core.StoragePurge.Target(r.timestamp, r.sequenceNumber)), r.privateKeyHex,
+                        health = storageEndpoints, late = late, lateScope = scope
                     ) ?: return null
                     if (present) return true
                 }
@@ -770,7 +774,8 @@ class ChannelManager(
             val key = myPrivateKey() ?: return null
             return com.pombo.android.core.StoragePurge.storedOn(
                 listOf(provider), streamId, partition,
-                timestamps.map { com.pombo.android.core.StoragePurge.Target(it, 0) }, key
+                timestamps.map { com.pombo.android.core.StoragePurge.Target(it, 0) }, key,
+                health = storageEndpoints
             )?.map { it.timestamp }?.toSet()
         }
         override fun loadPending(key: String): List<String> {

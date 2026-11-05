@@ -4,7 +4,10 @@ import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicInteger
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.cancelChildren
 import kotlinx.coroutines.coroutineScope
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import org.json.JSONArray
 import org.json.JSONObject
@@ -32,6 +35,7 @@ object StoragePurge {
     const val LOOKUP_WINDOW_MS = 10_000L
     const val LOOKUP_TIE_MS = 1_000L
     const val CHUNK_WINDOW_PAD_MS = 60_000L
+    const val ANNOUNCE_ANSWER_GRACE_MS = 2_000L
 
     data class Target(val timestamp: Long, val sequenceNumber: Int)
 
@@ -95,32 +99,45 @@ object StoragePurge {
 
     /**
      * Purge on one provider: the first URL that answers decides; one that
-     * cannot be reached is skipped for the next. Every attempt signs afresh,
-     * because the node accepts a nonce once.
+     * cannot be reached or fails with a 5xx is skipped for the next, and with
+     * [health] the provider's URLs are tried healthiest first. Every attempt
+     * signs afresh, because the node accepts a nonce once.
      * @param post `(url, jsonBody) -> (status, responseBody)`; throws when unreachable.
      */
     suspend fun purgeOnProvider(
         provider: StorageEndpoints.Node, streamId: String, partition: Int, targets: List<Target>,
         privateKeyHex: String,
+        health: StorageEndpoints? = null,
         post: suspend (url: String, body: String) -> Pair<Int, String> = StorageHttp::postJson
-    ): ProviderOutcome = postTargets("purge", provider, streamId, partition, targets, privateKeyHex, post)
+    ): ProviderOutcome = postTargets("purge", provider, streamId, partition, targets, privateKeyHex, post, health)
 
     private suspend fun postTargets(
         action: String, provider: StorageEndpoints.Node, streamId: String, partition: Int, targets: List<Target>,
-        privateKeyHex: String, post: suspend (url: String, body: String) -> Pair<Int, String>
+        privateKeyHex: String, post: suspend (url: String, body: String) -> Pair<Int, String>,
+        health: StorageEndpoints?
     ): ProviderOutcome {
         var lastError: String? = null
-        for (url in provider.urls) {
+        var serverError: ProviderOutcome? = null
+        for (url in health?.byHealth(provider.urls) ?: provider.urls) {
             try {
                 val body = signedBody(streamId, partition, targets, privateKeyHex, action = action)
                 val (status, text) = post(targetsUrl(url, streamId, partition, action), body.toString())
+                if (status >= 500) {
+                    health?.noteFailure(url)
+                    serverError = ProviderOutcome(provider.nodeAddress, url, status, emptyMap())
+                    continue
+                }
                 if (status / 100 != 2) return ProviderOutcome(provider.nodeAddress, url, status, emptyMap())
+                health?.noteSuccess(url)
                 return ProviderOutcome(provider.nodeAddress, url, status, parseResults(text))
+            } catch (e: CancellationException) {
+                throw e
             } catch (e: Exception) {
+                health?.noteFailure(url)
                 lastError = e.message ?: e.javaClass.simpleName
             }
         }
-        return ProviderOutcome(provider.nodeAddress, null, 0, emptyMap(), lastError ?: "unreachable")
+        return serverError ?: ProviderOutcome(provider.nodeAddress, null, 0, emptyMap(), lastError ?: "unreachable")
     }
 
     /**
@@ -132,13 +149,14 @@ object StoragePurge {
     suspend fun storedOn(
         providers: List<StorageEndpoints.Node>, streamId: String, partition: Int, targets: List<Target>,
         privateKeyHex: String,
+        health: StorageEndpoints? = null,
         post: suspend (url: String, body: String) -> Pair<Int, String> = StorageHttp::postJson
     ): Set<Target>? {
         val present = HashSet<Target>()
         var answered = false
         for (p in providers) {
             for (batch in targets.chunked(MAX_TARGETS)) {
-                val o = postTargets("stored", p, streamId, partition, batch, privateKeyHex, post)
+                val o = postTargets("stored", p, streamId, partition, batch, privateKeyHex, post, health)
                 if (o.status == 0) break
                 if (o.status / 100 != 2) continue
                 answered = true
@@ -150,12 +168,18 @@ object StoragePurge {
 
     /**
      * Whether any provider holds one of the targets, asked of all of them in
-     * parallel: the first that holds it settles it, without waiting for the
-     * slower ones. Null when no provider answered.
+     * parallel: the first that holds it settles it. Once one answers that it
+     * does not hold it yet, the slower ones get [graceMs] more. With
+     * [lateScope] they keep going after that, and one that finds a target sets
+     * [late], for the caller's next try. Null when no provider answered.
      */
     suspend fun storedOnAny(
         providers: List<StorageEndpoints.Node>, streamId: String, partition: Int, targets: List<Target>,
         privateKeyHex: String,
+        health: StorageEndpoints? = null,
+        late: AtomicBoolean? = null,
+        lateScope: CoroutineScope? = null,
+        graceMs: Long = ANNOUNCE_ANSWER_GRACE_MS,
         post: suspend (url: String, body: String) -> Pair<Int, String> = StorageHttp::postJson
     ): Boolean? {
         if (providers.isEmpty()) return null
@@ -163,21 +187,27 @@ object StoragePurge {
             val result = CompletableDeferred<Boolean?>()
             val left = AtomicInteger(providers.size)
             val answered = AtomicBoolean(false)
-            val asks = providers.map { p ->
-                launch {
+            val graceStarted = AtomicBoolean(false)
+            val waiting = this
+            providers.forEach { p ->
+                (lateScope ?: waiting).launch {
                     val present = try {
-                        storedOn(listOf(p), streamId, partition, targets, privateKeyHex, post)
+                        storedOn(listOf(p), streamId, partition, targets, privateKeyHex, health, post)
                     } catch (e: CancellationException) {
                         throw e
                     } catch (e: Exception) {
                         null
                     }
                     if (present != null) answered.set(true)
-                    if (!present.isNullOrEmpty()) result.complete(true)
-                    if (left.decrementAndGet() == 0) result.complete(if (answered.get()) false else null)
+                    when {
+                        !present.isNullOrEmpty() -> { late?.set(true); result.complete(true) }
+                        left.decrementAndGet() == 0 -> result.complete(if (answered.get()) false else null)
+                        present != null && graceStarted.compareAndSet(false, true) ->
+                            waiting.launch { delay(graceMs); result.complete(false) }
+                    }
                 }
             }
-            result.await().also { asks.forEach { it.cancel() } }
+            result.await().also { coroutineContext.cancelChildren() }
         }
     }
 
@@ -222,7 +252,7 @@ object StoragePurge {
         val all = providers.map { p ->
             val outs = ArrayList<Pair<Group, ProviderOutcome>>()
             for (b in batches) {
-                val o = purgeOnProvider(p, streamId, b.partition, b.targets, b.privateKeyHex ?: privateKeyHex, post)
+                val o = purgeOnProvider(p, streamId, b.partition, b.targets, b.privateKeyHex ?: privateKeyHex, endpoints, post)
                 outs.add(b to o)
                 if (o.status == 0) break
             }

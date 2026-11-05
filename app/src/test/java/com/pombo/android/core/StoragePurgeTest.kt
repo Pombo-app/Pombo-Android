@@ -1,11 +1,13 @@
 package com.pombo.android.core
 
 import io.mockk.coEvery
+import io.mockk.every
 import io.mockk.mockk
 import java.io.File
 import kotlinx.coroutines.runBlocking
 import org.json.JSONObject
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertThrows
 import org.junit.Assert.assertTrue
@@ -147,9 +149,80 @@ class StoragePurgeTest {
     }
 
     @Test
+    fun `storedOnAny stops waiting for a hung provider once another says the row is not there yet`() = runBlocking {
+        val providers = listOf(
+            StorageEndpoints.Node("0xslow", listOf("https://slow.example")),
+            StorageEndpoints.Node("0xa", listOf("https://a.example"))
+        )
+        val absent = """{"results":[{"timestamp":1,"sequenceNumber":0,"result":"absent"}]}"""
+        val settled = kotlinx.coroutines.withTimeout(5_000) {
+            StoragePurge.storedOnAny(providers, STREAM, 0, listOf(StoragePurge.Target(1, 0)), KEY, graceMs = 50) { url, _ ->
+                if (url.startsWith("https://slow.example")) kotlinx.coroutines.awaitCancellation()
+                200 to absent
+            }
+        }
+        assertEquals(false, settled)
+    }
+
+    @Test
+    fun `a slow provider that finds the row after the grace sets late`() = runBlocking {
+        val providers = listOf(
+            StorageEndpoints.Node("0xslow", listOf("https://slow.example")),
+            StorageEndpoints.Node("0xa", listOf("https://a.example"))
+        )
+        val present = """{"results":[{"timestamp":1,"sequenceNumber":0,"result":"present"}]}"""
+        val absent = """{"results":[{"timestamp":1,"sequenceNumber":0,"result":"absent"}]}"""
+        val late = java.util.concurrent.atomic.AtomicBoolean(false)
+        val lateScope = kotlinx.coroutines.CoroutineScope(kotlinx.coroutines.Dispatchers.IO)
+        val settled = StoragePurge.storedOnAny(
+            providers, STREAM, 0, listOf(StoragePurge.Target(1, 0)), KEY,
+            late = late, lateScope = lateScope, graceMs = 20
+        ) { url, _ ->
+            if (url.startsWith("https://slow.example")) { kotlinx.coroutines.delay(300); 200 to present } else 200 to absent
+        }
+        assertEquals(false, settled)
+        assertFalse(late.get())
+        kotlinx.coroutines.withTimeout(5_000) { while (!late.get()) kotlinx.coroutines.delay(10) }
+    }
+
+    @Test
+    fun `a server error moves to the next url, and every url failing so reports the last`() = runBlocking {
+        val provider = StorageEndpoints.Node("0xprov", listOf("https://a1.example", "https://a2.example"))
+        val out = StoragePurge.purgeOnProvider(provider, STREAM, 0, listOf(target), KEY) { url, _ ->
+            if (url.startsWith("https://a1")) 502 to "" else 200 to """{"results":[{"timestamp":100,"sequenceNumber":0,"result":"deleted"}]}"""
+        }
+        assertEquals("https://a2.example", out.url)
+        assertEquals("deleted", out.results[target])
+        var calls = 0
+        val failing = StoragePurge.purgeOnProvider(provider, STREAM, 0, listOf(target), KEY) { _, _ -> calls++; 503 to "" }
+        assertEquals(503, failing.status)
+        assertEquals("https://a2.example", failing.url)
+        assertEquals(2, calls)
+    }
+
+    @Test
+    fun `with health the urls are tried healthiest first and each outcome is recorded`() = runBlocking {
+        val health = StorageEndpoints(fetcher = { emptyList() })
+        val provider = StorageEndpoints.Node("0xprov", listOf("https://a1.example", "https://a2.example"))
+        val urls = ArrayList<String>()
+        val post: suspend (String, String) -> Pair<Int, String> = { url, _ ->
+            urls.add(url)
+            if (url.startsWith("https://a1")) throw java.io.IOException("timeout")
+            200 to """{"results":[]}"""
+        }
+        StoragePurge.purgeOnProvider(provider, STREAM, 0, listOf(target), KEY, health, post)
+        StoragePurge.purgeOnProvider(provider, STREAM, 0, listOf(target), KEY, health, post)
+        assertEquals(
+            listOf("https://a1.example", "https://a2.example", "https://a2.example").map { StoragePurge.purgeUrl(it, STREAM, 0) },
+            urls
+        )
+    }
+
+    @Test
     fun `a group signs with its own key when it carries one`() = runBlocking {
-        val endpoints = mockk<StorageEndpoints>()
+        val endpoints = mockk<StorageEndpoints>(relaxUnitFun = true)
         coEvery { endpoints.providersWith(STREAM, "purge") } returns listOf(StorageEndpoints.Node("0xa", listOf("https://a.example")))
+        every { endpoints.byHealth(any()) } answers { firstArg() }
         val otherKey = "0x" + "11".repeat(32)
         val users = ArrayList<String>()
         val out = StoragePurge.purgeGroups(

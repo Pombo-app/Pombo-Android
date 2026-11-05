@@ -3,9 +3,13 @@ package com.pombo.android.core
 import java.net.URI
 import java.util.concurrent.ConcurrentHashMap
 import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.async
 import kotlinx.coroutines.awaitAll
 import kotlinx.coroutines.coroutineScope
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 
@@ -45,6 +49,8 @@ import kotlinx.coroutines.sync.withLock
  *   it did not answer. The SDK behind [fetcher] keeps a stream's list for a day
  *   and only forgets it on its own writes, so a change made from another device
  *   never reaches it.
+ * @param refreshScope where an expired capabilities entry is probed again
+ *   while its last answer is still served.
  */
 class StorageEndpoints(
     private val fetcher: suspend (streamId: String) -> List<Node>,
@@ -52,7 +58,8 @@ class StorageEndpoints(
     private val failureLimit: Int = StorageMediaConfig.NODE_FAILURE_LIMIT,
     private val clock: () -> Long = { System.currentTimeMillis() },
     private val capabilityFetcher: suspend (url: String) -> Set<String>? = { StorageHttp.fetchCapabilities(it) },
-    private val freshFetcher: suspend (streamId: String) -> List<Node>? = { null }
+    private val freshFetcher: suspend (streamId: String) -> List<Node>? = { null },
+    private val refreshScope: CoroutineScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
 ) {
     /** A storage node and its (web-safe once resolved) HTTP base URLs. */
     data class Node(val nodeAddress: String, val urls: List<String>)
@@ -177,6 +184,12 @@ class StorageEndpoints(
         failures.remove(normalizeUrl(url))
     }
 
+    /** The URLs of one provider, those with the fewest failures in a row first, else in the given order. */
+    fun byHealth(urls: List<String>): List<String> =
+        urls.withIndex()
+            .sortedWith(compareBy({ failures[normalizeUrl(it.value)] ?: 0 }, { it.index }))
+            .map { it.value }
+
     /** A node URL already resolved this session, preferring one still in rotation; resolves nothing. */
     suspend fun latestKnownUrl(): String? = lock.withLock {
         cache.values.maxByOrNull { it.at }?.nodes?.flatMap { it.urls }?.let { urls ->
@@ -186,9 +199,10 @@ class StorageEndpoints(
 
     /**
      * Features a node URL announces on `GET /capabilities`. Cached per URL with
-     * the endpoint TTL; concurrent probes share one request. A 404 is a vanilla
-     * node and caches as an empty set; any other failure is not cached, so the
-     * next call probes again. Null = the probe failed.
+     * the endpoint TTL; an expired entry is still answered while a probe in
+     * [refreshScope] refreshes it. Concurrent probes share one request. A 404
+     * is a vanilla node and caches as an empty set; any other failure is not
+     * cached, so the next call probes again. Null = the probe failed.
      */
     suspend fun probeCapabilities(url: String, force: Boolean = false): Set<String>? {
         val u = normalizeUrl(url)
@@ -197,7 +211,12 @@ class StorageEndpoints(
         var owner = false
         lock.withLock {
             val cached = capabilities[u]
-            if (!force && cached != null && clock() - cached.at < ttlMs) return cached.features
+            if (!force && cached != null) {
+                if (clock() - cached.at >= ttlMs && capabilityProbes[u] == null) {
+                    refreshScope.launch { probeCapabilities(u, force = true) }
+                }
+                return cached.features
+            }
             val existing = capabilityProbes[u]
             if (existing != null) {
                 deferred = existing
