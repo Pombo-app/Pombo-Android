@@ -65,7 +65,7 @@ class StorageMediaDmVerifyTest {
         every { endpoints.supportsMetaFormat(any()) } returns true
         val transport = object : StorageMedia.Transport {
             override suspend fun publishAnnounce(messageStreamId: String, announce: JSONObject, password: String?, isDm: Boolean) = nextTs.getAndIncrement()
-            override suspend fun announceStored(messageStreamId: String, messageId: String) = true
+            override suspend fun announceStored(messageStreamId: String, messageId: String, late: java.util.concurrent.atomic.AtomicBoolean) = true
             override fun myAddress() = "0xme"
             override fun username() = "me"
         }

@@ -7,6 +7,7 @@ import java.io.File
 import kotlinx.coroutines.runBlocking
 import org.json.JSONObject
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertThrows
 import org.junit.Assert.assertTrue
@@ -145,6 +146,43 @@ class StoragePurgeTest {
         assertEquals(true, settled)
         assertEquals(false, StoragePurge.storedOnAny(providers, STREAM, 0, listOf(t), KEY) { _, _ -> 200 to absent })
         assertNull(StoragePurge.storedOnAny(providers, STREAM, 0, listOf(t), KEY) { _, _ -> throw java.io.IOException("down") })
+    }
+
+    @Test
+    fun `storedOnAny stops waiting for a hung provider once another says the row is not there yet`() = runBlocking {
+        val providers = listOf(
+            StorageEndpoints.Node("0xslow", listOf("https://slow.example")),
+            StorageEndpoints.Node("0xa", listOf("https://a.example"))
+        )
+        val absent = """{"results":[{"timestamp":1,"sequenceNumber":0,"result":"absent"}]}"""
+        val settled = kotlinx.coroutines.withTimeout(5_000) {
+            StoragePurge.storedOnAny(providers, STREAM, 0, listOf(StoragePurge.Target(1, 0)), KEY, graceMs = 50) { url, _ ->
+                if (url.startsWith("https://slow.example")) kotlinx.coroutines.awaitCancellation()
+                200 to absent
+            }
+        }
+        assertEquals(false, settled)
+    }
+
+    @Test
+    fun `a slow provider that finds the row after the grace sets late`() = runBlocking {
+        val providers = listOf(
+            StorageEndpoints.Node("0xslow", listOf("https://slow.example")),
+            StorageEndpoints.Node("0xa", listOf("https://a.example"))
+        )
+        val present = """{"results":[{"timestamp":1,"sequenceNumber":0,"result":"present"}]}"""
+        val absent = """{"results":[{"timestamp":1,"sequenceNumber":0,"result":"absent"}]}"""
+        val late = java.util.concurrent.atomic.AtomicBoolean(false)
+        val lateScope = kotlinx.coroutines.CoroutineScope(kotlinx.coroutines.Dispatchers.IO)
+        val settled = StoragePurge.storedOnAny(
+            providers, STREAM, 0, listOf(StoragePurge.Target(1, 0)), KEY,
+            late = late, lateScope = lateScope, graceMs = 20
+        ) { url, _ ->
+            if (url.startsWith("https://slow.example")) { kotlinx.coroutines.delay(300); 200 to present } else 200 to absent
+        }
+        assertEquals(false, settled)
+        assertFalse(late.get())
+        kotlinx.coroutines.withTimeout(5_000) { while (!late.get()) kotlinx.coroutines.delay(10) }
     }
 
     @Test

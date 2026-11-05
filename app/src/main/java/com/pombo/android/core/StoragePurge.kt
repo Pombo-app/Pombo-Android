@@ -4,7 +4,10 @@ import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicInteger
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.cancelChildren
 import kotlinx.coroutines.coroutineScope
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import org.json.JSONArray
 import org.json.JSONObject
@@ -32,6 +35,7 @@ object StoragePurge {
     const val LOOKUP_WINDOW_MS = 10_000L
     const val LOOKUP_TIE_MS = 1_000L
     const val CHUNK_WINDOW_PAD_MS = 60_000L
+    const val ANNOUNCE_ANSWER_GRACE_MS = 2_000L
 
     data class Target(val timestamp: Long, val sequenceNumber: Int)
 
@@ -164,13 +168,18 @@ object StoragePurge {
 
     /**
      * Whether any provider holds one of the targets, asked of all of them in
-     * parallel: the first that holds it settles it, without waiting for the
-     * slower ones. Null when no provider answered.
+     * parallel: the first that holds it settles it. Once one answers that it
+     * does not hold it yet, the slower ones get [graceMs] more. With
+     * [lateScope] they keep going after that, and one that finds a target sets
+     * [late], for the caller's next try. Null when no provider answered.
      */
     suspend fun storedOnAny(
         providers: List<StorageEndpoints.Node>, streamId: String, partition: Int, targets: List<Target>,
         privateKeyHex: String,
         health: StorageEndpoints? = null,
+        late: AtomicBoolean? = null,
+        lateScope: CoroutineScope? = null,
+        graceMs: Long = ANNOUNCE_ANSWER_GRACE_MS,
         post: suspend (url: String, body: String) -> Pair<Int, String> = StorageHttp::postJson
     ): Boolean? {
         if (providers.isEmpty()) return null
@@ -178,8 +187,10 @@ object StoragePurge {
             val result = CompletableDeferred<Boolean?>()
             val left = AtomicInteger(providers.size)
             val answered = AtomicBoolean(false)
-            val asks = providers.map { p ->
-                launch {
+            val graceStarted = AtomicBoolean(false)
+            val waiting = this
+            providers.forEach { p ->
+                (lateScope ?: waiting).launch {
                     val present = try {
                         storedOn(listOf(p), streamId, partition, targets, privateKeyHex, health, post)
                     } catch (e: CancellationException) {
@@ -188,11 +199,15 @@ object StoragePurge {
                         null
                     }
                     if (present != null) answered.set(true)
-                    if (!present.isNullOrEmpty()) result.complete(true)
-                    if (left.decrementAndGet() == 0) result.complete(if (answered.get()) false else null)
+                    when {
+                        !present.isNullOrEmpty() -> { late?.set(true); result.complete(true) }
+                        left.decrementAndGet() == 0 -> result.complete(if (answered.get()) false else null)
+                        present != null && graceStarted.compareAndSet(false, true) ->
+                            waiting.launch { delay(graceMs); result.complete(false) }
+                    }
                 }
             }
-            result.await().also { asks.forEach { it.cancel() } }
+            result.await().also { coroutineContext.cancelChildren() }
         }
     }
 

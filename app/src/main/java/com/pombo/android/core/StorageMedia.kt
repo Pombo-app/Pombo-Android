@@ -92,9 +92,10 @@ class StorageMedia(
         /**
          * Whether the announce is on storage, asked by the node's `stored`
          * endpoint with the key that published it; null when nothing can be
-         * asked, so the confirm loop reads instead.
+         * asked, so the confirm loop reads instead. A slower node that finds it
+         * after the answer was given sets [late], for the next try.
          */
-        suspend fun announceStored(messageStreamId: String, messageId: String): Boolean? = null
+        suspend fun announceStored(messageStreamId: String, messageId: String, late: AtomicBoolean): Boolean? = null
 
         fun myAddress(): String?
         fun username(): String?
@@ -1155,9 +1156,10 @@ class StorageMedia(
                 put("metadata", meta); put("replyTo", JSONObject.NULL)
             }
             val annTs = transport.publishAnnounce(messageStreamId, announce, password, isDm)
+            val annLate = AtomicBoolean(false)
             confirmAnnounce(
                 messageStreamId, annTs, bases,
-                stored = if (isDm) ({ transport.announceStored(messageStreamId, msgId) }) else null
+                stored = if (isDm) ({ transport.announceStored(messageStreamId, msgId, annLate) }) else null
             ) { a, n -> up.phase = "Confirming announcement ($a/$n)…"; emit(up) }
 
             val ok = failedChunks.isEmpty() && (storedCount == tc || storedCount == null)
