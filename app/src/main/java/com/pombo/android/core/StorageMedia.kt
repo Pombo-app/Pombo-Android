@@ -487,7 +487,7 @@ class StorageMedia(
                     while (true) {
                         val (partition, rows) = queue.poll() ?: break
                         val present = try {
-                            StoragePurge.storedOn(listOf(provider), sid, partition, rows.map { it.first }, privateKeyHex)
+                            StoragePurge.storedOn(listOf(provider), sid, partition, rows.map { it.first }, privateKeyHex, health = endpoints)
                         } catch (e: kotlinx.coroutines.CancellationException) {
                             throw e
                         } catch (e: Exception) {

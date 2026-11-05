@@ -59,6 +59,7 @@ class StorageMediaDmVerifyTest {
         }
         every { bridge.inFlight() } returns 0L
         val endpoints = mockk<StorageEndpoints>(relaxed = true)
+        every { endpoints.byHealth(any()) } answers { firstArg() }
         coEvery { endpoints.rotation(any()) } returns providers.map { it.urls.first() }
         coEvery { endpoints.providersWith(any(), "stored") } returns providers
         every { endpoints.supportsMetaFormat(any()) } returns true

@@ -276,6 +276,17 @@ class StorageEndpointsTest {
     }
 
     @Test
+    fun `byHealth puts the urls that failed last, keeping the given order otherwise`() {
+        val ep = StorageEndpoints(fetcher = { emptyList() })
+        val urls = listOf("https://a1.example.com", "https://a2.example.com", "https://a3.example.com")
+        assertEquals(urls, ep.byHealth(urls))
+        ep.noteFailure("https://a1.example.com/")
+        assertEquals(listOf("https://a2.example.com", "https://a3.example.com", "https://a1.example.com"), ep.byHealth(urls))
+        ep.noteSuccess("https://a1.example.com")
+        assertEquals(urls, ep.byHealth(urls))
+    }
+
+    @Test
     fun `announced metadata support feeds supportsMetaFormat and a recorded 400 wins over it`() = runBlocking {
         val ep = StorageEndpoints(fetcher = { emptyList() }, capabilityFetcher = { FORK })
         ep.probeCapabilities("https://a.example.com")

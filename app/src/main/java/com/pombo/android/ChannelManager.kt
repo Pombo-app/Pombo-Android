@@ -711,7 +711,8 @@ class ChannelManager(
                 for (r in rows) {
                     val present = com.pombo.android.core.StoragePurge.storedOnAny(
                         providers, messageStreamId, r.partition,
-                        listOf(com.pombo.android.core.StoragePurge.Target(r.timestamp, r.sequenceNumber)), r.privateKeyHex
+                        listOf(com.pombo.android.core.StoragePurge.Target(r.timestamp, r.sequenceNumber)), r.privateKeyHex,
+                        health = storageEndpoints
                     ) ?: return null
                     if (present) return true
                 }
@@ -770,7 +771,8 @@ class ChannelManager(
             val key = myPrivateKey() ?: return null
             return com.pombo.android.core.StoragePurge.storedOn(
                 listOf(provider), streamId, partition,
-                timestamps.map { com.pombo.android.core.StoragePurge.Target(it, 0) }, key
+                timestamps.map { com.pombo.android.core.StoragePurge.Target(it, 0) }, key,
+                health = storageEndpoints
             )?.map { it.timestamp }?.toSet()
         }
         override fun loadPending(key: String): List<String> {

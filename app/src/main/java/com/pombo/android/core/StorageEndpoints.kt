@@ -177,6 +177,12 @@ class StorageEndpoints(
         failures.remove(normalizeUrl(url))
     }
 
+    /** The URLs of one provider, those with the fewest failures in a row first, else in the given order. */
+    fun byHealth(urls: List<String>): List<String> =
+        urls.withIndex()
+            .sortedWith(compareBy({ failures[normalizeUrl(it.value)] ?: 0 }, { it.index }))
+            .map { it.value }
+
     /** A node URL already resolved this session, preferring one still in rotation; resolves nothing. */
     suspend fun latestKnownUrl(): String? = lock.withLock {
         cache.values.maxByOrNull { it.at }?.nodes?.flatMap { it.urls }?.let { urls ->

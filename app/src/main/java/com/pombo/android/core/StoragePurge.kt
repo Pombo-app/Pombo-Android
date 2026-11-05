@@ -95,32 +95,45 @@ object StoragePurge {
 
     /**
      * Purge on one provider: the first URL that answers decides; one that
-     * cannot be reached is skipped for the next. Every attempt signs afresh,
-     * because the node accepts a nonce once.
+     * cannot be reached or fails with a 5xx is skipped for the next, and with
+     * [health] the provider's URLs are tried healthiest first. Every attempt
+     * signs afresh, because the node accepts a nonce once.
      * @param post `(url, jsonBody) -> (status, responseBody)`; throws when unreachable.
      */
     suspend fun purgeOnProvider(
         provider: StorageEndpoints.Node, streamId: String, partition: Int, targets: List<Target>,
         privateKeyHex: String,
+        health: StorageEndpoints? = null,
         post: suspend (url: String, body: String) -> Pair<Int, String> = StorageHttp::postJson
-    ): ProviderOutcome = postTargets("purge", provider, streamId, partition, targets, privateKeyHex, post)
+    ): ProviderOutcome = postTargets("purge", provider, streamId, partition, targets, privateKeyHex, post, health)
 
     private suspend fun postTargets(
         action: String, provider: StorageEndpoints.Node, streamId: String, partition: Int, targets: List<Target>,
-        privateKeyHex: String, post: suspend (url: String, body: String) -> Pair<Int, String>
+        privateKeyHex: String, post: suspend (url: String, body: String) -> Pair<Int, String>,
+        health: StorageEndpoints?
     ): ProviderOutcome {
         var lastError: String? = null
-        for (url in provider.urls) {
+        var serverError: ProviderOutcome? = null
+        for (url in health?.byHealth(provider.urls) ?: provider.urls) {
             try {
                 val body = signedBody(streamId, partition, targets, privateKeyHex, action = action)
                 val (status, text) = post(targetsUrl(url, streamId, partition, action), body.toString())
+                if (status >= 500) {
+                    health?.noteFailure(url)
+                    serverError = ProviderOutcome(provider.nodeAddress, url, status, emptyMap())
+                    continue
+                }
                 if (status / 100 != 2) return ProviderOutcome(provider.nodeAddress, url, status, emptyMap())
+                health?.noteSuccess(url)
                 return ProviderOutcome(provider.nodeAddress, url, status, parseResults(text))
+            } catch (e: CancellationException) {
+                throw e
             } catch (e: Exception) {
+                health?.noteFailure(url)
                 lastError = e.message ?: e.javaClass.simpleName
             }
         }
-        return ProviderOutcome(provider.nodeAddress, null, 0, emptyMap(), lastError ?: "unreachable")
+        return serverError ?: ProviderOutcome(provider.nodeAddress, null, 0, emptyMap(), lastError ?: "unreachable")
     }
 
     /**
@@ -132,13 +145,14 @@ object StoragePurge {
     suspend fun storedOn(
         providers: List<StorageEndpoints.Node>, streamId: String, partition: Int, targets: List<Target>,
         privateKeyHex: String,
+        health: StorageEndpoints? = null,
         post: suspend (url: String, body: String) -> Pair<Int, String> = StorageHttp::postJson
     ): Set<Target>? {
         val present = HashSet<Target>()
         var answered = false
         for (p in providers) {
             for (batch in targets.chunked(MAX_TARGETS)) {
-                val o = postTargets("stored", p, streamId, partition, batch, privateKeyHex, post)
+                val o = postTargets("stored", p, streamId, partition, batch, privateKeyHex, post, health)
                 if (o.status == 0) break
                 if (o.status / 100 != 2) continue
                 answered = true
@@ -156,6 +170,7 @@ object StoragePurge {
     suspend fun storedOnAny(
         providers: List<StorageEndpoints.Node>, streamId: String, partition: Int, targets: List<Target>,
         privateKeyHex: String,
+        health: StorageEndpoints? = null,
         post: suspend (url: String, body: String) -> Pair<Int, String> = StorageHttp::postJson
     ): Boolean? {
         if (providers.isEmpty()) return null
@@ -166,7 +181,7 @@ object StoragePurge {
             val asks = providers.map { p ->
                 launch {
                     val present = try {
-                        storedOn(listOf(p), streamId, partition, targets, privateKeyHex, post)
+                        storedOn(listOf(p), streamId, partition, targets, privateKeyHex, health, post)
                     } catch (e: CancellationException) {
                         throw e
                     } catch (e: Exception) {
@@ -222,7 +237,7 @@ object StoragePurge {
         val all = providers.map { p ->
             val outs = ArrayList<Pair<Group, ProviderOutcome>>()
             for (b in batches) {
-                val o = purgeOnProvider(p, streamId, b.partition, b.targets, b.privateKeyHex ?: privateKeyHex, post)
+                val o = purgeOnProvider(p, streamId, b.partition, b.targets, b.privateKeyHex ?: privateKeyHex, endpoints, post)
                 outs.add(b to o)
                 if (o.status == 0) break
             }
