@@ -53,10 +53,19 @@ class BridgeStorageRetentionTest {
     fun `the retention gets its own retries, not just the node assignment`() {
         val fn = body("addToStorageNode")
         assertTrue(
-            "setStorageDayCount is no longer retried inside the bridge, and the " +
+            "the retention write is no longer retried inside the bridge, and the " +
                 "native retry cannot reach it through the catch",
-            Regex("for\\s*\\([\\s\\S]{0,400}setStorageDayCount").containsMatchIn(fn)
+            Regex("for\\s*\\([\\s\\S]{0,400}_patchMetadata\\(a\\.streamId,\\s*\\{\\s*storageDays").containsMatchIn(fn)
         )
+    }
+
+    @Test
+    fun `retention and partition writes start from the chain, not the SDK cache`() {
+        for (name in listOf("setStorageDays", "setStreamPartitions", "mergeStreamDescription")) {
+            val fn = body(name)
+            assertTrue("$name writes through the SDK's cached metadata", "_patchMetadata(" in fn)
+            assertTrue("$name still calls setStorageDayCount", "setStorageDayCount" !in fn)
+        }
     }
 
     @Test

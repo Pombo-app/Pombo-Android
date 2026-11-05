@@ -2204,8 +2204,7 @@ const api = {
         if (a.onlyIfMissing && await api._chainStorageDays(a.streamId) === a.storageDays) {
             return { ok: true, skipped: true };
         }
-        const stream = await client.getStream(a.streamId);
-        await stream.setStorageDayCount(a.storageDays);
+        await api._patchMetadata(a.streamId, { storageDays: a.storageDays });
         return { ok: true };
     },
 
@@ -2216,7 +2215,30 @@ const api = {
     // throws before anything is sent.
 
     _STREAM_REGISTRY: '0x0D483E10612F327FC11965Fc82E90dC19b141641',
-    _STREAM_REGISTRY_ABI: ['function getStreamMetadata(string streamId) view returns (string)'],
+    _STREAM_REGISTRY_ABI: [
+        'function getStreamMetadata(string streamId) view returns (string)',
+        'function exists(string streamId) view returns (bool)'
+    ],
+    _STREAM_STORAGE_REGISTRY: '0xe8e2660cedf2a59c917a5ed05b72df4146b58399',
+    _STREAM_STORAGE_REGISTRY_ABI: ['function isStorageNodeOf(string streamId, address nodeAddress) view returns (bool)'],
+
+    // Stream metadata as the chain holds it now, bypassing the SDK cache.
+    // Throws when the chain cannot be read or the metadata is not JSON.
+    async _chainMetadata(streamId) {
+        const raw = await api._gateWithProvider(function (p) {
+            return new window.ethers.Contract(api._STREAM_REGISTRY, api._STREAM_REGISTRY_ABI, p)
+                .getStreamMetadata(streamId);
+        });
+        return raw ? JSON.parse(raw) : {};
+    },
+
+    // setMetadata replaces the whole document, so every field it does not
+    // patch has to come from a fresh chain read, never the SDK cache.
+    async _patchMetadata(streamId, patch) {
+        const meta = await api._chainMetadata(streamId);
+        const stream = await client.getStream(streamId);
+        await stream.setMetadata(Object.assign(meta, patch));
+    },
 
     // The retention the chain holds now: the SDK caches stream metadata and
     // keeps the old value after a write whose receipt read failed.
@@ -2276,6 +2298,82 @@ const api = {
         return { exists: !!(await api._streamIfExists(a.streamId)) };
     },
 
+    // Channel Health (web channels/ChannelHealth.js diagnoseChannel): what the
+    // chain holds for each expected stream. Every field stays null when its
+    // read did not answer; only STREAM_NOT_FOUND makes a stream absent.
+    // { streams: [{id, grants, stored}] } -> { streams: [{id, exists, partitions, description, grantsOk, nodes, storageDays}] }
+    async channelStreamFacts(a) {
+        if (!client) throw new Error('client not connected');
+        // Read the contracts, not the SDK: its cache keeps the old value after a
+        // write whose receipt read failed, and a repair built on it undoes the fix.
+        const registry = function (p) {
+            return new window.ethers.Contract(api._STREAM_REGISTRY, api._STREAM_REGISTRY_ABI, p);
+        };
+        const storage = function (p) {
+            return new window.ethers.Contract(api._STREAM_STORAGE_REGISTRY, api._STREAM_STORAGE_REGISTRY_ABI, p);
+        };
+        // The registry cannot list a stream's nodes, so the candidates come from
+        // the indexed lists plus the expected ones, and each is asked one by one.
+        const candidates = new Set((a.nodes || []).map(function (n) { return String(n).toLowerCase(); }));
+        for (const s of a.streams) {
+            if (!s.stored) continue;
+            const info = await api.getStreamStorageInfo({ streamId: s.id });
+            if (info.ok) info.nodes.forEach(function (n) { candidates.add(String(n).toLowerCase()); });
+        }
+        const out = [];
+        for (const s of a.streams) {
+            const f = { id: s.id, exists: null, partitions: null, description: null, grantsOk: null, nodes: null, storageDays: null };
+            out.push(f);
+            try {
+                f.exists = await api._gateWithProvider(function (p) { return registry(p).exists(s.id); });
+            } catch (e) { /* unknown */ }
+            if (f.exists !== true) continue;
+            try {
+                const md = await api._chainMetadata(s.id);
+                f.partitions = Number.isFinite(md.partitions) ? md.partitions : 1;
+                f.description = md.description || '';
+                if (s.stored) f.storageDays = Number.isFinite(md.storageDays) ? md.storageDays : null;
+            } catch (e) { /* unknown */ }
+            if (s.grants && s.grants.length) {
+                try { f.grantsOk = await api._permissionsInPlace(s.id, s.grants); } catch (e) { /* unknown */ }
+            } else {
+                f.grantsOk = true;
+            }
+            if (s.stored) {
+                try {
+                    const nodes = [];
+                    for (const n of candidates) {
+                        const on = await api._gateWithProvider(function (p) { return storage(p).isStorageNodeOf(s.id, n); });
+                        if (on) nodes.push(n);
+                    }
+                    f.nodes = nodes;
+                } catch (e) { /* unknown */ }
+            }
+        }
+        return { streams: out };
+    },
+
+    // Merges `set` into a stream's description. An unreadable description
+    // aborts: writing over it would strip the gate ('g') and wire identity ('m').
+    async mergeStreamDescription(a) {
+        if (!client) throw new Error('client not connected');
+        let desc;
+        try {
+            const md = await api._chainMetadata(a.streamId);
+            desc = md.description ? JSON.parse(md.description) : {};
+        } catch (e) {
+            throw new Error('Stream metadata could not be read; update aborted');
+        }
+        await api._patchMetadata(a.streamId, { description: JSON.stringify(Object.assign(desc, a.set || {})) });
+        return { ok: true };
+    },
+
+    async setStreamPartitions(a) {
+        if (!client) throw new Error('client not connected');
+        await api._patchMetadata(a.streamId, { partitions: a.partitions });
+        return { ok: true };
+    },
+
     // Creates a stream on-chain: {id, description, partitions}
     async createStream(a) {
         if (!client) throw new Error('client not connected');
@@ -2330,10 +2428,14 @@ const api = {
     async addToStorageNode(a) {
         if (!client) throw new Error('client not connected');
         const stream = await client.getStream(a.streamId);
-        if (!(a.onlyIfMissing && await client.isStoredStream(a.streamId, a.nodeAddress))) {
+        const stored = a.onlyIfMissing && await api._gateWithProvider(function (p) {
+            return new window.ethers.Contract(api._STREAM_STORAGE_REGISTRY, api._STREAM_STORAGE_REGISTRY_ABI, p)
+                .isStorageNodeOf(a.streamId, a.nodeAddress);
+        });
+        if (!stored) {
             await stream.addToStorageNode(a.nodeAddress);
         }
-        if (!a.storageDays || typeof stream.setStorageDayCount !== 'function') {
+        if (!a.storageDays) {
             return { ok: true, retentionApplied: false, storageDays: null };
         }
         let lastError = null;
@@ -2343,7 +2445,7 @@ const api = {
                         && await api._chainStorageDays(a.streamId) === a.storageDays) {
                     return { ok: true, retentionApplied: true, storageDays: a.storageDays };
                 }
-                await stream.setStorageDayCount(a.storageDays);
+                await api._patchMetadata(a.streamId, { storageDays: a.storageDays });
                 return { ok: true, retentionApplied: true, storageDays: a.storageDays };
             } catch (e) {
                 lastError = e;

@@ -3531,6 +3531,120 @@ class AppViewModel(app: Application) : AndroidViewModel(app), PomboBridge.Listen
         toast("Username updated", com.pombo.android.ui.ToastKind.SUCCESS)
     }
 
+    // ==================== Channel Health panel (web ChannelHealthUI) ====================
+
+    sealed interface ChannelHealthState {
+        data object Idle : ChannelHealthState
+        data object Loading : ChannelHealthState
+        data object Healthy : ChannelHealthState
+        data class Issues(
+            val findings: com.pombo.android.core.ChannelHealth.Findings,
+            val report: com.pombo.android.core.ChannelHealth.Report,
+            val steps: List<com.pombo.android.core.ChannelHealth.Step>
+        ) : ChannelHealthState
+        data class Failed(val message: String, val findings: com.pombo.android.core.ChannelHealth.Findings? = null) : ChannelHealthState
+        data class Repairing(val step: String) : ChannelHealthState
+        data class Repaired(val detail: String) : ChannelHealthState
+    }
+
+    /** Per channel, so a repair left running keeps its own state while another channel is open. */
+    private val _channelHealth = MutableStateFlow<Map<String, ChannelHealthState>>(emptyMap())
+    val channelHealth: StateFlow<Map<String, ChannelHealthState>> = _channelHealth.asStateFlow()
+
+    private fun setChannelHealth(channelId: String, state: ChannelHealthState) {
+        _channelHealth.value = _channelHealth.value + (channelId to state)
+    }
+
+    /** Read-only, no gas. Only the owner opens the panel, but the read itself is harmless. */
+    fun diagnoseChannelHealth(channelId: String) = viewModelScope.launch {
+        if (_channelHealth.value[channelId] is ChannelHealthState.Repairing) return@launch
+        setChannelHealth(channelId, ChannelHealthState.Loading)
+        setChannelHealth(channelId, readChannelHealth(channelId))
+    }
+
+    private suspend fun readChannelHealth(channelId: String): ChannelHealthState = try {
+        val report = manager.channelHealth(channelId)
+        if (report == null) ChannelHealthState.Failed("Channel not found")
+        else {
+            val health = com.pombo.android.core.ChannelHealth
+            val findings = health.findings(report)
+            val steps = health.repairSteps(report, ChannelManager.STORAGE_NODE)
+            when {
+                findings.issues.isNotEmpty() || findings.reported.isNotEmpty() ->
+                    ChannelHealthState.Issues(findings, report, steps)
+                findings.unchecked.isNotEmpty() ->
+                    ChannelHealthState.Failed("Could not check: ${findings.unchecked.joinToString(", ")}", findings)
+                else -> ChannelHealthState.Healthy
+            }
+        }
+    } catch (e: Exception) {
+        ChannelHealthState.Failed(e.message ?: "unknown error")
+    }
+
+    /** Sends only what the diagnosis found broken, at a cost shown first, then diagnoses again. */
+    fun repairChannelHealth(channelId: String) = viewModelScope.launch {
+        val issues = _channelHealth.value[channelId] as? ChannelHealthState.Issues ?: return@launch
+        if (issues.steps.isEmpty()) return@launch
+        if (_channelHealth.value.values.any { it is ChannelHealthState.Repairing }) {
+            toast("Another channel repair is still running", com.pombo.android.ui.ToastKind.WARNING)
+            return@launch
+        }
+        val estimator = com.pombo.android.core.GasEstimator
+        val estimate = runCatching {
+            estimator.getGasPrice().multiply(java.math.BigInteger.valueOf(estimator.channelRepairUnits(issues.steps)))
+        }.getOrNull()
+        val balance = _address.value?.let { estimator.getBalance(it) }
+        val verdict = if (estimate != null && balance != null) spendVerdict(balance, estimate) else CostCheck.Ok
+        if (verdict is CostCheck.Blocked) {
+            toast(verdict.message, com.pombo.android.ui.ToastKind.ERROR, 6000L)
+            return@launch
+        }
+        val n = issues.steps.size
+        val costLine = estimate?.let { " Estimated cost: ${estimator.formatPOL(it)}." }.orEmpty() +
+            if (verdict is CostCheck.Low) " Your balance (${verdict.balance}) is close to it; if gas spikes, a step may fail." else ""
+        chainAction("Repair channel", "$n step${if (n == 1) "" else "s"}: streams, permissions or storage the diagnosis flagged.$costLine") {
+            setChannelHealth(channelId, ChannelHealthState.Repairing("Starting..."))
+            val name = manager.channels.value.firstOrNull { it.messageStreamId == channelId }?.name
+            val progress = toast(
+                "Repairing ${name ?: "channel"}", com.pombo.android.ui.ToastKind.LOADING, Long.MAX_VALUE,
+                subtitle = "You can keep using the app",
+                progress = com.pombo.android.ui.ToastProgress(0, n, "Repairing…")
+            )
+            var started = 0
+            val (ok, failed) = try {
+                manager.repairChannelHealth(issues.report, issues.steps) { s ->
+                    val label = CHANNEL_REPAIR_LABELS[s.step] ?: s.step
+                    setChannelHealth(channelId, ChannelHealthState.Repairing("$label (${CHANNEL_STREAM_LABELS[s.kind]})"))
+                    setToastProgress(progress, started++, "$label…")
+                }
+            } catch (e: Exception) {
+                toast("Channel repair failed: ${e.message}", com.pombo.android.ui.ToastKind.ERROR, 5000L)
+                0 to n
+            } finally {
+                dismissToast(progress)
+            }
+            // Read the chain again: what is still missing is what the next Repair sends.
+            setChannelHealth(channelId, ChannelHealthState.Loading)
+            val after = readChannelHealth(channelId)
+            setChannelHealth(channelId,
+                if (failed == 0 && after is ChannelHealthState.Healthy) ChannelHealthState.Repaired("$ok step${if (ok == 1) "" else "s"} done")
+                else after)
+            toast(
+                if (failed > 0) "Channel repair: $ok done, $failed failed" else "Channel repaired",
+                if (failed > 0) com.pombo.android.ui.ToastKind.WARNING else com.pombo.android.ui.ToastKind.SUCCESS
+            )
+        }
+    }
+
+    private val CHANNEL_REPAIR_LABELS = mapOf(
+        "create" to "Creating stream", "partitions" to "Updating partitions", "metadata" to "Updating metadata",
+        "readOnly" to "Updating the read-only flag", "grants" to "Setting permissions", "storage" to "Adding storage",
+        "retention" to "Setting retention", "challenge" to "Publishing the password challenge"
+    )
+    private val CHANNEL_STREAM_LABELS = mapOf(
+        "message" to "-1", "ephemeral" to "-2", "admin" to "-3", "keys" to "-4", "interactions" to "-5"
+    )
+
     // ==================== DM Inbox panel (web settings-panel-repair) ====================
 
     sealed interface InboxHealth {

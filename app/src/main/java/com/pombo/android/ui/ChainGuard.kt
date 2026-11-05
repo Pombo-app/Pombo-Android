@@ -60,6 +60,8 @@ object ChainGuard {
         "getOrCreateStream",
         "setPermissions",
         "updateStreamMetadata",
+        "mergeStreamDescription",
+        "setStreamPartitions",
         "deleteStream",
         "addToStorageNode",
         "removeFromStorageNode",
