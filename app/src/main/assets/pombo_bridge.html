@@ -2015,36 +2015,55 @@ const api = {
         const me = (await client.getAddress()).toLowerCase();
         const messageStreamId = me + '/Pombo-DM-1';
         const ephemeralStreamId = me + '/Pombo-DM-2';
+        // Every check is true, false, or null when the chain did not answer.
+        // Only false is a finding (web streamr.diagnoseInbox).
         const report = {
-            messageStream: { id: messageStreamId, exists: false, partitions: null, partitionsCorrect: false, metadataOk: false, publicKeyPresent: false },
-            ephemeralStream: { id: ephemeralStreamId, exists: false, partitions: null },
-            permissions: { messagePublicPublish: false, ephemeralPublicPublish: false },
-            storage: { enabled: false, provider: null, storageDays: null, nodeAddress: null, nodes: [] }
+            messageStream: { id: messageStreamId, exists: null, partitions: null, partitionsCorrect: null, metadataOk: null, publicKeyPresent: null },
+            ephemeralStream: { id: ephemeralStreamId, exists: null, partitions: null },
+            permissions: { messagePublicPublish: null, ephemeralPublicPublish: null },
+            storage: { enabled: null, provider: null, storageDays: null, nodeAddress: null, nodes: [] }
         };
-        let messageStream = null, ephemeralStream = null;
-        try {
-            messageStream = await client.getStream(messageStreamId);
-            report.messageStream.exists = true;
-            const p = await messageStream.getPartitionCount();
-            report.messageStream.partitions = typeof p === 'bigint' ? Number(p) : p;
-            // 13 = P0-P3 classic + P4-P12 storage-file chunks (no backward compat
-            // with the old 4-partition inboxes — they are recreated).
-            report.messageStream.partitionsCorrect = report.messageStream.partitions >= 13;
+        const readStream = async (id, target) => {
+            try {
+                const s = await client.getStream(id);
+                target.exists = true;
+                return s;
+            } catch (e) {
+                if (e && e.code === 'STREAM_NOT_FOUND') target.exists = false;
+                else console.warn('diagnose: could not read ' + id + ': ' + (e && e.message || e));
+                return null;
+            }
+        };
+        const messageStream = await readStream(messageStreamId, report.messageStream);
+        if (messageStream) {
+            try {
+                const p = await messageStream.getPartitionCount();
+                report.messageStream.partitions = typeof p === 'bigint' ? Number(p) : p;
+                // 13 = P0-P3 classic + P4-P12 storage-file chunks (no backward compat
+                // with the old 4-partition inboxes — they are recreated).
+                report.messageStream.partitionsCorrect = report.messageStream.partitions >= 13;
+            } catch (e) { /* partition count unknown */ }
             try {
                 const desc = await messageStream.getDescription();
-                if (desc) {
-                    const meta = JSON.parse(desc);
-                    report.messageStream.metadataOk = !!(meta.a && meta.t === 'dm-inbox');
-                    report.messageStream.publicKeyPresent = !!meta.pk;
-                }
-            } catch (e) { /* metadata unreadable */ }
-        } catch (e) { /* stream missing */ }
-        try {
-            ephemeralStream = await client.getStream(ephemeralStreamId);
-            report.ephemeralStream.exists = true;
-            const p = await ephemeralStream.getPartitionCount();
-            report.ephemeralStream.partitions = typeof p === 'bigint' ? Number(p) : p;
-        } catch (e) { /* stream missing */ }
+                const meta = desc ? JSON.parse(desc) : {};
+                report.messageStream.metadataOk = !!(meta.a && meta.t === 'dm-inbox');
+                report.messageStream.publicKeyPresent = !!meta.pk;
+            } catch (e) { /* metadata unknown */ }
+        } else if (report.messageStream.exists === false) {
+            report.messageStream.partitionsCorrect = false;
+            report.messageStream.publicKeyPresent = false;
+            report.permissions.messagePublicPublish = false;
+            report.storage.enabled = false;
+        }
+        const ephemeralStream = await readStream(ephemeralStreamId, report.ephemeralStream);
+        if (ephemeralStream) {
+            try {
+                const p = await ephemeralStream.getPartitionCount();
+                report.ephemeralStream.partitions = typeof p === 'bigint' ? Number(p) : p;
+            } catch (e) { /* partition count unknown */ }
+        } else if (report.ephemeralStream.exists === false) {
+            report.permissions.ephemeralPublicPublish = false;
+        }
         const SP = window.StreamPermission;
         if (SP && messageStream) {
             try { report.permissions.messagePublicPublish = await messageStream.hasPermission({ permission: SP.PUBLISH, public: true }); } catch (e) {}
@@ -2053,8 +2072,8 @@ const api = {
             try { report.permissions.ephemeralPublicPublish = await ephemeralStream.hasPermission({ permission: SP.PUBLISH, public: true }); } catch (e) {}
         }
         if (messageStream) {
-            try {
-                const info = await api.getStreamStorageInfo({ streamId: messageStreamId });
+            const info = await api.getStreamStorageInfo({ streamId: messageStreamId });
+            if (info.ok) {
                 report.storage.enabled = info.enabled;
                 report.storage.storageDays = info.storageDays;
                 report.storage.nodes = info.nodes;
@@ -2063,7 +2082,7 @@ const api = {
                     report.storage.nodeAddress = nodeAddr;
                     report.storage.provider = nodeAddr === '0xae340e799e8151f6a4999d245e466197aa217667' ? 'streamr' : 'custom';
                 }
-            } catch (e) { /* storage check best-effort */ }
+            }
         }
         return report;
     },
@@ -2084,7 +2103,7 @@ const api = {
         const pubOnly = [{ public: true, permissions: ['publish'] }];
         let messageStream = null, ephemeralStream = null;
 
-        if (!d.messageStream.exists) {
+        if (d.messageStream.exists === false) {
             try {
                 messageStream = await client.createStream({ id: messageStreamId, description: metadata, partitions: 13 });
                 steps.messageStream = 'ok';
@@ -2092,14 +2111,14 @@ const api = {
         } else {
             try { messageStream = await client.getStream(messageStreamId); } catch (e) {}
         }
-        if (messageStream && d.messageStream.exists && !d.messageStream.partitionsCorrect) {
+        if (messageStream && d.messageStream.exists && d.messageStream.partitionsCorrect === false) {
             try {
                 const m = await messageStream.getMetadata();
                 await messageStream.setMetadata(Object.assign({}, m, { partitions: 13 }));
                 steps.partitions = 'ok';
             } catch (e) { steps.partitions = 'fail'; }
         }
-        if (!d.ephemeralStream.exists) {
+        if (d.ephemeralStream.exists === false) {
             try {
                 ephemeralStream = await client.createStream({ id: ephemeralStreamId, description: ephMeta, partitions: 3 });
                 steps.ephemeralStream = 'ok';
@@ -2107,7 +2126,7 @@ const api = {
         } else {
             try { ephemeralStream = await client.getStream(ephemeralStreamId); } catch (e) {}
         }
-        if (messageStream && a.publicKey && !d.messageStream.publicKeyPresent) {
+        if (messageStream && a.publicKey && d.messageStream.publicKeyPresent === false) {
             try {
                 const desc = await messageStream.getDescription();
                 const meta = desc ? JSON.parse(desc) : { a: 'pombo', v: '1', t: 'dm-inbox' };
@@ -2116,19 +2135,19 @@ const api = {
                 steps.metadata = 'ok';
             } catch (e) { steps.metadata = 'fail'; }
         }
-        if (messageStream && !d.permissions.messagePublicPublish) {
+        if (messageStream && d.permissions.messagePublicPublish === false) {
             try {
                 await client.setPermissions({ streamId: messageStreamId, assignments: pubOnly });
                 steps.messagePermissions = 'ok';
             } catch (e) { steps.messagePermissions = 'fail'; }
         }
-        if (ephemeralStream && !d.permissions.ephemeralPublicPublish) {
+        if (ephemeralStream && d.permissions.ephemeralPublicPublish === false) {
             try {
                 await client.setPermissions({ streamId: ephemeralStreamId, assignments: pubOnly });
                 steps.ephemeralPermissions = 'ok';
             } catch (e) { steps.ephemeralPermissions = 'fail'; }
         }
-        if (messageStream && !d.storage.enabled) {
+        if (messageStream && d.storage.enabled === false) {
             try {
                 const s = await client.getStream(messageStreamId);
                 await s.addToStorageNode('0xae340e799e8151f6a4999d245e466197aa217667');

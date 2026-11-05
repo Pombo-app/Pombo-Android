@@ -57,6 +57,31 @@ object GasEstimator {
      */
     private const val GAS_CREATE_GATE = 220_000L
 
+    /** Rewriting a stream's metadata (partition count, description). Not measured: sized like a permission batch so it errs high. */
+    private const val GAS_UPDATE_STREAM_METADATA = 210_000L
+
+    /**
+     * Gas units of the steps a DM inbox repair would send for this diagnosis
+     * (web GasEstimator.inboxRepairUnits). Only a false is repaired.
+     */
+    fun inboxRepairUnits(report: JSONObject): Long {
+        val check = DmInboxHealth::check
+        val m = report.optJSONObject("messageStream")
+        val e = report.optJSONObject("ephemeralStream")
+        val p = report.optJSONObject("permissions")
+        val s = report.optJSONObject("storage")
+        var units = 0L
+        val messageExists = check(m, "exists")
+        if (messageExists == false) units += GAS_CREATE_STREAM
+        if (messageExists == true && check(m, "partitionsCorrect") == false) units += GAS_UPDATE_STREAM_METADATA
+        if (check(e, "exists") == false) units += GAS_CREATE_STREAM
+        if (messageExists != false && check(m, "publicKeyPresent") == false) units += GAS_UPDATE_STREAM_METADATA
+        if (check(p, "messagePublicPublish") == false) units += GAS_SET_PUBLIC_PERMISSIONS
+        if (check(p, "ephemeralPublicPublish") == false) units += GAS_SET_PUBLIC_PERMISSIONS
+        if (check(s, "enabled") == false) units += GAS_ADD_STORAGE_NODE + GAS_SET_STORAGE_DAY_COUNT
+        return units
+    }
+
     private const val CACHE_DURATION_MS = 60_000L
     @Volatile private var cachedGasPrice: BigInteger? = null
     @Volatile private var cacheTime = 0L
