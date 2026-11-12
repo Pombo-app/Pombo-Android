@@ -417,14 +417,16 @@ fun ChatScreen(vm: AppViewModel) {
             }
             // Channel image (admin stream) wins over the generated avatar.
             val chImage by vm.channelImage.collectAsState()
+            var zoomImage by remember { mutableStateOf(false) }
+            if (zoomImage) chImage?.let { MediaLightbox(it) { zoomImage = false } }
             if (chImage != null) {
                 androidx.compose.foundation.Image(
                     bitmap = remember(chImage) {
                         android.graphics.BitmapFactory.decodeByteArray(chImage, 0, chImage!!.size).asImageBitmap()
                     },
-                    contentDescription = null,
+                    contentDescription = "Channel image",
                     contentScale = androidx.compose.ui.layout.ContentScale.Crop,
-                    modifier = Modifier.size(36.dp).clip(CircleShape)
+                    modifier = Modifier.size(36.dp).clip(CircleShape).clickableNoRipple { zoomImage = true }
                 )
             } else if (ch.type == "dm" && ch.peerAddress != null) {
                 // Same rule as the chat list: a DM header shows the peer.

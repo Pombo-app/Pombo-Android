@@ -226,14 +226,17 @@ private fun ChannelDetailsMain(
                     modifier = Modifier.border(1.dp, PomboColors.Overlay8, CircleShape)
                 )
             } else if (image != null) {
+                var zoomImage by remember { mutableStateOf(false) }
+                if (zoomImage) image?.let { MediaLightbox(it) { zoomImage = false } }
                 androidx.compose.foundation.Image(
                     bitmap = remember(image) {
                         android.graphics.BitmapFactory.decodeByteArray(image, 0, image!!.size).asImageBitmap()
                     },
-                    contentDescription = null,
+                    contentDescription = "Channel image",
                     contentScale = androidx.compose.ui.layout.ContentScale.Crop,
                     modifier = Modifier.size(88.dp).clip(CircleShape)
                         .border(1.dp, PomboColors.Overlay8, CircleShape)
+                        .clickableNoRipple { zoomImage = true }
                 )
             } else {
                 Avatar(
