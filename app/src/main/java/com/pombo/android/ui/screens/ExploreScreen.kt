@@ -499,6 +499,8 @@ private fun ExploreCard(
             .padding(16.dp)
     ) {
         Row(verticalAlignment = Alignment.Top) {
+            var zoomImage by remember { mutableStateOf(false) }
+            if (zoomImage) image?.let { MediaLightbox(it) { zoomImage = false } }
             // Channel thumb: `rounded-full`, 56×56, avatar fallback at 0.5.
             // Web parity: a spinner while the fetch is still in flight, the
             // generated avatar only once it has genuinely come back empty —
@@ -509,9 +511,9 @@ private fun ExploreCard(
                     bitmap = remember(image) {
                         android.graphics.BitmapFactory.decodeByteArray(image, 0, image.size).asImageBitmap()
                     },
-                    contentDescription = null,
+                    contentDescription = "Channel image",
                     contentScale = androidx.compose.ui.layout.ContentScale.Crop,
-                    modifier = Modifier.size(56.dp).clip(CircleShape)
+                    modifier = Modifier.size(56.dp).clip(CircleShape).clickableNoRipple { zoomImage = true }
                 )
                 imagePending -> Box(
                     Modifier.size(56.dp).clip(CircleShape).background(PomboColors.Overlay4),

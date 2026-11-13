@@ -29,7 +29,9 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -94,13 +96,15 @@ internal fun ExploreDetailsSheet(
             horizontalAlignment = Alignment.CenterHorizontally
         ) {
             if (image != null) {
+                var zoomImage by remember { mutableStateOf(false) }
+                if (zoomImage) MediaLightbox(image) { zoomImage = false }
                 androidx.compose.foundation.Image(
                     bitmap = remember(image) {
                         android.graphics.BitmapFactory.decodeByteArray(image, 0, image.size).asImageBitmap()
                     },
-                    contentDescription = null,
+                    contentDescription = "Channel image",
                     contentScale = androidx.compose.ui.layout.ContentScale.Crop,
-                    modifier = Modifier.size(88.dp).clip(CircleShape)
+                    modifier = Modifier.size(88.dp).clip(CircleShape).clickableNoRipple { zoomImage = true }
                 )
             } else {
                 Avatar(ch.messageStreamId, size = 88.dp, cornerRadiusFraction = 0.5)
